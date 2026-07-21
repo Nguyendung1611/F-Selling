@@ -25,6 +25,11 @@ class OrderItem(Base):
     __tablename__ = "order_items"
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("orders.id"))
+    # Tham chiếu sản phẩm gốc. Nullable vì các dòng tạo trước migration A1a
+    # chỉ có product_name; backfill khớp được đến đâu thì điền đến đó.
+    # Dùng để hoàn tồn kho chính xác khi hủy đơn (A1d) - khớp theo tên là
+    # không tin cậy vì sản phẩm có thể bị đổi tên hoặc xóa.
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True, index=True)
     product_name = Column(String)
     price = Column(Float)
     quantity = Column(Integer)

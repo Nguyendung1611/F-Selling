@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from typing import Tuple
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -22,7 +23,27 @@ _MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN session_id VARCHAR(255)",
     "ALTER TABLE users ADD COLUMN verification_code VARCHAR(255)",
     "ALTER TABLE users ADD COLUMN verification_code_expires DATETIME",
+    # A1a: tham chiếu sản phẩm trên từng dòng đơn hàng (phục vụ hoàn tồn kho khi hủy đơn).
+    "ALTER TABLE order_items ADD COLUMN product_id INTEGER",
+    "CREATE INDEX IF NOT EXISTS ix_order_items_product_id ON order_items(product_id)",
 ]
+
+# Backfill A1a: khớp dòng đơn hàng cũ với sản phẩm theo (shop của đơn, tên sản phẩm).
+# An toàn vì `create_product` đảm bảo tên sản phẩm là duy nhất trong một shop,
+# nên phép khớp này là xác định (không có nhiều ứng viên hợp lệ).
+_BACKFILL_PRODUCT_ID = """
+UPDATE order_items
+SET product_id = (
+    SELECT p.id
+    FROM products p
+    JOIN orders o ON o.id = order_items.order_id
+    WHERE p.shop_id = o.shop_id
+      AND p.name = order_items.product_name
+)
+WHERE product_id IS NULL
+"""
+
+_COUNT_MISSING_PRODUCT_ID = "SELECT COUNT(*) FROM order_items WHERE product_id IS NULL"
 
 
 def create_tables() -> None:
@@ -37,6 +58,36 @@ def run_migrations(db: Session) -> None:
         except SQLAlchemyError:
             # Cột/index đã tồn tại - bỏ qua, đây là migration idempotent.
             db.rollback()
+
+
+def backfill_order_item_product_id(db: Session) -> Tuple[int, int]:
+    """Điền `order_items.product_id` cho các dòng cũ chỉ có `product_name`.
+
+    Chạy lặp lại được: chỉ đụng vào dòng đang NULL, và dòng không khớp được
+    (sản phẩm đã bị xóa hoặc đổi tên) sẽ giữ nguyên NULL.
+
+    Trả về (số dòng vừa khớp được, số dòng vẫn còn NULL).
+    """
+    try:
+        before_missing = db.execute(text(_COUNT_MISSING_PRODUCT_ID)).scalar() or 0
+        if before_missing == 0:
+            return 0, 0
+
+        db.execute(text(_BACKFILL_PRODUCT_ID))
+        db.commit()
+
+        after_missing = db.execute(text(_COUNT_MISSING_PRODUCT_ID)).scalar() or 0
+        filled = before_missing - after_missing
+        if filled or after_missing:
+            print(
+                f"[MIGRATE] order_items.product_id: filled {filled}, "
+                f"still unmatched {after_missing}"
+            )
+        return filled, after_missing
+    except SQLAlchemyError as e:
+        db.rollback()
+        print(f"[MIGRATE] Backfill order_items.product_id failed: {e}")
+        return 0, 0
 
 
 def seed_admin(db: Session) -> None:
@@ -73,6 +124,7 @@ def initialize() -> None:
     db = SessionLocal()
     try:
         run_migrations(db)
+        backfill_order_item_product_id(db)
         seed_admin(db)
     finally:
         db.close()
