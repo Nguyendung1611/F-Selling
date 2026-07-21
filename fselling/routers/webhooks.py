@@ -51,8 +51,18 @@ async def order_webhook(
     if not compare_secret(_client_secret(x_webhook_secret, authorization), webhook_secret):
         raise HTTPException(status_code=401, detail="Webhook secret không hợp lệ")
 
-    updated_orders = order_service.apply_webhook_payment(db, request_data)
+    result = order_service.apply_webhook_payment(db, request_data)
+    paid = result["paid"]
+    unreconciled = result["unreconciled"]
+
+    msg = f"Cập nhật thành công đơn hàng: {paid}"
+    if unreconciled:
+        msg += f" | Cần đối soát thủ công (tiền về sau khi đơn đã hủy): {unreconciled}"
+
+    # `order_ids` giữ nguyên ý nghĩa cũ (các đơn đã PAID) để không phá contract;
+    # `unreconciled_order_ids` là khóa bổ sung, thêm khóa là thay đổi an toàn.
     return {
-        "msg": f"Cập nhật thành công đơn hàng: {updated_orders}",
-        "order_ids": updated_orders,
+        "msg": msg,
+        "order_ids": paid,
+        "unreconciled_order_ids": unreconciled,
     }
