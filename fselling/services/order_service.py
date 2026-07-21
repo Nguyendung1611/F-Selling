@@ -206,7 +206,11 @@ def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
-    require_shop_access(db, order.shop_id, current_user)
+    # Dữ liệu legacy có thể còn đơn hàng sau khi shop đã bị xóa. Admin vẫn cần
+    # hủy được các đơn mồ côi này để giải phóng tồn kho; seller không được phép
+    # đi vòng qua kiểm tra quyền sở hữu shop.
+    if current_user.role != "ADMIN":
+        require_shop_access(db, order.shop_id, current_user)
 
     if order.status == STATUS_CANCELLED:
         return _ket_qua_huy(order_id, restored=0, unrestored=0, voucher_released=False)

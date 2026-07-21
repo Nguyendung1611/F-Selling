@@ -38,6 +38,11 @@ def co_cot_product_id(con: sqlite3.Connection) -> bool:
 
 
 def main() -> None:
+    # Windows PowerShell có thể dùng CP1252 và crash khi tên shop/sản phẩm có
+    # tiếng Việt. Script chỉ xuất báo cáo, nên chuẩn hóa stdout sang UTF-8.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description="Liet ke don PENDING dang treo (chi doc).")
     parser.add_argument(
         "--phut",

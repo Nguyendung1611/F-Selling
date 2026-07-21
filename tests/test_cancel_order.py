@@ -19,6 +19,7 @@ from fselling.routers import webhooks
 from fselling.services.order_service import (
     STATUS_CANCELLED,
     STATUS_PAID,
+    STATUS_PENDING,
     STATUS_UNRECONCILED,
     read_status,
 )
@@ -357,6 +358,67 @@ def test_admin_huy_duoc_don_cua_seller(client):
     res = client.post(
         f"/api/orders/{order['order_id']}/cancel", headers=auth(admin_token(client))
     )
+    assert res.status_code == 200
+    assert _ton_kho(ctx["product"]["id"]) == 10
+
+
+def test_admin_huy_duoc_don_mo_coi_khi_shop_da_bi_xoa(client):
+    """Dữ liệu legacy có thể còn order/product sau khi shop đã bị xóa."""
+    from conftest import admin_token
+
+    ctx, order = _tao_don(client, quantity=2)
+    assert _ton_kho(ctx["product"]["id"]) == 8
+
+    session = SessionLocal()
+    try:
+        session.query(models.Shop).filter(models.Shop.id == ctx["shop_id"]).delete(
+            synchronize_session=False
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    res = client.post(
+        f"/api/orders/{order['order_id']}/cancel", headers=auth(admin_token(client))
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["restored_items"] == 1
+    assert res.json()["unrestored_items"] == 0
+    assert _ton_kho(ctx["product"]["id"]) == 10
+    assert _trang_thai(order["order_id"]) == STATUS_CANCELLED
+
+
+def test_seller_khac_khong_huy_duoc_don_mo_coi(client):
+    """Mặt bảo mật của việc admin được bỏ qua kiểm tra shop tồn tại.
+
+    Ngoại lệ đó CHỈ dành cho ADMIN. Seller gặp đơn mồ côi vẫn phải đi qua
+    require_shop_access và bị chặn - nếu không, ai cũng hủy được đơn của
+    người khác chỉ cần shop đó đã bị xóa.
+    """
+    ctx, order = _tao_don(client, quantity=2)
+    assert _ton_kho(ctx["product"]["id"]) == 8
+
+    session = SessionLocal()
+    try:
+        session.query(models.Shop).filter(models.Shop.id == ctx["shop_id"]).delete(
+            synchronize_session=False
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    _, token_b = new_seller(client)
+    res = client.post(f"/api/orders/{order['order_id']}/cancel", headers=auth(token_b))
+
+    assert res.status_code == 404, "Seller không được đụng vào đơn mồ côi"
+    assert _ton_kho(ctx["product"]["id"]) == 8, "Không hoàn kho cho người không có quyền"
+    assert _trang_thai(order["order_id"]) == STATUS_PENDING
+
+
+def test_chu_shop_cu_van_huy_duoc_don_cua_minh_khi_shop_con_song(client):
+    """Chốt lại: ngoại lệ cho admin không làm hỏng đường đi thường của seller."""
+    ctx, order = _tao_don(client, quantity=2)
+    res = _huy(client, ctx, order["order_id"])
     assert res.status_code == 200
     assert _ton_kho(ctx["product"]["id"]) == 10
 
