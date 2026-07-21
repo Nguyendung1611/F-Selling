@@ -191,6 +191,51 @@ def pay_order(db: Session, current_user: models.User, order_id: int) -> Dict[str
     return {"msg": "Paid successfully"}
 
 
+def get_order_detail(db: Session, current_user: models.User, order_id: int) -> Dict[str, Any]:
+    """Chi tiết đơn kèm từng dòng hàng, để seller đối chiếu với khách.
+
+    Giá và tên sản phẩm lấy từ chính order_items (ảnh chụp lúc bán), không tra
+    lại bảng products - nên đơn cũ vẫn hiển thị đúng giá đã bán dù sau này
+    sản phẩm có đổi giá hoặc bị xóa.
+    """
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
+    if current_user.role != "ADMIN":
+        require_shop_access(db, order.shop_id, current_user)
+
+    shop = db.query(models.Shop).filter(models.Shop.id == order.shop_id).first()
+    items = (
+        db.query(models.OrderItem)
+        .filter(models.OrderItem.order_id == order_id)
+        .order_by(models.OrderItem.id)
+        .all()
+    )
+
+    return {
+        "id": order.id,
+        "shop_id": order.shop_id,
+        "shop_name": shop.name if shop else None,
+        "status": order.status,
+        "created_at": order.created_at,
+        "payment_method": order.payment_method,
+        "voucher_code": order.voucher_code,
+        "discount_amount": order.discount_amount or 0,
+        "total_amount": order.total_amount,
+        "subtotal": sum((i.price or 0) * (i.quantity or 0) for i in items),
+        "items": [
+            {
+                "product_id": i.product_id,
+                "product_name": i.product_name,
+                "price": i.price,
+                "quantity": i.quantity,
+                "line_total": (i.price or 0) * (i.quantity or 0),
+            }
+            for i in items
+        ],
+    }
+
+
 def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[str, Any]:
     """Hủy đơn PENDING và hoàn lại tồn kho + lượt voucher.
 

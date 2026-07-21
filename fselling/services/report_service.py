@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import io
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import openpyxl
+from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -25,21 +26,90 @@ def _paid_revenue(db: Session, shop_id: int) -> float:
     )
 
 
-def seller_dashboard(db: Session, current_user: models.User, shop_id: int) -> Dict[str, Any]:
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 200
+
+
+def _parse_ngay(chuoi: Optional[str], ten_truong: str) -> Optional[datetime]:
+    """Chuỗi YYYY-MM-DD -> datetime. Sai định dạng -> 400 thay vì im lặng bỏ qua."""
+    if not chuoi or not chuoi.strip():
+        return None
+    try:
+        return datetime.strptime(chuoi.strip(), "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail=f"{ten_truong} phải theo định dạng YYYY-MM-DD"
+        )
+
+
+def _loc_khoang_ngay(query, tu_ngay: Optional[str], den_ngay: Optional[str]):
+    """Lọc theo created_at. `den_ngay` tính trọn cả ngày đó (đến 23:59:59)."""
+    bat_dau = _parse_ngay(tu_ngay, "tu_ngay")
+    ket_thuc = _parse_ngay(den_ngay, "den_ngay")
+    if bat_dau and ket_thuc and bat_dau > ket_thuc:
+        raise HTTPException(status_code=400, detail="tu_ngay không được lớn hơn den_ngay")
+    if bat_dau:
+        query = query.filter(models.Order.created_at >= bat_dau)
+    if ket_thuc:
+        query = query.filter(models.Order.created_at < ket_thuc + timedelta(days=1))
+    return query
+
+
+def seller_dashboard(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    page: int = 1,
+    per_page: int = DEFAULT_PAGE_SIZE,
+    tu_ngay: Optional[str] = None,
+    den_ngay: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Danh sách đơn của shop, phân trang và lọc theo khoảng ngày.
+
+    Không truyền tham số nào -> trang 1, 50 đơn mới nhất (như cũ với shop nhỏ).
+    `total_revenue` luôn là doanh thu của KHOẢNG ĐANG LỌC, không phải của trang.
+    """
     require_shop_access(db, shop_id, current_user)
-    total_rev = _paid_revenue(db, shop_id)
+
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page phải >= 1")
+    if per_page < 1 or per_page > MAX_PAGE_SIZE:
+        raise HTTPException(
+            status_code=400, detail=f"per_page phải từ 1 đến {MAX_PAGE_SIZE}"
+        )
+
+    base = db.query(models.Order).filter(models.Order.shop_id == shop_id)
+    base = _loc_khoang_ngay(base, tu_ngay, den_ngay)
+
+    tong_don = base.count()
     orders = (
-        db.query(models.Order)
-        .filter(models.Order.shop_id == shop_id)
-        .order_by(models.Order.created_at.desc())
+        base.order_by(models.Order.created_at.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
         .all()
     )
+
+    doanh_thu = (
+        _loc_khoang_ngay(
+            db.query(func.sum(models.Order.total_amount)).filter(
+                models.Order.shop_id == shop_id, models.Order.status == "PAID"
+            ),
+            tu_ngay,
+            den_ngay,
+        ).scalar()
+        or 0
+    )
+
     return {
-        "total_revenue": total_rev,
+        "total_revenue": doanh_thu,
         "orders": [
             {"id": o.id, "total": o.total_amount, "status": o.status, "date": o.created_at}
             for o in orders
         ],
+        "page": page,
+        "per_page": per_page,
+        "total_orders": tong_don,
+        "has_more": page * per_page < tong_don,
     }
 
 
@@ -51,15 +121,38 @@ def admin_dashboard(db: Session) -> List[Dict[str, Any]]:
     ]
 
 
-def shop_stats(db: Session, current_user: models.User, shop_id: int) -> Dict[str, Any]:
+def shop_stats(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    tu_ngay: Optional[str] = None,
+    den_ngay: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Thống kê của shop. Không truyền ngày -> toàn bộ lịch sử + xu hướng 7 ngày
+    (đúng như trước). Truyền ngày -> mọi con số và biểu đồ đều theo khoảng đó."""
     require_shop_access(db, shop_id, current_user)
+    co_loc_ngay = bool((tu_ngay or "").strip() or (den_ngay or "").strip())
 
-    total_rev = _paid_revenue(db, shop_id)
-    total_orders = db.query(models.Order).filter(models.Order.shop_id == shop_id).count()
+    total_rev = (
+        _loc_khoang_ngay(
+            db.query(func.sum(models.Order.total_amount)).filter(
+                models.Order.shop_id == shop_id, models.Order.status == "PAID"
+            ),
+            tu_ngay,
+            den_ngay,
+        ).scalar()
+        or 0
+    )
+    total_orders = _loc_khoang_ngay(
+        db.query(models.Order).filter(models.Order.shop_id == shop_id), tu_ngay, den_ngay
+    ).count()
 
-    paid_orders_subquery = (
-        db.query(models.Order.id)
-        .filter(models.Order.shop_id == shop_id, models.Order.status == "PAID")
+    paid_orders_subquery = _loc_khoang_ngay(
+        db.query(models.Order.id).filter(
+            models.Order.shop_id == shop_id, models.Order.status == "PAID"
+        ),
+        tu_ngay,
+        den_ngay,
     )
     total_sold = (
         db.query(func.sum(models.OrderItem.quantity))
@@ -81,21 +174,33 @@ def shop_stats(db: Session, current_user: models.User, shop_id: int) -> Dict[str
     )
     top_products = [{"name": r[0], "qty": r[1]} for r in top_products_query]
 
-    seven_days_ago = datetime.utcnow() - timedelta(days=TREND_DAYS - 1)
-    recent_orders = (
-        db.query(models.Order)
-        .filter(
-            models.Order.shop_id == shop_id,
-            models.Order.status == "PAID",
-            models.Order.created_at >= seven_days_ago,
+    if co_loc_ngay:
+        # Biểu đồ chạy theo đúng khoảng người dùng chọn
+        recent_orders = _loc_khoang_ngay(
+            db.query(models.Order).filter(
+                models.Order.shop_id == shop_id, models.Order.status == "PAID"
+            ),
+            tu_ngay,
+            den_ngay,
+        ).all()
+        revenue_by_date = {o.created_at.strftime("%Y-%m-%d"): 0 for o in recent_orders}
+    else:
+        # Mặc định: 7 ngày gần nhất (giữ nguyên hành vi cũ)
+        seven_days_ago = datetime.utcnow() - timedelta(days=TREND_DAYS - 1)
+        recent_orders = (
+            db.query(models.Order)
+            .filter(
+                models.Order.shop_id == shop_id,
+                models.Order.status == "PAID",
+                models.Order.created_at >= seven_days_ago,
+            )
+            .all()
         )
-        .all()
-    )
+        revenue_by_date = {
+            (datetime.utcnow() - timedelta(days=i)).strftime("%Y-%m-%d"): 0
+            for i in range(TREND_DAYS)
+        }
 
-    revenue_by_date = {
-        (datetime.utcnow() - timedelta(days=i)).strftime("%Y-%m-%d"): 0
-        for i in range(TREND_DAYS)
-    }
     for o in recent_orders:
         d_str = o.created_at.strftime("%Y-%m-%d")
         if d_str in revenue_by_date:

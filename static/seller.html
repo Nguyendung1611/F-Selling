@@ -85,17 +85,39 @@
                     </div>
                 </div>
 
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2rem; flex-wrap: wrap; gap: 0.5rem;">
                     <h4>Đơn hàng gần đây</h4>
                     <button class="btn-outline" onclick="downloadExcel()"><i class="ph ph-file-xls"></i> Xuất Excel</button>
                 </div>
+
+                <div style="display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: 1rem;">
+                    <div>
+                        <label style="font-size: 0.8rem; color: var(--text-muted);">Từ ngày</label>
+                        <input type="date" id="filterTuNgay" style="margin-bottom: 0;">
+                    </div>
+                    <div>
+                        <label style="font-size: 0.8rem; color: var(--text-muted);">Đến ngày</label>
+                        <input type="date" id="filterDenNgay" style="margin-bottom: 0;">
+                    </div>
+                    <button onclick="apDungLocNgay()"><i class="ph ph-funnel"></i> Lọc</button>
+                    <button class="btn-outline" onclick="xoaLocNgay()">Bỏ lọc</button>
+                </div>
+
                 <div class="table-responsive">
                     <table class="db-table">
                         <thead>
-                            <tr><th>Mã ĐH</th><th>Ngày</th><th>Tổng tiền</th><th>Trạng thái</th></tr>
+                            <tr><th>Mã ĐH</th><th>Ngày</th><th>Tổng tiền</th><th>Trạng thái</th><th></th></tr>
                         </thead>
                         <tbody id="orderList"></tbody>
                     </table>
+                </div>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+                    <small id="thongTinTrang" style="color: var(--text-muted);"></small>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button class="btn-outline" id="btnTrangTruoc" onclick="doiTrang(-1)">← Trước</button>
+                        <button class="btn-outline" id="btnTrangSau" onclick="doiTrang(1)">Sau →</button>
+                    </div>
                 </div>
             </div>
 
@@ -374,6 +396,24 @@
             <h3 style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem;"><i class="ph ph-desktop" style="color: var(--primary);"></i> Chọn Cửa Hàng Mở POS</h3>
             <div id="posShopList" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem;"></div>
             <button class="btn-outline" onclick="document.getElementById('posModal').style.display='none'" style="width: 100%;">Hủy bỏ</button>
+        </div>
+    </div>
+
+    <!-- Modal xem chi tiết đơn hàng -->
+    <div id="orderDetailModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.6); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
+        <div style="background: #ffffff; padding: 2rem; border-radius: 16px; width: 560px; max-width: 92%; border: 1px solid var(--border-color); box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);">
+            <h3 style="margin-bottom: 0.25rem;">Chi tiết đơn <span id="odMaDon" class="text-gradient"></span></h3>
+            <small id="odThongTin" style="color: var(--text-muted); display: block; margin-bottom: 1rem;"></small>
+            <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
+                <table class="db-table">
+                    <thead>
+                        <tr><th>Sản phẩm</th><th style="text-align:right;">Đơn giá</th><th style="text-align:right;">SL</th><th style="text-align:right;">Thành tiền</th></tr>
+                    </thead>
+                    <tbody id="odDanhSach"></tbody>
+                </table>
+            </div>
+            <div id="odTongKet" style="margin-top: 1rem; text-align: right;"></div>
+            <button class="btn-outline" style="width: 100%; margin-top: 1rem;" onclick="dongChiTietDon()">Đóng</button>
         </div>
     </div>
 

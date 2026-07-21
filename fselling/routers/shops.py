@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -57,7 +59,11 @@ def delete_shop(
 @router.get("/{shop_id}/stats")
 def get_shop_stats(
     shop_id: int,
+    tu_ngay: Optional[str] = Query(None, description="Lọc từ ngày (YYYY-MM-DD)"),
+    den_ngay: Optional[str] = Query(None, description="Lọc đến ngày (YYYY-MM-DD)"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return report_service.shop_stats(db, current_user, shop_id)
+    return report_service.shop_stats(
+        db, current_user, shop_id, tu_ngay=tu_ngay, den_ngay=den_ngay
+    )

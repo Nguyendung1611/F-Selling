@@ -130,8 +130,8 @@ async function loadDashboardShop(id) {
         const shop = allShops.find(s => s.id === id);
         document.getElementById('currentShopName').innerText = shop ? shop.name : '';
 
-        // Lấy đơn hàng (API cũ) cho danh sách đơn hàng
-        const res = await apiCall(`/dashboard/seller/${id}`);
+        // Đơn hàng: phân trang + lọc theo khoảng ngày
+        const res = await apiCall(`/dashboard/seller/${id}${chuoiThamSoDon()}`);
         const tbody = document.getElementById('orderList');
         tbody.innerHTML = '';
         res.orders.forEach(o => {
@@ -142,11 +142,13 @@ async function loadDashboardShop(id) {
                 <td>${dt}</td>
                 <td>${o.total.toLocaleString()} ₫</td>
                 <td style="color: ${hienThi.color}; font-weight: 600;">${escapeHtml(hienThi.label)}</td>
+                <td><button class="btn-outline" style="padding: 0.25rem 0.6rem; font-size: 0.8rem;" onclick="xemChiTietDon(${o.id})">Xem</button></td>
             </tr>`;
         });
+        capNhatDieuKhienTrang(res);
 
         // Lấy số liệu thống kê & biểu đồ (API mới)
-        const stats = await apiCall(`/shops/${id}/stats`);
+        const stats = await apiCall(`/shops/${id}/stats${chuoiThamSoNgay()}`);
         
         document.getElementById('statRev').innerText = stats.total_revenue.toLocaleString() + ' ₫';
         document.getElementById('statOrders').innerText = stats.total_orders;
@@ -871,3 +873,104 @@ if (btnOk) {
 }
 
 init();
+
+// ===== Phân trang + lọc ngày cho danh sách đơn (nhóm B) =====
+let trangDonHienTai = 1;
+
+function chuoiThamSoNgay() {
+    const tu = document.getElementById('filterTuNgay')?.value;
+    const den = document.getElementById('filterDenNgay')?.value;
+    const p = new URLSearchParams();
+    if (tu) p.set('tu_ngay', tu);
+    if (den) p.set('den_ngay', den);
+    const s = p.toString();
+    return s ? `?${s}` : '';
+}
+
+function chuoiThamSoDon() {
+    const tu = document.getElementById('filterTuNgay')?.value;
+    const den = document.getElementById('filterDenNgay')?.value;
+    const p = new URLSearchParams({ page: String(trangDonHienTai) });
+    if (tu) p.set('tu_ngay', tu);
+    if (den) p.set('den_ngay', den);
+    return `?${p.toString()}`;
+}
+
+function capNhatDieuKhienTrang(res) {
+    const info = document.getElementById('thongTinTrang');
+    const truoc = document.getElementById('btnTrangTruoc');
+    const sau = document.getElementById('btnTrangSau');
+    if (!info) return;
+
+    const tong = res.total_orders ?? res.orders.length;
+    if (tong === 0) {
+        info.innerText = 'Không có đơn nào trong khoảng đã chọn';
+    } else {
+        const dau = (res.page - 1) * res.per_page + 1;
+        const cuoi = Math.min(res.page * res.per_page, tong);
+        info.innerText = `Hiển thị ${dau}-${cuoi} trên tổng ${tong} đơn`;
+    }
+    if (truoc) truoc.disabled = res.page <= 1;
+    if (sau) sau.disabled = !res.has_more;
+}
+
+function doiTrang(buoc) {
+    const moi = trangDonHienTai + buoc;
+    if (moi < 1) return;
+    trangDonHienTai = moi;
+    if (dashboardShopId) loadDashboardShop(dashboardShopId);
+}
+
+function apDungLocNgay() {
+    const tu = document.getElementById('filterTuNgay').value;
+    const den = document.getElementById('filterDenNgay').value;
+    if (tu && den && tu > den) return showToast('Từ ngày không được lớn hơn đến ngày');
+    trangDonHienTai = 1;
+    if (dashboardShopId) loadDashboardShop(dashboardShopId);
+}
+
+function xoaLocNgay() {
+    document.getElementById('filterTuNgay').value = '';
+    document.getElementById('filterDenNgay').value = '';
+    trangDonHienTai = 1;
+    if (dashboardShopId) loadDashboardShop(dashboardShopId);
+}
+
+// ===== Xem chi tiết đơn (nhóm B) =====
+async function xemChiTietDon(orderId) {
+    try {
+        const d = await apiCall(`/orders/${orderId}/detail`);
+        document.getElementById('odMaDon').innerText = `#${d.id}`;
+
+        const tt = window.moTaTrangThaiDon(d.status);
+        const ngay = new Date(d.created_at).toLocaleString('vi-VN');
+        const pttt = d.payment_method === 'cash' ? 'Tiền mặt' : 'Chuyển khoản';
+        document.getElementById('odThongTin').innerText =
+            `${ngay} • ${pttt} • ${tt.label}`;
+
+        const tbody = document.getElementById('odDanhSach');
+        tbody.innerHTML = '';
+        d.items.forEach(i => {
+            tbody.innerHTML += `<tr>
+                <td>${escapeHtml(i.product_name)}</td>
+                <td style="text-align:right;">${(i.price || 0).toLocaleString()} ₫</td>
+                <td style="text-align:right;">${i.quantity}</td>
+                <td style="text-align:right;">${(i.line_total || 0).toLocaleString()} ₫</td>
+            </tr>`;
+        });
+
+        let tongKet = `<div>Tạm tính: <strong>${(d.subtotal || 0).toLocaleString()} ₫</strong></div>`;
+        if (d.discount_amount > 0) {
+            const ma = d.voucher_code ? ` (${escapeHtml(d.voucher_code)})` : '';
+            tongKet += `<div style="color: #F59E0B;">Giảm giá${ma}: -${d.discount_amount.toLocaleString()} ₫</div>`;
+        }
+        tongKet += `<div style="font-size: 1.2rem; margin-top: 0.5rem;">Tổng cộng: <strong>${(d.total_amount || 0).toLocaleString()} ₫</strong></div>`;
+        document.getElementById('odTongKet').innerHTML = tongKet;
+
+        document.getElementById('orderDetailModal').style.display = 'flex';
+    } catch (e) { showToast(e.message); }
+}
+
+function dongChiTietDon() {
+    document.getElementById('orderDetailModal').style.display = 'none';
+}

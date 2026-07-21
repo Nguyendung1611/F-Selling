@@ -28,6 +28,15 @@ def get_order(
     return order_service.get_order(db, current_user, order_id)
 
 
+@router.get("/{order_id}/detail")
+def get_order_detail(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return order_service.get_order_detail(db, current_user, order_id)
+
+
 @router.post("/{order_id}/pay")
 def pay_order(
     order_id: int,

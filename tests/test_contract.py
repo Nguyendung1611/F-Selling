@@ -57,6 +57,7 @@ BASELINE_ROUTES = {
 # BASELINE_ROUTES hoặc danh sách này đều bị coi là thêm ngoài ý muốn.
 ROUTES_BO_SUNG = {
     ("POST", "/api/orders/{order_id}/cancel"),  # A1d: hủy đơn + hoàn tồn kho
+    ("GET", "/api/orders/{order_id}/detail"),   # B3: xem chi tiết đơn kèm dòng hàng
 }
 
 
@@ -162,6 +163,13 @@ def test_danh_sach_san_pham_giu_nguyen_cac_truong(client):
 
 
 def test_dashboard_seller_giu_nguyen_contract(client):
+    """Nhóm B thêm khóa phân trang. Hai khóa cũ phải còn nguyên tên và ý nghĩa
+    để frontend hiện tại không vỡ (thêm khóa là thay đổi an toàn)."""
     ctx = seller_with_shop(client)
     res = client.get(f"/api/dashboard/seller/{ctx['shop_id']}", headers=auth(ctx["token"]))
-    assert set(res.json().keys()) == {"total_revenue", "orders"}
+    body = res.json()
+    assert {"total_revenue", "orders"} <= set(body.keys())
+    assert isinstance(body["orders"], list)
+    assert set(body.keys()) == {
+        "total_revenue", "orders", "page", "per_page", "total_orders", "has_more",
+    }
