@@ -4,13 +4,19 @@
 server luôn được khởi động từ thư mục `python_app`.
 """
 from fastapi import APIRouter, status
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 
 router = APIRouter(include_in_schema=False)
 
 
 def _redirect(target: str) -> RedirectResponse:
     return RedirectResponse(url=target, status_code=status.HTTP_301_MOVED_PERMANENTLY)
+
+
+@router.get("/favicon.ico", status_code=status.HTTP_204_NO_CONTENT)
+def get_favicon() -> Response:
+    """Tránh 404 do trình duyệt tự động yêu cầu favicon khi trang chưa có icon riêng."""
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # --- Clean URL Routes for HTML Pages ---
