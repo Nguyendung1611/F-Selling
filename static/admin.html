@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bảng điều khiển Admin | F-Selling</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/admin.css">
+</head>
+<body>
+    <div class="nav-bar">
+        <!-- <h2 class="text-gradient">Quản trị viên F-Selling</h2> -->
+        <img class="logo" src="img/logo.png" alt="">
+        <div class="flex-row">
+            <button onclick="downloadExcel()">Xuất Excel</button>
+            <button class="btn-outline" onclick="showChangePasswordModal()">Đổi mật khẩu</button>
+            <button class="btn-outline" onclick="logout()">Đăng xuất</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Tabs Header -->
+        <div class="tabs-wrapper">
+            <button class="tab-btn active" onclick="switchTab('dashboard')">Doanh thu Shop</button>
+            <button class="tab-btn" onclick="switchTab('logs')">Nhật Ký Hệ Thống</button>
+        </div>
+
+        <div id="dashboard" class="tab-content active glass-card">
+            <h3>Doanh thu các Shop</h3>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tên Shop</th>
+                            <th>Tổng doanh thu (VNĐ)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="shopList">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div id="logs" class="tab-content glass-card">
+            <h3>Nhật Ký Hệ Thống</h3>
+            <div class="table-responsive">
+                <table class="db-table" style="margin-top: 1rem;">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Thời gian</th>
+                            <th>Người dùng</th>
+                            <th>Hành động</th>
+                            <th>Chi tiết</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logList">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast"></div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/admin.js"></script>
+
+    <!-- Modal Đổi Mật Khẩu -->
+    <div id="changePasswordModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center;">
+        <div class="glass-card" style="max-width: 400px; width: 90%; background: var(--card-bg); text-align: center; position: relative;">
+            <button onclick="closeChangePasswordModal()" style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; box-shadow: none; padding: 0;">&times;</button>
+            
+            <h3 class="text-gradient" style="margin-top: 1rem;">Đổi mật khẩu</h3>
+            
+            <form id="changePasswordForm">
+                <div style="text-align: left;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mật khẩu hiện tại</label>
+                    <input type="password" id="oldPassword" required>
+                </div>
+                <div style="text-align: left;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mật khẩu mới</label>
+                    <input type="password" id="newPassword" required>
+                </div>
+                <div style="text-align: left;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Xác nhận mật khẩu mới</label>
+                    <input type="password" id="confirmNewPassword" required>
+                </div>
+                <button type="submit" style="width: 100%; margin-top: 0.5rem;">Cập nhật mật khẩu</button>
+            </form>
+            
+            <div id="changePasswordErrorMsg" style="color: #ef4444; margin-top: 1rem; text-align: center; font-size: 0.9rem;"></div>
+            <div id="changePasswordSuccessMsg" style="color: var(--success); margin-top: 1rem; text-align: center; font-weight: 600; font-size: 0.9rem;"></div>
+        </div>
+    </div>
+</body>
+</html>

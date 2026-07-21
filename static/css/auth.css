@@ -1,0 +1,23 @@
+.login-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+
+.login-box {
+    max-width: 35rem;
+    width: 100%;
+}
+
+input{
+    margin-top: 0.5em;
+}
+
+.logo {
+    display: block;
+    margin: 0 auto;
+    height: 4em;
+    width: auto;
+    margin-bottom: 1em;
+}

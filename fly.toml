@@ -1,0 +1,27 @@
+# ĐỔI "app" thành tên DUY NHẤT của bạn (chỉ chữ thường, số, gạch ngang).
+# Nhớ đổi luôn ALLOWED_ORIGINS cho khớp: https://<ten-app>.fly.dev
+app = "f-selling-dung"
+primary_region = "sin"  # Singapore, gần Việt Nam
+
+[build]
+
+[env]
+  DB_PATH = "/data/fselling_v4.db"
+  UPLOAD_DIR = "/data/uploads"
+  ALLOWED_ORIGINS = "https://f-selling-dung.fly.dev"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0   # tự tắt khi không có traffic để khỏi tốn tiền
+
+# Volume lưu dữ liệu bền (DB + ảnh upload). Không mất khi redeploy/restart.
+[mounts]
+  source = "fselling_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

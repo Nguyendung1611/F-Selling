@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>F-Selling | Đăng nhập</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/auth.css">
+
+</head>
+<body>
+    <div class="login-container">
+        <div class="glass-card login-box">
+            <!-- <h1 class="text-gradient" style="text-align: center;">F-Selling</h1> -->
+            <img class="logo" src="img/logo.png" alt="">
+            <p style="text-align: center; color: var(--text-muted); margin-bottom: 2rem;">Đăng nhập vào tài khoản của bạn</p>
+            
+            <form id="loginForm">
+                <div>
+                    <label>Tên đăng nhập</label>
+                    <input type="text" id="username" required>
+                </div>
+                <div>
+                    <label>Mật khẩu</label>
+                    <input type="password" id="password" required>
+                </div>
+                <button type="submit" style="width: 100%;">Đăng nhập</button>
+                <div id="errorMsg" style="color: #ef4444; margin-top: 1rem; text-align: center;"></div>
+            </form>
+            <div style="text-align: center; margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem;">
+                <p><a href="#" onclick="showForgotModal()" style="color: var(--text-muted); text-decoration: none; font-size: 0.9rem;">Quên mật khẩu?</a></p>
+                <p>Chưa có tài khoản? <a href="/register" style="color: var(--primary);">Đăng ký Người bán</a></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Quên Mật Khẩu -->
+    <div id="forgotModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center;">
+        <div class="glass-card" style="max-width: 400px; width: 90%; background: var(--card-bg); text-align: center; position: relative;">
+            <button onclick="closeForgotModal()" style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; box-shadow: none; padding: 0;">&times;</button>
+            
+            <h3 class="text-gradient" id="forgotModalTitle" style="margin-top: 1rem;">Quên mật khẩu</h3>
+            
+            <!-- Step 1: Nhập email gửi OTP -->
+            <form id="forgotStep1Form">
+                <p style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">Nhập địa chỉ email liên kết với tài khoản của bạn để nhận mã xác minh OTP.</p>
+                <div style="text-align: left;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Email của bạn</label>
+                    <input type="email" id="forgotEmail" required>
+                </div>
+                <button type="submit" style="width: 100%; margin-top: 0.5rem;">Gửi mã xác nhận</button>
+            </form>
+            
+            <!-- Step 2: Nhập OTP & Đặt mật khẩu mới -->
+            <form id="forgotStep2Form" style="display: none;">
+                <p style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">Mã xác thực đã được gửi. Vui lòng nhập mã và mật khẩu mới.</p>
+                <div style="text-align: left;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mã OTP (6 chữ số)</label>
+                    <input type="text" id="forgotOTP" maxlength="6" required style="text-align: center; letter-spacing: 4px; font-weight: bold;">
+                </div>
+                <div style="text-align: left;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mật khẩu mới</label>
+                    <input type="password" id="forgotNewPassword" required>
+                </div>
+                <div style="text-align: left;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Xác nhận mật khẩu</label>
+                    <input type="password" id="forgotConfirmPassword" required>
+                </div>
+                <button type="submit" style="width: 100%; margin-top: 0.5rem;">Đặt lại mật khẩu</button>
+            </form>
+            
+            <div id="forgotErrorMsg" style="color: #ef4444; margin-top: 1rem; text-align: center; font-size: 0.9rem;"></div>
+            <div id="forgotSuccessMsg" style="color: var(--success); margin-top: 1rem; text-align: center; font-weight: 600; font-size: 0.9rem;"></div>
+        </div>
+    </div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/auth.js"></script>
+</body>
+</html>

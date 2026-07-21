@@ -1,0 +1,4 @@
+# Chỉ dùng cho chạy test ở máy dev / CI - KHÔNG cần cho production image.
+-r requirements.txt
+pytest
+httpx

@@ -1,0 +1,468 @@
+.tab-content { display: none; }
+.tab-content.active { display: block; animation: fadeIn 0.3s ease; }
+.tab-btn {
+    background: transparent; border: none; color: var(--text-muted); padding: 0.75rem 1.25rem;
+    font-size: 1rem; font-weight: 600; cursor: pointer; border-bottom: 3px solid transparent;
+    transition: all 0.3s;
+}
+.tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+/* .sub-tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); } */
+.db-table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+.db-table th, .db-table td { padding: 1rem; text-align: left; border-bottom: 1px solid var(--border-color); }
+.db-table th { background: #F8FAFC; font-weight: 600; color: var(--text-muted); }
+
+.shop-switcher {
+    background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+    color: white; padding: 0.5rem 1rem; border-radius: 8px; outline: none;
+    cursor: pointer; font-weight: 600; appearance: auto;
+}
+
+.prod-list td{
+    height: 7rem  ;
+}
+
+.shop-switcher option { background: #1E293B; color: white; }
+
+.shop-list-card {
+    background: #F8FAFC; border: 1px solid var(--border-color); border-radius: 8px;
+    padding: 1rem; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center;
+}
+.shop-list-card h4 { margin: 0; color: var(--text-main); }
+
+.tab-btn:hover {
+   background: var(--primary-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 8px -1px rgba(249, 115, 22, 0.3);
+    color: white;
+}
+
+/* .sub-tab-btn:hover {
+   background: var(--primary-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 8px -1px rgba(249, 115, 22, 0.3);
+    color: white;
+} */
+
+.logo{
+    height: 50px;
+    width: auto;
+}
+
+
+.input-wrapper i {
+    position: absolute;
+    left: 1rem;
+    color: var(--text-muted);
+    font-size: 1.2rem;
+    margin-bottom: 1em;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+
+.stat-card {
+    background: #F8FAFC;
+    padding: 1.5rem;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    text-align: center;
+}
+
+.stat-card h4 {
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.stat-value {
+    display: block;
+    color: var(--text-main);
+    font-size: 1.8rem;
+    font-weight: 700;
+}
+
+.stat-value.revenue {
+    color: var(--primary);
+}
+
+
+.chart-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 1rem;
+    margin-top: 2rem;
+}
+
+.chart-card {
+    background: #F8FAFC;
+    padding: 1rem;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+}
+
+.chart-card h4 {
+    margin-bottom: 1rem;
+    color: var(--text-main);
+}
+
+.chart-container {
+    height: 220px;
+    position: relative;
+}
+
+.chart-center {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.chart-container canvas {
+    width: 100%  ;
+    height: 100%  ;
+}
+
+.tabs-wrapper {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.tab-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+
+    padding: 1rem 1.5rem;
+    font-size: 0.9rem;
+
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+
+    background: #fff;
+    color: var(--text-main);
+
+    cursor: pointer;
+    transition: all .2s ease;
+}
+
+.tab-btn:hover {
+    background:  #efab7c !important;
+}
+
+.tab-btn.active {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+}
+
+/* .sub-tab-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+
+    padding: 1rem 1.5rem;
+    font-size: 0.9rem;
+
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+
+    background: #fff;
+    color: var(--text-main);
+
+    cursor: pointer;
+    transition: all .2s ease;
+} */
+/* 
+.sub-tab-btn:hover {
+    background: #F8FAFC;
+} */
+/* 
+.sub-tab-btn.active {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+} */
+
+.shop-action-group {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.shop-action-group .btn-outline {
+    padding: 0.5rem 1rem;
+}
+
+.table-responsive-product {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    /* margin-top: 1rem; */
+}
+
+.cate-selection{
+    width: 100%; 
+    padding: 0.75rem; 
+    border-radius: 8px; 
+    border: 1px solid var(--border-color); 
+    margin-bottom: 1rem;
+}
+
+.voucher-type{
+    width: 100%; 
+    padding: 0.75rem; 
+    border-radius: 8px; 
+    border: 1px solid var(--border-color);
+        margin-bottom: 1rem;
+}
+
+.save-voucher-btn{
+    width: 100%;
+}
+
+.table-responsive-voucher{
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-top: 1rem;
+}
+
+/* Tablet */
+@media (max-width: 768px) {
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .stat-card {
+        padding: 1.25rem;
+    }
+
+    .stat-value {
+        font-size: 1.5rem;
+    }
+
+     .chart-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .chart-card {
+        padding: 1rem;
+    }
+
+    .chart-container {
+        height: 260px;
+    }
+
+     .tabs-wrapper{
+        gap:0.5rem;
+    }
+
+    .tab-btn{
+        flex:1 1 calc(50% - 0.25rem);
+    }
+
+    /* .sub-tab-btn{
+        flex:1 1 calc(50% - 0.25rem);
+    } */
+
+    /* .sub-tab-btn{
+        width:48%;
+        font-size:0.85rem;
+        padding:0.75rem;
+    } */
+
+    .table-responsive-product {
+    width: 48%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    /* margin-top: 1rem; */
+    }   
+
+    .cate-filter{
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        margin-top: 1em;
+    }
+    
+    .create-product_btn{
+            width: 48%;
+    }
+
+    .product_img-input{
+        margin-bottom: 1rem; 
+        width: 48%;
+    }
+
+    .input-wrapper input{
+        width: 48%;
+    }
+
+    .input-wrapper-shop input{
+        width: 100%;
+    }
+
+    /* .sub-tab-btn.active {
+            width: 48%;
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+    } */
+
+    .form-group label{
+        width: 48%;
+    }
+
+      .cate-selection{
+        width: 48%; 
+        padding: 0.75rem; 
+        border-radius: 8px; 
+        border: 1px solid var(--border-color); 
+        margin-bottom: 1rem;
+    }
+
+       .voucher-type{
+        width: 58%; 
+        padding: 0.75rem; 
+        border-radius: 8px; 
+        border: 1px solid var(--border-color);
+         margin-bottom: 1rem;
+    }
+
+    .input-wrapper-voucher input{
+        width: 80%;
+    }
+
+    .save-voucher-btn{
+        width: 58%;
+    }
+}
+
+/* Mobile */
+@media (max-width: 480px) {
+    .stats-grid {
+        grid-template-columns: 1fr;
+        gap: 0.75rem;
+    }
+
+    .stat-card {
+        padding: 1rem;
+    }
+
+    .stat-card h4 {
+        font-size: 0.8rem;
+    }
+
+    .stat-value {
+        font-size: 1.3rem;
+    }
+
+    .chart-grid {
+        gap: 0.75rem;
+        margin-top: 1.5rem;
+    }
+
+    .chart-card {
+        padding: 0.75rem;
+    }
+
+    .chart-card h4 {
+        font-size: 1rem;
+    }
+
+    .chart-container {
+        height: 220px;
+    }
+
+     .tabs-wrapper{
+        flex-direction:column;
+    }
+
+    .tab-btn{
+        width:100%;
+        font-size:0.85rem;
+        padding:0.75rem;
+    }
+
+    /* .sub-tab-btn{
+        width:48%;
+        font-size:0.85rem;
+        padding:0.75rem;
+    } */
+
+
+    .table-responsive-product {
+    width: 48%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    /* margin-top: 1rem; */
+    }
+
+    .create-product_btn{
+            width: 48%;
+    }
+
+    .product_img-input{
+        margin-bottom: 1rem; 
+        width: 48%;
+    }
+
+    .input-wrapper input{
+        width: 48%;
+    }
+
+    .input-wrapper-shop input{
+        width: 100%;
+    }
+
+    /* .sub-tab-btn.active {
+        width: 48%;
+        background: var(--primary);
+        color: white;
+        border-color: var(--primary);
+    } */
+
+    .form-group label{
+        width: 48%;
+    }
+
+    .cate-selection{
+        width: 48%; 
+        padding: 0.75rem; 
+        border-radius: 8px; 
+        border: 1px solid var(--border-color); 
+        margin-bottom: 1rem;
+    }
+
+    .voucher-type{
+        width: 80%; 
+        padding: 0.75rem; 
+        border-radius: 8px; 
+        border: 1px solid var(--border-color);
+         margin-bottom: 1rem;
+    }
+
+    .input-wrapper-voucher input{
+        width: 80%;
+    }
+
+    .save-voucher-btn{
+        width: 80%;
+    }
+
+    .table-responsive-voucher{
+    width: 80%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-top: 1rem;
+    }
+}
+    

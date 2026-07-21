@@ -1,0 +1,35 @@
+.verify-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+}
+.verify-box {
+    width: 100%;
+    max-width: 450px;
+    text-align: center;
+}
+.otp-inputs {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin: 1.5rem 0;
+}
+.otp-field {
+    width: 3.5rem;
+    height: 3.5rem;
+    font-size: 1.5rem;
+    font-weight: 700;
+    text-align: center;
+    background: #F1F5F9;
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    margin-bottom: 0;
+    transition: all 0.3s ease;
+}
+.otp-field:focus {
+    border-color: var(--primary);
+    background: #FFFFFF;
+    box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.2);
+}
+

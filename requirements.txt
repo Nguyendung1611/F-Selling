@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+openpyxl
+pyjwt
+bcrypt
+passlib[bcrypt]
+pydantic
+email-validator
+python-multipart
+apscheduler
+pyngrok

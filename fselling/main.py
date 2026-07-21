@@ -1,0 +1,80 @@
+"""Khởi tạo FastAPI app: middleware, routers, static mount, scheduler."""
+from __future__ import annotations
+
+import zoneinfo
+from contextlib import asynccontextmanager
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from .core import bootstrap
+from .core.config import STATIC_DIR, UPLOAD_DIR, get_allowed_origins
+from .routers import (
+    admin,
+    auth,
+    categories,
+    orders,
+    pages,
+    products,
+    reports,
+    shops,
+    vouchers,
+    webhooks,
+)
+from .services.maintenance_service import cleanup_expired_unverified_users
+
+CLEANUP_INTERVAL_MINUTES = 1
+
+# Tạo bảng ngay khi import module (giữ đúng thời điểm như app.py cũ).
+bootstrap.create_tables()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    bootstrap.initialize()
+
+    scheduler = BackgroundScheduler(timezone=zoneinfo.ZoneInfo("UTC"))
+    scheduler.add_job(
+        cleanup_expired_unverified_users, "interval", minutes=CLEANUP_INTERVAL_MINUTES
+    )
+    scheduler.start()
+    print("[SCHEDULER] Background cleanup task started - runs every 1 minute")
+
+    yield
+
+    scheduler.shutdown()
+    print("[SCHEDULER] Background cleanup task stopped")
+
+
+def create_app(lifespan_handler=lifespan) -> FastAPI:
+    application = FastAPI(title="F-Selling Backend", lifespan=lifespan_handler)
+
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=get_allowed_origins(),
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
+
+    application.include_router(auth.router)
+    application.include_router(shops.router)
+    application.include_router(categories.router)
+    application.include_router(products.router)
+    # webhooks PHẢI đứng trước orders: /api/orders/webhook vs /api/orders/{shop_id}
+    application.include_router(webhooks.router)
+    application.include_router(orders.router)
+    application.include_router(vouchers.router)
+    application.include_router(reports.router)
+    application.include_router(admin.router)
+    application.include_router(pages.router)
+
+    # Phục vụ ảnh upload từ UPLOAD_DIR (volume) — phải mount trước mount "/"
+    application.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+    application.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+    return application
+
+
+app = create_app()

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xác thực Email | F-Selling</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/verify.css">
+
+</head>
+<body>
+    <div class="verify-container">
+        <div class="glass-card verify-box">
+            <h1 class="text-gradient">Xác thực tài khoản</h1>
+            <p style="color: var(--text-muted); margin-bottom: 1rem;">
+                Chúng tôi đã gửi mã xác thực gồm 6 chữ số vào địa chỉ email của bạn:
+            </p>
+            <p id="targetEmail" style="font-weight: 600; color: var(--text-main); margin-bottom: 1.5rem; word-break: break-all;"></p>
+            
+            <div class="timer-card">
+                <p class="timer-label">Thời gian xác thực còn lại:</p>
+                <p id="timerDisplay" class="timer-value">05:00</p>
+            </div>
+
+            <form id="verifyForm">
+                <div class="otp-inputs">
+                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" required>
+                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" required>
+                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" required>
+                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" required>
+                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" required>
+                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" required>
+                </div>
+                
+                <button type="submit">Xác thực tài khoản</button>
+                <div id="errorMsg" class="feedback error"></div>
+                <div id="successMsg" class="feedback success"></div>
+            </form>
+            
+            <div style="text-align: center; margin-top: 2rem; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
+                <p style="font-size: 0.9rem; color: var(--text-muted);">
+                    Không nhận được mã? 
+                    <a href="#" id="resendBtn" style="color: var(--primary); font-weight: 600; text-decoration: none;">Gửi lại mã mới</a>
+                </p>
+                <p style="font-size: 0.9rem; margin-top: 0.75rem;">
+                    <a href="/" style="color: var(--text-muted); text-decoration: none;"><i class="ph ph-arrow-left"></i> Quay về Đăng nhập</a>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phosphor Icons for arrow icon -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <script src="/js/api.js"></script> 
+    <script src="/js/verify.js"></script> 
+</body>
+</html>

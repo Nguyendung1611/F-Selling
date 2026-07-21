@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>POS Bán Hàng Chuyên Nghiệp | F-Selling</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <link rel="stylesheet" href="/css/pos.css">
+    <link rel="stylesheet" href="/css/style.css">
+
+</head>
+<body>
+    <div class="nav-bar" style="padding: 0.5rem 1.5rem; background: #0F172A; border-bottom: 1px solid var(--border-color);">
+        <h2 class="text-gradient" style="font-size: 1.25rem;"><i class="ph ph-desktop"></i> POS BÁN HÀNG</h2>
+        <div class="flex-row">
+            <select id="shopSelect" onchange="changeShopPOS()" style="padding: 0.4rem 1rem; border-radius: 8px; border: 1px solid #334155; background: #1E293B; color: white; margin-right: 1rem; font-weight: 600; margin-bottom: 0;">
+                <option value="">-- Chọn Cửa Hàng --</option>
+            </select>
+            <button class="btn-outline" onclick="window.location.href='/seller'" style="padding: 0.4rem 1rem;"><i class="ph ph-arrow-left"></i> Quay lại Dashboard</button>
+        </div>
+    </div>
+
+    <div class="pos-layout">
+        <!-- CỘT 1: SẢN PHẨM -->
+        <div class="pos-col">
+            <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                <div class="input-wrapper" style="flex: 1; margin: 0;">
+                    <input type="text" id="searchProd" placeholder="Nhập tên sản phẩm để tìm..." style="background: #0F172A;">
+                </div>
+            </div>
+            <div id="categoryFilter" style="display: flex; gap: 0.5rem; margin-bottom: 1rem; overflow-x: auto; padding-bottom: 0.5rem;">
+                <!-- Category buttons rendered here -->
+            </div>
+            <style>
+                .category-btn {
+                    padding: 0.4rem 1rem;
+                    border-radius: 20px;
+                    border: 1px solid #334155;
+                    background: #1E293B;
+                    color: white;
+                    white-space: nowrap;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                }
+                .category-btn.active {
+                    background: var(--primary);
+                    border-color: var(--primary);
+                    font-weight: 600;
+                }
+                .category-btn:hover:not(.active) {
+                    background: #334155;
+                }
+            </style>
+            <div class="scroll-area">
+                <div id="productGrid" class="product-grid">
+                    <!-- Products rendered here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- CỘT 2: GIỎ HÀNG -->
+        <div class="pos-col">
+            <h3 style="font-size: 1.1rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; margin-bottom: 0.5rem; color: white;"><i class="ph ph-shopping-cart"></i> Giỏ hàng</h3>
+            <div class="scroll-area" id="cartContainer">
+                <!-- Cart items -->
+            </div>
+            
+            <!-- Phần Voucher -->
+            <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #334155;">
+                <div style="display: flex; gap: 0.5rem;">
+                    <input type="text" id="voucherInput" placeholder="Nhập mã Khuyến mãi" style="flex: 1; padding: 0.5rem; border-radius: 4px; border: 1px solid #334155; background: #0F172A; color: white; text-transform: uppercase;">
+                    <button onclick="applyVoucher()" style="padding: 0.5rem 1rem;"><i class="ph ph-check"></i> Áp dụng</button>
+                </div>
+                <small id="voucherMsg" style="color: #EF4444; display: block; margin-top: 0.25rem;"></small>
+            </div>
+        </div>
+
+        <!-- CỘT 3: THANH TOÁN -->
+        <div class="pos-col" style="background: #0B1120; overflow-y: auto; padding-right: 0.5rem;">
+            <h3 style="font-size: 1.1rem; margin-bottom: 1rem; color: white;"><i class="ph ph-receipt"></i> Thanh Toán</h3>
+            
+            <div class="checkout-box">
+                <div class="summary-row"><span>Tạm tính:</span><span id="txtSubtotal">0 ₫</span></div>
+                <div class="summary-row" style="color: #F59E0B;"><span>Giảm giá (Voucher):</span><span id="txtDiscount">- 0 ₫</span></div>
+                <div class="summary-row total"><span>Tổng Cần Thu:</span><span id="txtTotal">0 ₫</span></div>
+            </div>
+
+            <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                <button class="method-btn active" id="btnMethodQR" onclick="setMethod('transfer')"><i class="ph ph-qr-code"></i><br>VietQR</button>
+                <button class="method-btn" id="btnMethodCash" onclick="setMethod('cash')"><i class="ph ph-money"></i><br>Tiền mặt</button>
+            </div>
+
+            <button onclick="checkout()" style="width: 100%; padding: 1rem; font-size: 1.1rem; margin-bottom: 1rem;"><i class="ph ph-check-circle"></i> Hoàn tất Đơn Hàng</button>
+
+            <!-- Khối hiện QR sau khi chốt đơn -->
+            <div id="qrSection" style="display: none;">
+                <hr style="border-color: #334155;">
+                <div class="qr-wrapper">
+                    <h4 style="color: #000; margin-bottom: 0.5rem;">Khách quét mã thanh toán</h4>
+                    <img id="qrImage" src="" alt="QR">
+                    <h2 style="color: var(--success); margin: 0.5rem 0;" id="qrTotalTxt"></h2>
+                </div>
+                <button class="btn-success" style="width: 100%; margin-top: 1rem; padding: 0.75rem;" onclick="confirmPayment()"><i class="ph ph-hand-coins"></i> Xác nhận Đã Nhận Tiền</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast"></div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/pos.js"></script>
+</body>
+</html>

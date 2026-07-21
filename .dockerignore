@@ -1,0 +1,14 @@
+# Không đưa các thứ này vào image (bảo mật + gọn nhẹ)
+.venv/
+__pycache__/
+*.pyc
+.env
+*.db
+request_log.txt
+static/uploads/*
+run.bat
+reset_admin.bat
+tests/
+pytest.ini
+requirements-dev.txt
+.pytest_cache/

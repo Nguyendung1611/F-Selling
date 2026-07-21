@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bảng điều khiển Người bán | F-Selling</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="/css/seller.css">
+    <link rel="stylesheet" href="/css/style.css">
+       
+</head>
+<body>
+    <div class="nav-bar">
+        <img class="logo" src="img/logo.png" alt="Logo FSelling">   
+        <div class="flex-row" style="gap: 1rem; align-items: center;">
+            <button onclick="openPosShopSelector()" style="display: flex; align-items: center; gap: 0.3rem; background: var(--primary);"><i class="ph ph-shopping-cart"></i> Mở POS Bán Hàng</button>
+            <button class="btn-outline" onclick="showChangePasswordModal()" style="display: flex; align-items: center; gap: 0.3rem;"><i class="ph ph-key"></i> Đổi mật khẩu</button>
+            <button class="btn-outline" onclick="logout()" style="display: flex; align-items: center; gap: 0.3rem;"><i class="ph ph-sign-out"></i> Đăng xuất</button>
+        </div>
+    </div>
+
+    <div class="container" style="max-width: 1200px; margin: 2rem auto;">
+        
+        <!-- Tabs Header -->
+        <div class="tabs-wrapper">
+            <button class="tab-btn active" onclick="switchTab('dashboard')"><i class="ph ph-chart-bar"></i> Thống Kê</button>
+            <button class="tab-btn" onclick="switchTab('warehouse')"><i class="ph ph-package"></i> Kho Hàng</button>
+            <button class="tab-btn" onclick="switchTab('voucher')"><i class="ph ph-ticket"></i> Khuyến Mãi</button>
+            <button class="tab-btn" onclick="switchTab('settings')"><i class="ph ph-sliders"></i> Cài Đặt</button>
+        </div>
+
+        <!-- TAB 1: THỐNG KÊ (DASHBOARD) -->
+        <div id="dashboard" class="tab-content active glass-card">
+            <div id="dashboardShopSelector" style="margin-bottom: 2rem;">
+                <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> Chọn Cửa Hàng Xem Thống Kê</h3>
+                <div id="dashShopList" style="display: flex; gap: 1rem; flex-wrap: wrap;"></div>
+            </div>
+            
+            <div id="dashboardContent" style="display: none;">
+                <h3>Tổng quan <span id="currentShopName" class="text-gradient"></span></h3>
+            
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h4>TỔNG DOANH THU</h4>
+                        <strong id="statRev" class="stat-value revenue">0 ₫</strong>
+                    </div>
+
+                    <div class="stat-card">
+                        <h4>TỔNG SỐ ĐƠN</h4>
+                        <strong id="statOrders" class="stat-value">0</strong>
+                    </div>
+
+                    <div class="stat-card">
+                        <h4>SẢN PHẨM ĐÃ BÁN</h4>
+                        <strong id="statSold" class="stat-value">0</strong>
+                    </div>
+            </div>
+
+                <!-- <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; margin-top: 2rem;">
+                    <div style="background: #F8FAFC; padding: 1rem; border-radius: 12px; border: 1px solid var(--border-color);">
+                        <h4 style="margin-bottom: 1rem; color: var(--text-main);">Xu hướng doanh thu (7 ngày)</h4>
+                        <div style="height: 220px;"><canvas id="revenueChart"></canvas></div>
+                    </div>
+                    <div style="background: #F8FAFC; padding: 1rem; border-radius: 12px; border: 1px solid var(--border-color);">
+                        <h4 style="margin-bottom: 1rem; color: var(--text-main);">Tỷ trọng Top 5 SP</h4>
+                        <div style="height: 220px; display: flex; justify-content: center;"><canvas id="productPieChart"></canvas></div>
+                    </div>
+                </div> -->
+
+                <div class="chart-grid">
+                    <div class="chart-card">
+                        <h4>Xu hướng doanh thu (7 ngày)</h4>
+                        <div class="chart-container">
+                            <canvas id="revenueChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="chart-card">
+                        <h4>Tỷ trọng Top 5 SP</h4>
+                        <div class="chart-container chart-center">
+                            <canvas id="productPieChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2rem;">
+                    <h4>Đơn hàng gần đây</h4>
+                    <button class="btn-outline" onclick="downloadExcel()"><i class="ph ph-file-xls"></i> Xuất Excel</button>
+                </div>
+                <div class="table-responsive">
+                    <table class="db-table">
+                        <thead>
+                            <tr><th>Mã ĐH</th><th>Ngày</th><th>Tổng tiền</th><th>Trạng thái</th></tr>
+                        </thead>
+                        <tbody id="orderList"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="noShopMsg" style="text-align: center; padding: 3rem;">
+                <i class="ph ph-storefront" style="font-size: 3rem; color: var(--text-muted);"></i>
+                <h3 style="margin-top: 1rem;">Bạn chưa có cửa hàng nào</h3>
+                <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Vui lòng vào mục Cài đặt để tạo cửa hàng đầu tiên.</p>
+                <button onclick="switchTab('settings')">Đi tới Cài Đặt</button>
+            </div>
+        </div>
+
+        <!-- TAB 2: WAREHOUSE -->
+        <div id="warehouse" class="tab-content glass-card">
+            <div id="warehouseShopSelector" style="margin-bottom: 2rem;">
+                <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> Chọn Cửa Hàng Để Quản Lý Kho</h3>
+                <div id="whShopList" style="display: flex; gap: 1rem; flex-wrap: wrap;"></div>
+            </div>
+            
+            <div id="warehouseContent" style="display: none;">
+                <!-- Sub-tabs for warehouse: Products vs Categories -->
+                <!-- <div class="tabs-wrapper" style="margin-bottom: 1.5rem;">
+                    <button class="tab-btn active" id="whSubTabProds" onclick="switchWarehouseSubTab('products')" style="font-size: 0.9rem; padding: 0.5rem 1rem;"><i class="ph ph-package"></i> Quản lý Sản Phẩm</button>
+                    <button class="tab-btn" id="whSubTabCats" onclick="switchWarehouseSubTab('categories')" style="font-size: 0.9rem; padding: 0.5rem 1rem;"><i class="ph ph-list"></i> Quản lý Danh Mục</button>
+                </div> -->
+
+                <div class="tabs-wrapper">
+                    <button
+                        class="tab-btn active"
+                        id="whSubTabProds"
+                        onclick="switchWarehouseSubTab('products')">
+                        <i class="ph ph-package"></i>
+                        Quản lý Sản Phẩm
+                    </button>
+
+                    <button
+                        class="tab-btn"
+                        id="whSubTabCats"
+                        onclick="switchWarehouseSubTab('categories')">
+                        <i class="ph ph-list"></i>
+                        Quản lý Danh Mục
+                    </button>
+                </div>
+
+                <!-- Products Sub-content -->
+                <div class="modal-body-split" id="warehouseProductsSection">
+                    <!-- Add Product Form (Left) -->
+                    <div class="modal-col-form" style="border-right: 1px solid var(--border-color); padding-right: 2rem;">
+                        <h3 style="color: var(--primary);">Kho hàng: <span id="whShopName"></span></h3>
+                        <h3 style="margin-top: 1.5rem;">Thêm sản phẩm mới</h3>
+                        <div class="form-group">
+                            <label>Danh mục</label>
+                            <select class="cate-selection" id="catSelect"></select>
+                        </div>
+                        <div class="form-group">
+                            <label>Mã sản phẩm (Tùy chọn - Tự động sinh nếu để trống)</label>
+                            <div class="input-wrapper"><i class="ph ph-barcode"></i><input type="text" id="prodCode" placeholder="Để trống để tự tạo mã"></div>
+                        </div>
+                        <div class="form-group">
+                            <label>Tên sản phẩm *</label>
+                            <div class="input-wrapper"><i class="ph ph-package"></i><input type="text" id="prodName" placeholder="Tên SP"></div>
+                        </div>
+                        <div class="form-group">
+                            <label>Giá bán (VNĐ) *</label>
+                            <div class="input-wrapper"><i class="ph ph-money"></i><input type="number" id="prodPrice" placeholder="Giá tiền"></div>
+                        </div>
+                        <div class="form-group">
+                            <label>Số lượng tồn kho *</label>
+                            <div class="input-wrapper"><i class="ph ph-stack"></i><input type="number" id="prodStock" placeholder="Tồn kho" value="100"></div>
+                        </div>
+                        <div class="form-group">
+                            <label>Hình ảnh *</label>
+                            <input class="product_img-input" type="file" id="prodImage" accept="image/*">
+                        </div>
+                        <button class="create-product_btn" onclick="createProduct()" ><i class="ph ph-plus"></i> Lưu vào kho</button>
+                    </div>
+                    <!-- Product List (Right) -->
+                    <div class="modal-col-list">
+                        <div style=" justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+                            <h3 style="margin-bottom: 0;">Sản phẩm trong kho</h3>
+                            <!-- Category Filter! -->
+                            <div class="cate-filter">
+                                <label style="font-size: 0.85rem; font-weight: 600; white-space: nowrap;">Lọc:</label>
+                                <select id="filterCatSelect" onchange="filterProducts()" style="margin-bottom: 0; padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border-color); font-size: 0.9rem; background: #F1F5F9; max-width: 200px; margin-top: 1em;">
+                                    <option value="">-- Tất cả --</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="table-responsive-product" style="max-height: 500px; overflow-y: auto;">
+                            <table class="db-table">
+                                <thead><tr><th>Mã SP</th><th>Tên</th><th>Giá</th><th>Tồn</th><th>Hành động</th></tr></thead>
+                                <tbody class="prod-list" id="prodList"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Categories Sub-content -->
+                <div class="modal-body-split" id="warehouseCategoriesSection" style="display: none;">
+                    <!-- Add/Edit Category Form (Left) -->
+                    <div class="modal-col-form" style="border-right: 1px solid var(--border-color); padding-right: 2rem;">
+                        <h3 style="color: var(--primary);" id="catFormTitle">Thêm danh mục mới</h3>
+                        <input type="hidden" id="editingCatId" value="">
+                        <div class="form-group">
+                            <label>Tên danh mục *</label>
+                            <div class="input-wrapper"><i class="ph ph-list"></i><input type="text" id="catNameInput" placeholder="Tên danh mục"></div>
+                        </div>
+                        <div class="form-group">
+                            <label>Trạng thái</label>
+                            <select  id="catStatusSelect" style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 1rem;">
+                                <option value="active">Hoạt động (Active)</option>
+                                <option value="inactive">Không hoạt động (Inactive)</option>
+                            </select>
+                        </div>
+                        <button id="btnSaveCategory" onclick="saveCategory()" style="width: 100%;"><i class="ph ph-plus-circle"></i> Lưu Danh Mục</button>
+                        <button id="btnCancelEditCategory" class="ph ph-power" onclick="cancelEditCategory()" style="width: 100%; display: none; margin-top: 0.5rem;">Hủy chỉnh sửa</button>
+                    </div>
+                    <!-- Category List (Right) -->
+                    <div class="modal-col-list">
+                        <h3>Danh mục của cửa hàng</h3>
+                        <div class="table-responsive" style="max-height: 500px; overflow-y: auto;">
+                            <table class="db-table">
+                                <thead><tr><th>ID</th><th>Tên danh mục</th><th>Trạng thái</th><th>Hành động</th></tr></thead>
+                                <tbody id="categoryTableBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3: VOUCHER -->
+        <div id="voucher" class="tab-content glass-card">
+            <div id="voucherShopSelector" style="margin-bottom: 2rem;">
+                <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> Chọn Cửa Hàng Quản Lý Khuyến Mãi</h3>
+                <div id="vcShopList" style="display: flex; gap: 1rem; flex-wrap: wrap;"></div>
+            </div>
+            
+            <div class="modal-body-split" id="voucherContent" style="display: none;">
+                <div class="modal-col-form" style="border-right: 1px solid var(--border-color); padding-right: 2rem;">
+                    <h3 style="color: var(--primary);">Khuyến Mãi: <span id="vcShopName"></span></h3>
+                    <h3 style="margin-top: 1.5rem;">Tạo Voucher mới</h3>
+                    <div class="form-group">
+                        <label>Mã Voucher *</label>
+                        <div class="input-wrapper input-wrapper-voucher"><i class="ph ph-ticket"></i><input type="text" id="vCode" required style="text-transform: uppercase;" placeholder="VD: SUMMER2024"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Loại giảm giá</label>
+                        <select class="voucher-type" id="vType">
+                            <option value="flat">Giảm trực tiếp (VNĐ)</option>
+                            <option value="percentage">Giảm theo phần trăm (%)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Giá trị giảm *</label>
+                        <div class="input-wrapper input-wrapper-voucher"><i class="ph ph-money"></i><input type="number" id="vVal" placeholder="VD: 50000 hoặc 10"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Đơn tối thiểu</label>
+                        <div class="input-wrapper input-wrapper-voucher"><i class="ph ph-shopping-cart"></i><input type="number" id="vMin" value="0" placeholder="VD: 200000"></div>
+                    </div>
+                    <!-- <div class="form-group">
+                        <label>Giảm tối đa (Nếu chọn %)</label>
+                        <div class="input-wrapper"><i class="ph ph-arrows-down-up"></i><input type="number" id="vMax" value="0" placeholder="VD: Tối đa 20000"></div>
+                    </div> -->
+                    <div class="form-group">
+                        <label>Số lượt dùng (-1 là vô hạn)</label>
+                        <div class="input-wrapper input-wrapper-voucher"><i class="ph ph-users"></i><input type="number" id="vLimit" value="-1" placeholder="VD: 100"></div>
+                    </div>
+                    <button class="save-voucher-btn" id="btnSaveVoucher" onclick="createOrUpdateVoucher()"><i class="ph ph-plus-circle"></i> Lưu Khuyến Mãi</button>
+                    <button id="btnCancelEditVoucher" class="btn-outline" onclick="cancelEditVoucher()" style="width: 100%; display: none; margin-top: 0.5rem;">Hủy chỉnh sửa</button>
+                </div>
+                <div class="modal-col-list">
+                    <h3>Danh sách Voucher</h3>
+                    <div style="max-height: 500px; overflow-y: auto;" class="table-responsive-voucher">
+                        <table class="db-table">
+                            <thead><tr><th>Mã</th><th>Loại</th><th>Giá trị</th><th>Đã dùng</th><th>Hành động</th></tr></thead>
+                            <tbody id="voucherList"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 4: SETTINGS -->
+        <div id="settings" class="tab-content glass-card">
+            
+            <div style="display: flex; justify-content: space-between; margin-bottom: 1.5rem; align-items: center;">
+                <h4 style="font-size: 1.25rem; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 0.5rem;"><i class="ph ph-sliders" style="color: var(--primary);"></i> Cấu hình Cửa hàng</h4>
+                <button onclick="openCreateShopForm()"><i class="ph ph-plus"></i> Tạo cửa hàng mới</button>
+            </div>
+
+            <!-- Danh sách Cửa hàng -->
+            <div id="shopsListContainer" style="margin-bottom: 2rem;">
+                <h4 style="margin-bottom: 1rem; color: var(--text-muted);">Danh sách các cửa hàng (Tối đa 3)</h4>
+                <div id="myShopsList"></div>
+            </div>
+            
+            <hr style="border-color: var(--border-color); margin-bottom: 2rem; display: none;" id="shopFormDivider">
+
+            <!-- Form Cập nhật / Tạo mới Cửa hàng -->
+            <div class="modal-body-split" id="shopFormContainer" style="display: none;">
+                <!-- Left Column -->
+                <div class="modal-col-form" style="border-right: 1px solid var(--border-color); padding-right: 2rem;">
+                    <h3 style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1.25rem; color: var(--text-main); display: flex; align-items: center; gap: 0.3rem;" id="formTitle">
+                        <i class="ph ph-storefront" style="color: var(--primary);"></i> Thông tin doanh nghiệp
+                    </h3>
+                    
+                    <!-- Live Preview -->
+                    <div class="store-card-preview-container">
+                        <div class="store-card-preview-card">
+                            <div class="store-card-header">
+                                <div class="store-card-title"><i class="ph ph-shield-check" style="color: #fbbf24;"></i> SMARTPOS STORE</div>
+                                <div class="store-card-badge verified"><i class="ph ph-check-circle"></i> Hoạt động</div>
+                            </div>
+                            <div id="previewCardName" class="store-card-name">Tên cửa hàng</div>
+                            <div class="store-card-info-row"><i class="ph ph-identification-card"></i><span>MST: &nbsp;</span><strong id="previewCardTaxCode">Chưa có</strong></div>
+                            <div class="store-card-info-row"><i class="ph ph-map-pin"></i><span>Địa chỉ: &nbsp;</span><span id="previewCardAddress">Chưa có</span></div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Tên Doanh nghiệp/Cửa hàng *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-storefront"></i><input type="text" id="shopName" placeholder="VD: Hộ Kinh Doanh F-Selling" required></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Địa chỉ kinh doanh *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-map-pin"></i><input type="text" id="shopAddress" placeholder="VD: 123 Nguyễn Văn Cừ, Quận 5, TP.HCM" required></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Mã số thuế *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-identification-card"></i><input type="text" id="shopTaxCode" placeholder="VD: 0312345678" required></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Số điện thoại *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-phone"></i><input type="text" id="shopPhone" placeholder="VD: 0901234567" required></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Email *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-envelope"></i><input type="email" id="shopEmail" placeholder="VD: lienhe@cuahang.com" required></div>
+                    </div>
+                </div>
+
+                <!-- Right Column -->
+                <div class="modal-col-form" style="padding-left: 0.5rem;">
+                    <h3 style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1.25rem; color: var(--text-main); display: flex; align-items: center; gap: 0.3rem;">
+                        <i class="ph ph-bank" style="color: var(--success);"></i> Cấu hình Thanh toán
+                    </h3>
+                    
+                    <div class="form-group">
+                        <label>Ngân hàng *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-buildings"></i>
+                            <select id="bankCode" style="width: 100%; border: none; outline: none; padding-left: 2.5rem;" required></select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Số tài khoản nhận tiền *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-list-numbers"></i><input type="text" id="bankAcc" placeholder="VD: 10123456789" required></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Tên chủ tài khoản *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-user"></i><input type="text" id="bankAccName" placeholder="VD: NGUYEN VAN A" required></div>
+                    </div>
+                    
+                    <button id="btnSaveShop" onclick="saveShop()" style="width: 100%; margin-top: 1.5rem; font-size: 1.05rem;">
+                        <i class="ph ph-check-circle"></i> Lưu Cài Đặt Cửa Hàng
+                    </button>
+                    <button class="btn-outline" onclick="closeShopForm()" style="width: 100%; margin-top: 0.5rem;">Hủy</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Mở POS -->
+    <div class="posModal" id="posModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center;">
+        <div style="background: #ffffff; padding: 2rem; border-radius: 12px; width: 400px; max-width: 90%; border: 1px solid var(--border-color);">
+            <h3 style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem;"><i class="ph ph-desktop" style="color: var(--primary);"></i> Chọn Cửa Hàng Mở POS</h3>
+            <div id="posShopList" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem;"></div>
+            <button class="btn-outline" onclick="document.getElementById('posModal').style.display='none'" style="width: 100%;">Hủy bỏ</button>
+        </div>
+    </div>
+
+    <div id="toast"></div>
+
+    <!-- Modal Đổi Mật Khẩu -->
+    <div id="changePasswordModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center;">
+        <div class="glass-card" style="max-width: 400px; width: 90%; background: var(--card-bg); text-align: center; position: relative;">
+            <button onclick="closeChangePasswordModal()" style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; box-shadow: none; padding: 0;">&times;</button>
+            
+            <h3 class="text-gradient" style="margin-top: 1rem;">Đổi mật khẩu</h3>
+            
+            <form id="changePasswordForm">
+                <div style="text-align: left;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mật khẩu hiện tại</label>
+                    <input type="password" id="oldPassword" required>
+                </div>
+                <div style="text-align: left;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mật khẩu mới</label>
+                    <input type="password" id="newPassword" required>
+                </div>
+                <div style="text-align: left;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Xác nhận mật khẩu mới</label>
+                    <input type="password" id="confirmNewPassword" required>
+                </div>
+                <button type="submit" style="width: 100%; margin-top: 0.5rem;">Cập nhật mật khẩu</button>
+            </form>
+            
+            <div id="changePasswordErrorMsg" style="color: #ef4444; margin-top: 1rem; text-align: center; font-size: 0.9rem;"></div>
+            <div id="changePasswordSuccessMsg" style="color: var(--success); margin-top: 1rem; text-align: center; font-weight: 600; font-size: 0.9rem;"></div>
+        </div>
+    </div>
+
+    <!-- Modal Xác nhận Xóa (Custom Confirm Modal) -->
+    <div id="confirmModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.6); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
+        <div style="background: #ffffff; padding: 2rem; border-radius: 16px; width: 400px; max-width: 90%; border: 1px solid var(--border-color); box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); text-align: center;">
+            <div style="display: inline-flex; align-items: center; justify-content: center; width: 4rem; height: 4rem; border-radius: 50%; background: rgba(239, 68, 68, 0.1); color: #ef4444; margin-bottom: 1.5rem; font-size: 2.2rem;">
+                <i class="ph ph-warning-circle"></i>
+            </div>
+            <h3 style="margin-bottom: 0.75rem; font-size: 1.3rem; font-weight: 700; color: var(--text-main);" id="confirmTitle">Xác nhận xóa</h3>
+            <p style="margin-bottom: 2rem; color: var(--text-muted); font-size: 0.95rem; line-height: 1.5;" id="confirmMessage">Bạn có chắc chắn muốn thực hiện hành động này?</p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                <button class="btn-outline" id="btnConfirmCancel" style="width: 100%; padding: 0.75rem; font-size: 0.95rem; border-radius: 8px;">Hủy bỏ</button>
+                <button id="btnConfirmOk" style="width: 100%; padding: 0.75rem; font-size: 0.95rem; background: #ef4444; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 0.3rem;">
+                    <i class="ph ph-check-circle"></i> Đồng ý xóa
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/api.js"></script>
+    <script src="/js/seller.js"></script>
+</body>
+</html>
