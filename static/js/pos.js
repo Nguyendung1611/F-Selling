@@ -258,6 +258,21 @@ async function confirmPayment() {
     } catch (e) { showToast(e.message); }
 }
 
+async function cancelOrder() {
+    if(!currentOrderId) return;
+    if(!confirm(`Hủy đơn #${currentOrderId}? Hàng trong đơn sẽ được trả lại kho.`)) return;
+    try {
+        const res = await apiCall(`/orders/${currentOrderId}/cancel`, 'POST');
+        stopPaymentPolling();
+        if(res.unrestored_items > 0) {
+            showToast(`Đã hủy đơn. Có ${res.unrestored_items} dòng không hoàn kho được, vui lòng kiểm tra lại tồn kho.`);
+        } else {
+            showToast("Đã hủy đơn và hoàn lại hàng vào kho.");
+        }
+        resetPOS();
+    } catch (e) { showToast(e.message); }
+}
+
 function startPaymentPolling() {
     stopPaymentPolling();
     paymentPollingInterval = setInterval(async () => {
@@ -267,6 +282,15 @@ function startPaymentPolling() {
             if(statusRes.status === 'PAID') {
                 stopPaymentPolling();
                 showToast('Thanh toán chuyển khoản thành công!');
+                resetPOS();
+            } else if(statusRes.status === 'CANCELLED') {
+                // Đơn có thể bị hủy tự động do quá hạn thanh toán
+                stopPaymentPolling();
+                showToast('Đơn đã bị hủy, hàng đã được hoàn về kho.');
+                resetPOS();
+            } else if(statusRes.status === 'UNRECONCILED') {
+                stopPaymentPolling();
+                showToast('Tiền về sau khi đơn đã hủy. Vui lòng đối soát trước khi giao hàng!');
                 resetPOS();
             }
         } catch (err) {

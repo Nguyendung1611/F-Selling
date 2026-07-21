@@ -10,7 +10,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .core import bootstrap
-from .core.config import STATIC_DIR, UPLOAD_DIR, get_allowed_origins
+from .core.config import (
+    ORDER_PENDING_TIMEOUT_MINUTES,
+    STATIC_DIR,
+    UPLOAD_DIR,
+    get_allowed_origins,
+)
 from .routers import (
     admin,
     auth,
@@ -23,9 +28,13 @@ from .routers import (
     vouchers,
     webhooks,
 )
-from .services.maintenance_service import cleanup_expired_unverified_users
+from .services.maintenance_service import (
+    cancel_expired_pending_orders,
+    cleanup_expired_unverified_users,
+)
 
 CLEANUP_INTERVAL_MINUTES = 1
+AUTO_CANCEL_INTERVAL_MINUTES = 5
 
 # Tạo bảng ngay khi import module (giữ đúng thời điểm như app.py cũ).
 bootstrap.create_tables()
@@ -39,8 +48,23 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         cleanup_expired_unverified_users, "interval", minutes=CLEANUP_INTERVAL_MINUTES
     )
-    scheduler.start()
     print("[SCHEDULER] Background cleanup task started - runs every 1 minute")
+
+    if ORDER_PENDING_TIMEOUT_MINUTES > 0:
+        scheduler.add_job(
+            cancel_expired_pending_orders, "interval", minutes=AUTO_CANCEL_INTERVAL_MINUTES
+        )
+        print(
+            f"[SCHEDULER] Auto-cancel of stale PENDING orders is ON "
+            f"(timeout {ORDER_PENDING_TIMEOUT_MINUTES} minutes)"
+        )
+    else:
+        print(
+            "[SCHEDULER] Auto-cancel of stale PENDING orders is OFF "
+            "(set ORDER_PENDING_TIMEOUT_MINUTES to enable)"
+        )
+
+    scheduler.start()
 
     yield
 

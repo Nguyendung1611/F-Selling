@@ -135,13 +135,13 @@ async function loadDashboardShop(id) {
         const tbody = document.getElementById('orderList');
         tbody.innerHTML = '';
         res.orders.forEach(o => {
-            const statusColor = o.status === 'PAID' ? 'var(--success)' : '#F59E0B';
+            const hienThi = window.moTaTrangThaiDon(o.status);
             const dt = new Date(o.date).toLocaleString('vi-VN');
             tbody.innerHTML += `<tr>
                 <td><strong>#${o.id}</strong></td>
                 <td>${dt}</td>
                 <td>${o.total.toLocaleString()} ₫</td>
-                <td style="color: ${statusColor}; font-weight: 600;">${o.status}</td>
+                <td style="color: ${hienThi.color}; font-weight: 600;">${escapeHtml(hienThi.label)}</td>
             </tr>`;
         });
 

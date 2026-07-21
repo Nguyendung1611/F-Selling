@@ -225,20 +225,77 @@ def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[
             status_code=409, detail=f"Không thể hủy đơn ở trạng thái {current}"
         )
 
+    restored, unrestored, voucher_released = _hoan_lai(
+        db, order_id, shop_id, voucher_code, discount_amount
+    )
+    log_system_action(
+        db,
+        current_user.id,
+        "CANCEL_ORDER",
+        _mo_ta_huy(order_id, restored, unrestored, voucher_code, voucher_released),
+    )
+    return _ket_qua_huy(order_id, restored, unrestored, voucher_released)
+
+
+def _hoan_lai(
+    db: Session,
+    order_id: int,
+    shop_id: int,
+    voucher_code: Optional[str],
+    discount_amount: Optional[float],
+) -> Tuple[int, int, bool]:
+    """Hoàn kho + trả lượt voucher rồi commit. Chỉ gọi sau khi apply_transition thắng."""
     restored, unrestored = inventory_service.restore_stock(db, order_id)
     voucher_released = voucher_service.release_usage(
         db, shop_id, voucher_code, discount_amount
     )
     db.commit()
+    return restored, unrestored, voucher_released
 
+
+def _mo_ta_huy(
+    order_id: int,
+    restored: int,
+    unrestored: int,
+    voucher_code: Optional[str],
+    voucher_released: bool,
+) -> str:
     chi_tiet = f"Hủy đơn #{order_id} - hoàn kho {restored} dòng"
     if unrestored:
         chi_tiet += f", KHÔNG hoàn được {unrestored} dòng (thiếu product_id hoặc SP đã xóa)"
     if voucher_released:
         chi_tiet += f", trả lại 1 lượt voucher '{voucher_code}'"
-    log_system_action(db, current_user.id, "CANCEL_ORDER", chi_tiet)
+    return chi_tiet
 
-    return _ket_qua_huy(order_id, restored, unrestored, voucher_released)
+
+def cancel_expired_order(db: Session, order: models.Order) -> bool:
+    """Hủy một đơn PENDING quá hạn do hệ thống tự động (không có người dùng).
+
+    Dùng chung đúng cơ chế với hủy thủ công: UPDATE có điều kiện thắng thì mới
+    hoàn kho, nên job chạy trùng lúc khách vừa thanh toán sẽ thua và không
+    hoàn kho cho đơn đã PAID.
+    """
+    order_id = order.id
+    shop_id = order.shop_id
+    voucher_code = order.voucher_code
+    discount_amount = order.discount_amount
+
+    if not apply_transition(db, order_id, CANCEL_FROM, STATUS_CANCELLED):
+        db.rollback()
+        return False
+
+    restored, unrestored, voucher_released = _hoan_lai(
+        db, order_id, shop_id, voucher_code, discount_amount
+    )
+    log_system_action(
+        db,
+        None,  # hệ thống, không phải người dùng
+        "AUTO_CANCEL_ORDER",
+        "Tự động "
+        + _mo_ta_huy(order_id, restored, unrestored, voucher_code, voucher_released)
+        + " (quá hạn thanh toán)",
+    )
+    return True
 
 
 def _ket_qua_huy(

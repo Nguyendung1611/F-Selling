@@ -12,6 +12,19 @@ function escapeHtml(value) {
         .replace(/'/g, '&#39;');
 }
 
+// Nhãn tiếng Việt + màu cho trạng thái đơn hàng.
+// Trạng thái lạ (do backend thêm sau này) vẫn hiển thị được, không vỡ giao diện.
+const NHAN_TRANG_THAI_DON = {
+    PENDING:      { label: 'Chờ thanh toán', color: '#F59E0B' },
+    PAID:         { label: 'Đã thanh toán',  color: 'var(--success)' },
+    CANCELLED:    { label: 'Đã hủy',         color: '#94A3B8' },
+    UNRECONCILED: { label: 'Cần đối soát',   color: '#EF4444' }
+};
+
+function moTaTrangThaiDon(status) {
+    return NHAN_TRANG_THAI_DON[status] || { label: status, color: '#94A3B8' };
+}
+
 // Ghi đè localStorage.setItem để cập nhật cachedToken riêng cho tab này
 const originalSetItem = localStorage.setItem;
 localStorage.setItem = function(key, value) {

@@ -64,6 +64,24 @@ OTP_EXPIRE_MINUTES: int = 5
 # --- Giới hạn nghiệp vụ ---
 MAX_SHOPS_PER_USER: int = 3
 
+
+def _int_env(name: str, default: int) -> int:
+    """Đọc số nguyên từ env; giá trị rác -> dùng mặc định thay vì crash lúc khởi động."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        print(f"[WARN] {name}='{raw}' is not an integer. Using default {default}.")
+        return default
+
+
+# Tự hủy đơn PENDING quá hạn và hoàn lại tồn kho sau bao nhiêu phút.
+# 0 = TẮT (mặc định). Job này ghi lên dữ liệu thật nên phải bật có chủ ý:
+# đặt ORDER_PENDING_TIMEOUT_MINUTES=30 trong .env để bật.
+ORDER_PENDING_TIMEOUT_MINUTES: int = _int_env("ORDER_PENDING_TIMEOUT_MINUTES", 0)
+
 # --- Upload ---
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp"}
 ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
