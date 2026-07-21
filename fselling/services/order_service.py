@@ -44,6 +44,22 @@ def read_status(db: Session, order_id: int) -> Optional[str]:
     ).scalar()
 
 
+def apply_transition(
+    db: Session, order_id: int, from_states: Tuple[str, ...], to_state: str
+) -> bool:
+    """Như `transition_status` nhưng KHÔNG commit.
+
+    Dùng khi việc chuyển trạng thái phải nằm chung một transaction với các
+    tác dụng phụ (hoàn kho, hoàn lượt voucher) - hoặc cùng thành công, hoặc
+    cùng không có gì xảy ra.
+    """
+    result = db.execute(
+        _UPDATE_STATUS,
+        {"to_state": to_state, "order_id": order_id, "from_states": list(from_states)},
+    )
+    return result.rowcount == 1
+
+
 def transition_status(
     db: Session, order_id: int, from_states: Tuple[str, ...], to_state: str
 ) -> bool:
@@ -54,12 +70,9 @@ def transition_status(
     DB tự quyết ai thắng, kẻ thua nhận False và KHÔNG được làm tác dụng phụ
     (hoàn kho, hoàn lượt voucher, ghi log thanh toán).
     """
-    result = db.execute(
-        _UPDATE_STATUS,
-        {"to_state": to_state, "order_id": order_id, "from_states": list(from_states)},
-    )
+    changed = apply_transition(db, order_id, from_states, to_state)
     db.commit()
-    return result.rowcount == 1
+    return changed
 
 
 def create_order(
@@ -176,6 +189,68 @@ def pay_order(db: Session, current_user: models.User, order_id: int) -> Dict[str
         f"Thanh toán thành công đơn #{order_id} - Tổng tiền: {total_amount:,.0f}đ",
     )
     return {"msg": "Paid successfully"}
+
+
+def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[str, Any]:
+    """Hủy đơn PENDING và hoàn lại tồn kho + lượt voucher.
+
+    Toàn bộ nằm trong MỘT transaction: chuyển trạng thái, hoàn kho và hoàn
+    lượt voucher cùng thành công hoặc cùng không xảy ra. Chỉ lời gọi thắng
+    được UPDATE có điều kiện mới chạy phần hoàn - nên hủy hai lần (hoặc hủy
+    đua với webhook) không bao giờ hoàn kho hai lần.
+
+    Đơn đã CANCELLED: trả 200 im lặng (bấm trùng).
+    Đơn PAID / UNRECONCILED: từ chối 409 - tiền đã về, phải đối soát chứ
+    không được hủy để hoàn kho.
+    """
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
+    require_shop_access(db, order.shop_id, current_user)
+
+    if order.status == STATUS_CANCELLED:
+        return _ket_qua_huy(order_id, restored=0, unrestored=0, voucher_released=False)
+
+    # Giữ lại trước khi commit vì commit sẽ expire ORM object.
+    shop_id = order.shop_id
+    voucher_code = order.voucher_code
+    discount_amount = order.discount_amount
+
+    if not apply_transition(db, order_id, CANCEL_FROM, STATUS_CANCELLED):
+        db.rollback()
+        current = read_status(db, order_id)
+        if current == STATUS_CANCELLED:
+            return _ket_qua_huy(order_id, restored=0, unrestored=0, voucher_released=False)
+        raise HTTPException(
+            status_code=409, detail=f"Không thể hủy đơn ở trạng thái {current}"
+        )
+
+    restored, unrestored = inventory_service.restore_stock(db, order_id)
+    voucher_released = voucher_service.release_usage(
+        db, shop_id, voucher_code, discount_amount
+    )
+    db.commit()
+
+    chi_tiet = f"Hủy đơn #{order_id} - hoàn kho {restored} dòng"
+    if unrestored:
+        chi_tiet += f", KHÔNG hoàn được {unrestored} dòng (thiếu product_id hoặc SP đã xóa)"
+    if voucher_released:
+        chi_tiet += f", trả lại 1 lượt voucher '{voucher_code}'"
+    log_system_action(db, current_user.id, "CANCEL_ORDER", chi_tiet)
+
+    return _ket_qua_huy(order_id, restored, unrestored, voucher_released)
+
+
+def _ket_qua_huy(
+    order_id: int, restored: int, unrestored: int, voucher_released: bool
+) -> Dict[str, Any]:
+    return {
+        "msg": "Cancelled successfully",
+        "order_id": order_id,
+        "restored_items": restored,
+        "unrestored_items": unrestored,
+        "voucher_released": voucher_released,
+    }
 
 
 def apply_webhook_payment(db: Session, request_data: Dict[str, Any]) -> Dict[str, List[int]]:

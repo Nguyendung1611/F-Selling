@@ -54,3 +54,36 @@ def deduct_stock(resolved_items: Iterable[Tuple[models.Product, int]]) -> None:
     Không commit ở đây - caller giữ nguyên một transaction duy nhất."""
     for prod, qty in resolved_items:
         prod.stock -= qty
+
+
+def restore_stock(db: Session, order_id: int) -> Tuple[int, int]:
+    """Hoàn tồn kho cho toàn bộ dòng của một đơn đã hủy.
+
+    Hoàn theo `product_id` chứ không theo tên: sản phẩm có thể đã được đổi tên
+    sau khi bán, khớp theo tên sẽ hoàn nhầm hoặc không hoàn được.
+
+    Dòng không có `product_id` (đơn cũ trước migration A1a mà backfill không
+    khớp được) hoặc trỏ tới sản phẩm đã bị xóa sẽ được bỏ qua và đếm riêng để
+    caller ghi log - không im lặng nuốt mất.
+
+    Không commit - caller giữ nguyên một transaction duy nhất.
+    Trả về (số dòng đã hoàn, số dòng không hoàn được).
+    """
+    items = (
+        db.query(models.OrderItem).filter(models.OrderItem.order_id == order_id).all()
+    )
+    restored = 0
+    unrestored = 0
+    for item in items:
+        if item.product_id is None:
+            unrestored += 1
+            continue
+        prod = (
+            db.query(models.Product).filter(models.Product.id == item.product_id).first()
+        )
+        if prod is None:
+            unrestored += 1
+            continue
+        prod.stock = (prod.stock or 0) + item.quantity
+        restored += 1
+    return restored, unrestored

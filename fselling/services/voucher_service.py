@@ -5,6 +5,7 @@ from datetime import date, datetime
 from typing import Dict, List, Optional
 
 from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -182,6 +183,33 @@ def apply_voucher(
 
     discount_amount = compute_discount(voucher, subtotal)
     return {"discount_amount": discount_amount, "new_total": max(0, subtotal - discount_amount)}
+
+
+_RELEASE_USAGE = text(
+    "UPDATE vouchers SET usage_count = usage_count - 1 "
+    "WHERE code = :code AND shop_id = :shop_id AND usage_count > 0"
+)
+
+
+def release_usage(
+    db: Session, shop_id: int, voucher_code: Optional[str], discount_amount: Optional[float]
+) -> bool:
+    """Trả lại 1 lượt dùng voucher khi đơn bị hủy.
+
+    Chỉ trả lượt khi voucher THỰC SỰ đã được áp dụng: `create_order` lưu
+    `voucher_code` lên đơn kể cả khi voucher bị bỏ qua (hết hạn/hết lượt/không
+    đạt đơn tối thiểu), nên chỉ dựa vào `voucher_code` sẽ trả nhầm lượt cho
+    voucher chưa từng được dùng. Điều kiện đúng là có giảm giá thực tế.
+
+    `usage_count > 0` nằm ngay trong câu UPDATE nên không bao giờ xuống âm,
+    kể cả khi có hai lời gọi chạy song song.
+
+    Không commit - caller giữ nguyên một transaction duy nhất.
+    """
+    if not voucher_code or not discount_amount or discount_amount <= 0:
+        return False
+    result = db.execute(_RELEASE_USAGE, {"code": voucher_code, "shop_id": shop_id})
+    return result.rowcount == 1
 
 
 def resolve_for_order(

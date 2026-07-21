@@ -53,6 +53,13 @@ BASELINE_ROUTES = {
 }
 
 
+# Route được thêm CÓ CHỦ Ý sau bản refactor. Mọi route /api không nằm trong
+# BASELINE_ROUTES hoặc danh sách này đều bị coi là thêm ngoài ý muốn.
+ROUTES_BO_SUNG = {
+    ("POST", "/api/orders/{order_id}/cancel"),  # A1d: hủy đơn + hoàn tồn kho
+}
+
+
 def _iter_routes(routes):
     """Yield concrete routes across eager and lazy FastAPI router layouts."""
     for route in routes:
@@ -84,8 +91,14 @@ def test_giu_nguyen_toan_bo_route_cu(app):
 
 
 def test_khong_them_route_api_ngoai_du_kien(app):
-    api_moi = {r for r in _routes(app) if r[1].startswith("/api/")} - BASELINE_ROUTES
+    duoc_phep = BASELINE_ROUTES | ROUTES_BO_SUNG
+    api_moi = {r for r in _routes(app) if r[1].startswith("/api/")} - duoc_phep
     assert not api_moi, f"Route /api mới ngoài dự kiến: {sorted(api_moi)}"
+
+
+def test_cac_route_bo_sung_deu_ton_tai(app):
+    thieu = ROUTES_BO_SUNG - _routes(app)
+    assert not thieu, f"Route bổ sung bị thiếu: {sorted(thieu)}"
 
 
 def test_webhook_dang_ky_truoc_route_shop_id(app):

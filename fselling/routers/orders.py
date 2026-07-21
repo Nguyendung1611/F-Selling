@@ -35,3 +35,12 @@ def pay_order(
     current_user: models.User = Depends(get_current_user),
 ):
     return order_service.pay_order(db, current_user, order_id)
+
+
+@router.post("/{order_id}/cancel")
+def cancel_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return order_service.cancel_order(db, current_user, order_id)
