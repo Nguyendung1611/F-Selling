@@ -543,6 +543,7 @@ async function saveCategory() {
 }
 
 let currentProducts = [];
+let editingProductId = null;
 
 async function loadProducts() {
     if(!currentShopId) return;
@@ -570,11 +571,38 @@ function filterProducts() {
             <td>${p.price.toLocaleString()} ₫</td>
             <td>${p.stock}</td>
             <td style="display:flex; justify-content: center; align-items: center; gap:0.5rem; height: 7rem;">
+                <button class="btn-outline" onclick="editProduct(${p.id})" style="padding: 0.2rem 0.5rem;" title="Sửa"><i class="ph ph-pencil-simple"></i></button>
                 <button class="btn-outline" onclick="toggleProductStatus(${p.id})" style="padding: 0.2rem 0.5rem;" title="Bật/Tắt"><i class="ph ph-power"></i></button>
                 <button class="btn-outline" onclick="deleteProduct(${p.id})" style="padding: 0.2rem 0.5rem; color:#ef4444;" title="Xóa"><i class="ph ph-trash"></i></button>
             </td>
         </tr>`;
     });
+}
+
+function editProduct(id) {
+    const product = currentProducts.find(p => p.id === id);
+    if(!product) return;
+    editingProductId = id;
+    document.getElementById('prodCode').value = product.code || '';
+    document.getElementById('prodName').value = product.name;
+    document.getElementById('prodPrice').value = product.price;
+    document.getElementById('prodStock').value = product.stock;
+    document.getElementById('catSelect').value = String(product.category_id);
+    document.getElementById('productFormTitle').innerText = 'Sửa sản phẩm';
+    document.getElementById('btnSaveProduct').innerHTML = '<i class="ph ph-floppy-disk"></i> Cập nhật sản phẩm';
+    document.getElementById('btnCancelEditProduct').style.display = 'block';
+}
+
+function cancelEditProduct() {
+    editingProductId = null;
+    document.getElementById('prodCode').value = '';
+    document.getElementById('prodName').value = '';
+    document.getElementById('prodPrice').value = '';
+    document.getElementById('prodStock').value = '100';
+    document.getElementById('prodImage').value = '';
+    document.getElementById('productFormTitle').innerText = 'Thêm sản phẩm mới';
+    document.getElementById('btnSaveProduct').innerHTML = '<i class="ph ph-plus"></i> Lưu vào kho';
+    document.getElementById('btnCancelEditProduct').style.display = 'none';
 }
 
 function deleteProduct(id) {
@@ -621,8 +649,12 @@ async function createProduct() {
     if(img) formData.append('image', img);
 
     try {
-        const res = await fetch(`/api/products?shop_id=${currentShopId}`, {
-            method: 'POST',
+        const isEditing = editingProductId !== null;
+        const url = isEditing
+            ? `/api/products/${editingProductId}`
+            : `/api/products?shop_id=${currentShopId}`;
+        const res = await fetch(url, {
+            method: isEditing ? 'PUT' : 'POST',
             headers: { 'Authorization': `Bearer ${getToken()}` },
             body: formData
         });
@@ -643,12 +675,8 @@ async function createProduct() {
             } catch(err) {}
             throw new Error(errMsg);
         }
-        showToast("Đã lưu sản phẩm vào kho!");
-        document.getElementById('prodCode').value = '';
-        document.getElementById('prodName').value = '';
-        document.getElementById('prodPrice').value = '';
-        document.getElementById('prodStock').value = '100';
-        document.getElementById('prodImage').value = '';
+        showToast(isEditing ? "Đã cập nhật sản phẩm!" : "Đã lưu sản phẩm vào kho!");
+        cancelEditProduct();
         loadProducts();
     } catch(e) { showToast(e.message); }
 }
@@ -876,6 +904,7 @@ init();
 
 // ===== Phân trang + lọc ngày cho danh sách đơn (nhóm B) =====
 let trangDonHienTai = 1;
+const DON_MOI_TRANG = 50;
 
 function chuoiThamSoNgay() {
     const tu = document.getElementById('filterTuNgay')?.value;
@@ -891,6 +920,7 @@ function chuoiThamSoDon() {
     const tu = document.getElementById('filterTuNgay')?.value;
     const den = document.getElementById('filterDenNgay')?.value;
     const p = new URLSearchParams({ page: String(trangDonHienTai) });
+    p.set('per_page', String(DON_MOI_TRANG));
     if (tu) p.set('tu_ngay', tu);
     if (den) p.set('den_ngay', den);
     return `?${p.toString()}`;

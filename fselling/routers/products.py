@@ -40,6 +40,31 @@ def get_products(shop_id: int, db: Session = Depends(get_db)):
     return catalog_service.list_products(db, shop_id)
 
 
+@router.put("/{product_id}")
+def update_product(
+    product_id: int,
+    code: Optional[str] = Form(None),
+    name: str = Form(...),
+    price: float = Form(...),
+    stock: int = Form(...),
+    category_id: int = Form(...),
+    image: UploadFile = File(None),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return catalog_service.update_product(
+        db,
+        current_user,
+        product_id=product_id,
+        name=name,
+        price=price,
+        stock=stock,
+        category_id=category_id,
+        code=code,
+        image=image,
+    )
+
+
 @router.put("/{product_id}/status")
 def toggle_product_status(
     product_id: int,

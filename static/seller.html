@@ -166,7 +166,7 @@
                     <!-- Add Product Form (Left) -->
                     <div class="modal-col-form" style="border-right: 1px solid var(--border-color); padding-right: 2rem;">
                         <h3 style="color: var(--primary);">Kho hàng: <span id="whShopName"></span></h3>
-                        <h3 style="margin-top: 1.5rem;">Thêm sản phẩm mới</h3>
+                        <h3 id="productFormTitle" style="margin-top: 1.5rem;">Thêm sản phẩm mới</h3>
                         <div class="form-group">
                             <label>Danh mục</label>
                             <select class="cate-selection" id="catSelect"></select>
@@ -191,7 +191,8 @@
                             <label>Hình ảnh *</label>
                             <input class="product_img-input" type="file" id="prodImage" accept="image/*">
                         </div>
-                        <button class="create-product_btn" onclick="createProduct()" ><i class="ph ph-plus"></i> Lưu vào kho</button>
+                        <button id="btnSaveProduct" class="create-product_btn" onclick="createProduct()"><i class="ph ph-plus"></i> Lưu vào kho</button>
+                        <button id="btnCancelEditProduct" class="btn-outline" onclick="cancelEditProduct()" style="display: none; width: 100%; margin-top: 0.5rem;">Hủy chỉnh sửa</button>
                     </div>
                     <!-- Product List (Right) -->
                     <div class="modal-col-list">

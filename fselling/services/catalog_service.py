@@ -224,6 +224,75 @@ def list_products(db: Session, shop_id: int) -> List[Dict]:
     return res
 
 
+def update_product(
+    db: Session,
+    current_user: models.User,
+    product_id: int,
+    name: str,
+    price: float,
+    stock: int,
+    category_id: int,
+    code: Optional[str] = None,
+    image: Optional[UploadFile] = None,
+) -> models.Product:
+    prod = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not prod:
+        raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
+    require_shop_access(db, prod.shop_id, current_user)
+
+    name_stripped = name.strip() if name else ""
+    if not name_stripped:
+        raise HTTPException(status_code=400, detail="Tên sản phẩm không được để trống")
+    if price <= 0:
+        raise HTTPException(status_code=400, detail="Giá sản phẩm phải lớn hơn 0")
+    if stock < 0:
+        raise HTTPException(status_code=400, detail="Số lượng tồn kho không được âm")
+
+    category = (
+        db.query(models.Category)
+        .filter(
+            models.Category.id == category_id,
+            models.Category.shop_id == prod.shop_id,
+        )
+        .first()
+    )
+    if not category:
+        raise HTTPException(status_code=400, detail="Danh mục không thuộc cửa hàng này")
+
+    duplicate = (
+        db.query(models.Product)
+        .filter(
+            models.Product.shop_id == prod.shop_id,
+            models.Product.name == name_stripped,
+            models.Product.id != product_id,
+        )
+        .first()
+    )
+    if duplicate:
+        raise HTTPException(
+            status_code=400,
+            detail="Sản phẩm với tên này đã tồn tại trong cửa hàng!",
+        )
+
+    prod.code = code.strip() if code and code.strip() else prod.code
+    prod.name = name_stripped
+    prod.price = price
+    prod.stock = stock
+    prod.category_id = category_id
+    if image and image.filename:
+        prod.image_url = save_product_image(image)
+
+    db.commit()
+    log_system_action(
+        db,
+        current_user.id,
+        "UPDATE_PRODUCT",
+        f"Cập nhật SP: '{prod.name}' ({prod.code}) - Giá: {price:,.0f}đ, Kho: {stock}",
+    )
+    db.refresh(prod)
+    return prod
+
+
 def toggle_product_status(
     db: Session, current_user: models.User, product_id: int
 ) -> Dict[str, bool]:
