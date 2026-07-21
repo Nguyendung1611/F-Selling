@@ -28,7 +28,9 @@ def load_dotenv() -> None:
                             val.startswith("'") and val.endswith("'")
                         ):
                             val = val[1:-1]
-                        os.environ[key] = val
+                        # Explicit process/container environment must take precedence over
+                        # local .env values (matching standard dotenv behavior).
+                        os.environ.setdefault(key, val)
 
 
 load_dotenv()
@@ -49,9 +51,8 @@ SECRET_KEY: str = os.getenv("SECRET_KEY") or ""
 if not SECRET_KEY:
     SECRET_KEY = _secrets.token_hex(32)
     print(
-        "[WARN] SECRET_KEY chưa được cấu hình trong môi trường. "
-        "Đang dùng key ngẫu nhiên tạm thời - token sẽ mất hiệu lực khi restart. "
-        "Hãy đặt biến môi trường SECRET_KEY để bảo mật ổn định."
+        "[WARN] SECRET_KEY is not configured. Using a temporary random key; "
+        "tokens will become invalid after restart. Configure SECRET_KEY for stable sessions."
     )
 
 ALGORITHM: str = "HS256"

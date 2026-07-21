@@ -56,15 +56,15 @@ def seed_admin(db: Session) -> None:
                 username="admin", hashed_password=hashed_pw, role="ADMIN", is_verified=True
             )
             db.add(admin)
-            print("[SEED] Đã tạo tài khoản admin từ ADMIN_INITIAL_PASSWORD.")
+            print("[SEED] Created admin account from ADMIN_INITIAL_PASSWORD.")
         else:
             admin.hashed_password = hashed_pw
             admin.role = "ADMIN"
             admin.is_verified = True
-            print("[SEED] Đã đồng bộ mật khẩu admin theo ADMIN_INITIAL_PASSWORD.")
+            print("[SEED] Synchronized admin password from ADMIN_INITIAL_PASSWORD.")
         db.commit()
     elif not admin:
-        print("[SEED] Bỏ qua admin: chưa đặt ADMIN_INITIAL_PASSWORD (tối thiểu 8 ký tự).")
+        print("[SEED] Skipped admin: ADMIN_INITIAL_PASSWORD must contain at least 8 characters.")
 
 
 def initialize() -> None:

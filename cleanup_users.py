@@ -34,7 +34,7 @@ for user in expired_users:
         
         if now > expiry_datetime:
             cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
-            print(f"  ✓ DELETED")
+            print("  DELETED")
         else:
             remaining = expiry_datetime - now
             print(f"  Not expired yet - {remaining.total_seconds():.1f} seconds remaining")
