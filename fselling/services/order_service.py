@@ -47,7 +47,14 @@ def create_order(
     for prod, qty in resolved_items:
         db.add(
             models.OrderItem(
-                order_id=new_order.id, product_name=prod.name, price=prod.price, quantity=qty
+                order_id=new_order.id,
+                # Ghi kèm product_id để hoàn tồn kho chính xác khi hủy đơn (A1d).
+                # product_name vẫn được giữ: nó là ảnh chụp tên tại thời điểm bán,
+                # dùng cho hóa đơn và báo cáo kể cả khi sản phẩm sau này bị đổi tên/xóa.
+                product_id=prod.id,
+                product_name=prod.name,
+                price=prod.price,
+                quantity=qty,
             )
         )
     inventory_service.deduct_stock(resolved_items)
