@@ -60,6 +60,10 @@ ROUTES_BO_SUNG = {
     ("GET", "/api/orders/{order_id}/detail"),   # B3: xem chi tiết đơn kèm dòng hàng
     ("PUT", "/api/products/{product_id}"),      # behavior fix: sửa sản phẩm từ Kho hàng
     ("POST", "/api/products/{product_id}/stock"),  # nhập/xuất kho theo delta
+    ("POST", "/api/staff/{shop_id}"),               # C1b: chủ shop tạo nhân viên
+    ("GET", "/api/staff/{shop_id}"),                # C1b: danh sách nhân viên
+    ("DELETE", "/api/staff/member/{staff_id}"),     # C1b: xóa nhân viên
+    ("PUT", "/api/staff/member/{staff_id}/password"),  # C1b: đặt lại mật khẩu NV
 }
 
 

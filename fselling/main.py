@@ -25,6 +25,7 @@ from .routers import (
     products,
     reports,
     shops,
+    staff,
     vouchers,
     webhooks,
 )
@@ -90,6 +91,7 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
     # webhooks PHẢI đứng trước orders: /api/orders/webhook vs /api/orders/{shop_id}
     application.include_router(webhooks.router)
     application.include_router(orders.router)
+    application.include_router(staff.router)
     application.include_router(vouchers.router)
     application.include_router(reports.router)
     application.include_router(admin.router)
