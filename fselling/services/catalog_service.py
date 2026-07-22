@@ -5,9 +5,10 @@ import os
 import pathlib
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, UploadFile
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -230,11 +231,17 @@ def update_product(
     product_id: int,
     name: str,
     price: float,
-    stock: int,
     category_id: int,
     code: Optional[str] = None,
     image: Optional[UploadFile] = None,
 ) -> models.Product:
+    """Sửa thông tin sản phẩm: tên, giá, mã, danh mục, ảnh.
+
+    CỐ Ý KHÔNG đụng vào `stock`. Ghi đè tồn kho từ form sửa gây mất hàng khi
+    có bán song song (seller mở form thấy tồn 100, POS bán vài đơn, seller bấm
+    Lưu -> tồn quay lại 100). Thay đổi tồn kho đi qua `adjust_stock` (nhập/xuất
+    theo delta, cập nhật nguyên tử).
+    """
     prod = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not prod:
         raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
@@ -245,8 +252,6 @@ def update_product(
         raise HTTPException(status_code=400, detail="Tên sản phẩm không được để trống")
     if price <= 0:
         raise HTTPException(status_code=400, detail="Giá sản phẩm phải lớn hơn 0")
-    if stock < 0:
-        raise HTTPException(status_code=400, detail="Số lượng tồn kho không được âm")
 
     category = (
         db.query(models.Category)
@@ -277,7 +282,6 @@ def update_product(
     prod.code = code.strip() if code and code.strip() else prod.code
     prod.name = name_stripped
     prod.price = price
-    prod.stock = stock
     prod.category_id = category_id
     if image and image.filename:
         prod.image_url = save_product_image(image)
@@ -287,10 +291,55 @@ def update_product(
         db,
         current_user.id,
         "UPDATE_PRODUCT",
-        f"Cập nhật SP: '{prod.name}' ({prod.code}) - Giá: {price:,.0f}đ, Kho: {stock}",
+        f"Cập nhật SP: '{prod.name}' ({prod.code}) - Giá: {price:,.0f}đ",
     )
     db.refresh(prod)
     return prod
+
+
+_ADJUST_STOCK = text(
+    "UPDATE products SET stock = stock + :delta "
+    "WHERE id = :product_id AND stock + :delta >= 0"
+)
+
+
+def adjust_stock(
+    db: Session, current_user: models.User, product_id: int, delta: int
+) -> Dict[str, Any]:
+    """Nhập (delta > 0) hoặc xuất (delta < 0) kho theo số lượng thay đổi.
+
+    Dùng UPDATE nguyên tử `stock = stock + delta` thay vì đọc-rồi-ghi, nên
+    nhiều thao tác kho / bán hàng chạy song song không ghi đè lẫn nhau. Điều
+    kiện `stock + delta >= 0` nằm ngay trong câu UPDATE -> tồn kho không bao
+    giờ âm; nếu xuất quá số đang có, rowcount = 0 và ta báo lỗi.
+    """
+    prod = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not prod:
+        raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
+    require_shop_access(db, prod.shop_id, current_user)
+
+    if delta == 0:
+        raise HTTPException(status_code=400, detail="Số lượng thay đổi phải khác 0")
+
+    result = db.execute(_ADJUST_STOCK, {"delta": delta, "product_id": product_id})
+    if result.rowcount != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Không đủ tồn kho để xuất {abs(delta)} (hiện còn {prod.stock})",
+        )
+    db.commit()
+    db.refresh(prod)
+
+    hanh_dong = "Nhập" if delta > 0 else "Xuất"
+    log_system_action(
+        db,
+        current_user.id,
+        "ADJUST_STOCK",
+        f"{hanh_dong} kho SP '{prod.name}' ({prod.code}): "
+        f"{'+' if delta > 0 else ''}{delta} -> tồn {prod.stock}",
+    )
+    return {"id": prod.id, "stock": prod.stock, "delta": delta}
 
 
 def toggle_product_status(

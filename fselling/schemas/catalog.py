@@ -23,3 +23,7 @@ class VoucherCreate(BaseModel):
     max_discount: float = 0
     usage_limit: int = -1
     expires_at: Optional[str] = None
+
+
+class StockAdjust(BaseModel):
+    delta: int  # >0 nhập kho, <0 xuất kho

@@ -32,10 +32,11 @@ def _payload(ctx, **overrides):
 def test_seller_sua_duoc_san_pham_cua_minh(client):
     ctx = seller_with_shop(client)
     product_id = ctx["product"]["id"]
+    ton_ban_dau = ctx["product"]["stock"]
 
     res = client.put(
         f"/api/products/{product_id}",
-        data=_payload(ctx),
+        data=_payload(ctx),  # payload có gửi stock=17
         headers=auth(ctx["token"]),
     )
 
@@ -44,7 +45,31 @@ def test_seller_sua_duoc_san_pham_cua_minh(client):
     assert body["code"] == "SP-UPDATED"
     assert body["name"] == "Sản phẩm đã sửa"
     assert body["price"] == 125000
-    assert body["stock"] == 17
+    # Sửa sản phẩm KHÔNG được đụng tồn kho, dù form có gửi stock khác đi.
+    assert body["stock"] == ton_ban_dau
+
+
+def test_sua_san_pham_khong_ghi_de_ton_kho(client):
+    """Bug đã sửa: seller mở form (tồn 10), POS bán bớt, seller Lưu -> không
+    được kéo tồn về giá trị cũ trong form."""
+    ctx = seller_with_shop(client)  # tồn 10
+    product_id = ctx["product"]["id"]
+
+    # Bán 4 -> tồn còn 6
+    client.post(
+        f"/api/orders/{ctx['shop_id']}",
+        json={"items": [{"product_name": ctx["product"]["name"], "price": 1, "quantity": 4}]},
+        headers=auth(ctx["token"]),
+    )
+
+    # Seller lưu form với stock=10 (giá trị cũ trong form)
+    res = client.put(
+        f"/api/products/{product_id}",
+        data=_payload(ctx, stock=10),
+        headers=auth(ctx["token"]),
+    )
+    assert res.status_code == 200
+    assert res.json()["stock"] == 6, "Tồn kho phải giữ giá trị thật, không bị form ghi đè"
 
 
 def test_seller_khong_sua_duoc_san_pham_shop_khac(client):
@@ -60,23 +85,27 @@ def test_seller_khong_sua_duoc_san_pham_shop_khac(client):
     assert res.status_code == 403
 
 
-def test_sua_san_pham_tu_choi_gia_va_ton_kho_khong_hop_le(client):
+def test_sua_san_pham_tu_choi_gia_khong_hop_le(client):
     ctx = seller_with_shop(client)
-    product_id = ctx["product"]["id"]
-
     bad_price = client.put(
-        f"/api/products/{product_id}",
+        f"/api/products/{ctx['product']['id']}",
         data=_payload(ctx, price=0),
         headers=auth(ctx["token"]),
     )
-    bad_stock = client.put(
-        f"/api/products/{product_id}",
-        data=_payload(ctx, stock=-1),
+    assert bad_price.status_code == 400
+
+
+def test_sua_san_pham_bo_qua_stock_trong_form(client):
+    """PUT không còn validate/áp dụng stock: giá trị stock trong form bị bỏ qua,
+    không gây lỗi và không làm đổi tồn kho. Tồn kho đổi qua /stock (đã test riêng)."""
+    ctx = seller_with_shop(client)  # tồn 10
+    res = client.put(
+        f"/api/products/{ctx['product']['id']}",
+        data=_payload(ctx, stock=-1),  # stock vô lý nhưng bị bỏ qua
         headers=auth(ctx["token"]),
     )
-
-    assert bad_price.status_code == 400
-    assert bad_stock.status_code == 400
+    assert res.status_code == 200
+    assert res.json()["stock"] == 10, "Tồn kho không đổi và không nhận giá trị âm từ form"
 
 
 def test_khong_gan_duoc_danh_muc_cua_shop_khac(client):

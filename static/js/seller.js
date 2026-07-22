@@ -572,11 +572,22 @@ function filterProducts() {
             <td>${p.stock}</td>
             <td style="display:flex; justify-content: center; align-items: center; gap:0.5rem; height: 7rem;">
                 <button class="btn-outline" onclick="editProduct(${p.id})" style="padding: 0.2rem 0.5rem;" title="Sửa"><i class="ph ph-pencil-simple"></i></button>
+                <button class="btn-outline" onclick="nhapXuatKho(${p.id})" style="padding: 0.2rem 0.5rem;" title="Nhập/Xuất kho"><i class="ph ph-stack"></i></button>
                 <button class="btn-outline" onclick="toggleProductStatus(${p.id})" style="padding: 0.2rem 0.5rem;" title="Bật/Tắt"><i class="ph ph-power"></i></button>
                 <button class="btn-outline" onclick="deleteProduct(${p.id})" style="padding: 0.2rem 0.5rem; color:#ef4444;" title="Xóa"><i class="ph ph-trash"></i></button>
             </td>
         </tr>`;
     });
+}
+
+// Khi SỬA sản phẩm, ô tồn kho bị khóa: thay đổi tồn kho đi qua nút Nhập/Xuất
+// kho (cộng trừ theo delta), tránh ghi đè làm mất hàng khi bán song song.
+function _khoaOTonKho(khoa) {
+    const el = document.getElementById('prodStock');
+    if (!el) return;
+    el.disabled = khoa;
+    el.title = khoa ? 'Sửa sản phẩm không đổi tồn kho. Dùng nút Nhập/Xuất kho.' : '';
+    el.style.opacity = khoa ? '0.5' : '1';
 }
 
 function editProduct(id) {
@@ -587,6 +598,7 @@ function editProduct(id) {
     document.getElementById('prodName').value = product.name;
     document.getElementById('prodPrice').value = product.price;
     document.getElementById('prodStock').value = product.stock;
+    _khoaOTonKho(true);
     document.getElementById('catSelect').value = String(product.category_id);
     document.getElementById('productFormTitle').innerText = 'Sửa sản phẩm';
     document.getElementById('btnSaveProduct').innerHTML = '<i class="ph ph-floppy-disk"></i> Cập nhật sản phẩm';
@@ -599,10 +611,28 @@ function cancelEditProduct() {
     document.getElementById('prodName').value = '';
     document.getElementById('prodPrice').value = '';
     document.getElementById('prodStock').value = '100';
+    _khoaOTonKho(false);
     document.getElementById('prodImage').value = '';
     document.getElementById('productFormTitle').innerText = 'Thêm sản phẩm mới';
     document.getElementById('btnSaveProduct').innerHTML = '<i class="ph ph-plus"></i> Lưu vào kho';
     document.getElementById('btnCancelEditProduct').style.display = 'none';
+}
+
+async function nhapXuatKho(id) {
+    const product = currentProducts.find(p => p.id === id);
+    if(!product) return;
+    const raw = prompt(
+        `Nhập/Xuất kho cho "${product.name}" (tồn hiện tại: ${product.stock}).\n` +
+        `Nhập số dương để NHẬP thêm, số âm để XUẤT bớt.\nVí dụ: 20  hoặc  -5`
+    );
+    if(raw === null) return;
+    const delta = parseInt(raw, 10);
+    if(isNaN(delta) || delta === 0) return showToast("Vui lòng nhập một số khác 0");
+    try {
+        const res = await apiCall(`/products/${id}/stock`, 'POST', { delta });
+        showToast(`Đã ${delta > 0 ? 'nhập' : 'xuất'} kho. Tồn mới: ${res.stock}`);
+        loadProducts();
+    } catch(e) { showToast(e.message); }
 }
 
 function deleteProduct(id) {

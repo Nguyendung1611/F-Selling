@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..dependencies import get_current_user, get_db
+from ..schemas.catalog import StockAdjust
 from ..services import catalog_service
 
 router = APIRouter(prefix="/api/products", tags=["products"])
@@ -46,7 +47,9 @@ def update_product(
     code: Optional[str] = Form(None),
     name: str = Form(...),
     price: float = Form(...),
-    stock: int = Form(...),
+    # `stock` được chấp nhận để không phá form cũ nhưng KHÔNG dùng: đổi tồn kho
+    # đi qua POST /{product_id}/stock (nhập/xuất theo delta, cập nhật nguyên tử).
+    stock: Optional[int] = Form(None),
     category_id: int = Form(...),
     image: UploadFile = File(None),
     db: Session = Depends(get_db),
@@ -58,11 +61,20 @@ def update_product(
         product_id=product_id,
         name=name,
         price=price,
-        stock=stock,
         category_id=category_id,
         code=code,
         image=image,
     )
+
+
+@router.post("/{product_id}/stock")
+def adjust_stock(
+    product_id: int,
+    payload: StockAdjust,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return catalog_service.adjust_stock(db, current_user, product_id, payload.delta)
 
 
 @router.put("/{product_id}/status")
