@@ -26,6 +26,9 @@ _MIGRATIONS = [
     # A1a: tham chiếu sản phẩm trên từng dòng đơn hàng (phục vụ hoàn tồn kho khi hủy đơn).
     "ALTER TABLE order_items ADD COLUMN product_id INTEGER",
     "CREATE INDEX IF NOT EXISTS ix_order_items_product_id ON order_items(product_id)",
+    # C1a: nhân viên (role=STAFF) được gán vào đúng một shop. NULL với ADMIN/SELLER.
+    "ALTER TABLE users ADD COLUMN staff_shop_id INTEGER",
+    "CREATE INDEX IF NOT EXISTS ix_users_staff_shop_id ON users(staff_shop_id)",
 ]
 
 # Backfill A1a: khớp dòng đơn hàng cũ với sản phẩm theo (shop của đơn, tên sản phẩm).

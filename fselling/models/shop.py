@@ -18,7 +18,9 @@ class Shop(Base):
     is_active = Column(Boolean, default=True)
     owner_id = Column(Integer, ForeignKey("users.id"))
 
-    owner = relationship("User", back_populates="shops")
+    # Chỉ định rõ FK vì User giờ có 2 khóa ngoại trỏ tới shops
+    # (owner_id ở đây và staff_shop_id trên User).
+    owner = relationship("User", back_populates="shops", foreign_keys=[owner_id])
     categories = relationship("Category", back_populates="shop")
     products = relationship("Product", back_populates="shop")
     orders = relationship("Order", back_populates="shop")
