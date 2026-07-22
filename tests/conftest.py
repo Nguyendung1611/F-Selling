@@ -186,3 +186,20 @@ def seller_with_shop(client) -> dict:
 
 def admin_token(client) -> str:
     return login(client, "admin", ADMIN_PASSWORD)
+
+
+STAFF_PASSWORD = "Nhanvien@2026"
+
+
+def new_staff(client, owner_ctx: dict) -> tuple:
+    """Chủ shop (owner_ctx) tạo một nhân viên cho shop của mình, rồi đăng nhập
+    nhân viên đó. Trả về (username, token) của nhân viên."""
+    username = _unique("staff")
+    res = client.post(
+        f"/api/staff/{owner_ctx['shop_id']}",
+        json={"username": username, "password": STAFF_PASSWORD},
+        headers=auth(owner_ctx["token"]),
+    )
+    assert res.status_code == 200, res.text
+    token = login(client, username, STAFF_PASSWORD)
+    return username, token

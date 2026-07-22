@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..dependencies import require_shop_access
+from ..dependencies import has_shop_operator_access, require_shop_access
 from ..schemas.catalog import VoucherCreate
 from .log_service import log_system_action
 
@@ -100,12 +100,8 @@ def update_voucher(
         raise HTTPException(status_code=404, detail="Voucher không tồn tại")
 
     # Chỉ đúng chủ shop mới được sửa (giữ nguyên hành vi cũ: ADMIN cũng nhận 403)
-    shop = (
-        db.query(models.Shop)
-        .filter(models.Shop.id == db_v.shop_id, models.Shop.owner_id == current_user.id)
-        .first()
-    )
-    if not shop:
+    shop = db.query(models.Shop).filter(models.Shop.id == db_v.shop_id).first()
+    if not shop or not has_shop_operator_access(shop, current_user):
         raise HTTPException(
             status_code=403, detail="Không có quyền chỉnh sửa voucher của cửa hàng này"
         )

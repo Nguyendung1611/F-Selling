@@ -8,7 +8,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..dependencies import require_shop_access
+from ..dependencies import has_shop_operator_access, require_shop_access
 from ..schemas.order import OrderCreate
 from . import inventory_service, payment_service, voucher_service
 from .log_service import log_system_action
@@ -143,7 +143,7 @@ def get_order(db: Session, current_user: models.User, order_id: int) -> Dict[str
     shop = db.query(models.Shop).filter(models.Shop.id == order.shop_id).first()
     if not shop:
         raise HTTPException(status_code=404, detail="Không tìm thấy cửa hàng của đơn hàng")
-    if current_user.role != "ADMIN" and shop.owner_id != current_user.id:
+    if not has_shop_operator_access(shop, current_user):
         raise HTTPException(status_code=403, detail="Không có quyền truy cập đơn hàng này")
     return {
         "id": order.id,

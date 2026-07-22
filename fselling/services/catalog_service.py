@@ -18,7 +18,7 @@ from ..core.config import (
     MAX_IMAGE_SIZE,
     UPLOAD_DIR,
 )
-from ..dependencies import require_shop_access
+from ..dependencies import has_shop_operator_access, require_shop_access
 from ..schemas.catalog import CategoryUpdate
 from .log_service import log_system_action
 
@@ -38,14 +38,13 @@ def is_valid_image(data: bytes) -> bool:
     return False
 
 
-def _require_own_shop_403(db: Session, shop_id: int, current_user: models.User) -> models.Shop:
-    """Một số endpoint cũ trả 403 'Not your shop' khi shop không thuộc user."""
-    shop = (
-        db.query(models.Shop)
-        .filter(models.Shop.id == shop_id, models.Shop.owner_id == current_user.id)
-        .first()
-    )
-    if not shop:
+def _require_shop_operator_403(
+    db: Session, shop_id: int, current_user: models.User
+) -> models.Shop:
+    """Cho phép chủ shop / ADMIN / nhân viên của shop thao tác. Nếu không -> 403.
+    (Giữ 403 'Not your shop' như hành vi cũ của các endpoint tạo SP/danh mục.)"""
+    shop = db.query(models.Shop).filter(models.Shop.id == shop_id).first()
+    if not shop or not has_shop_operator_access(shop, current_user):
         raise HTTPException(status_code=403, detail="Not your shop")
     return shop
 
@@ -54,7 +53,7 @@ def _require_own_shop_403(db: Session, shop_id: int, current_user: models.User) 
 def create_category(
     db: Session, current_user: models.User, name: str, shop_id: int
 ) -> models.Category:
-    _require_own_shop_403(db, shop_id, current_user)
+    _require_shop_operator_403(db, shop_id, current_user)
 
     name_stripped = name.strip() if name else ""
     if not name_stripped:
@@ -80,12 +79,8 @@ def update_category(
     if not db_cat:
         raise HTTPException(status_code=404, detail="Danh mục không tồn tại")
 
-    shop = (
-        db.query(models.Shop)
-        .filter(models.Shop.id == db_cat.shop_id, models.Shop.owner_id == current_user.id)
-        .first()
-    )
-    if not shop:
+    shop = db.query(models.Shop).filter(models.Shop.id == db_cat.shop_id).first()
+    if not shop or not has_shop_operator_access(shop, current_user):
         raise HTTPException(
             status_code=403, detail="Không có quyền chỉnh sửa danh mục của cửa hàng này"
         )
@@ -156,7 +151,7 @@ def create_product(
     code: Optional[str] = None,
     image: Optional[UploadFile] = None,
 ) -> models.Product:
-    _require_own_shop_403(db, shop_id, current_user)
+    _require_shop_operator_403(db, shop_id, current_user)
 
     existing_prod = (
         db.query(models.Product)

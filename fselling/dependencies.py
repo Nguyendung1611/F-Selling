@@ -65,14 +65,30 @@ def require_admin(current_user: models.User = Depends(get_current_user)) -> mode
     return current_user
 
 
+def has_shop_operator_access(shop: models.Shop, current_user: models.User) -> bool:
+    """Ai được VẬN HÀNH shop này (bán hàng, quản lý SP/danh mục/voucher/kho,
+    xem báo cáo): ADMIN, chủ shop, hoặc nhân viên (STAFF) được gán vào shop đó.
+
+    KHÔNG bao gồm thao tác quản trị (sửa/xóa shop, quản lý nhân viên) - những
+    thao tác đó vẫn dùng require_own_shop (chỉ đúng chủ shop)."""
+    if current_user.role == "ADMIN":
+        return True
+    if shop.owner_id == current_user.id:
+        return True
+    if current_user.role == "STAFF" and current_user.staff_shop_id == shop.id:
+        return True
+    return False
+
+
 def require_shop_access(
     db: Session, shop_id: int, current_user: models.User
 ) -> models.Shop:
-    """Đảm bảo current_user là chủ shop (hoặc ADMIN). Nếu không -> 403/404."""
+    """Đảm bảo current_user được vận hành shop (chủ shop, ADMIN, hoặc nhân viên
+    được gán vào shop). Nếu không -> 403/404."""
     shop = db.query(models.Shop).filter(models.Shop.id == shop_id).first()
     if not shop:
         raise HTTPException(status_code=404, detail="Không tìm thấy cửa hàng")
-    if current_user.role != "ADMIN" and shop.owner_id != current_user.id:
+    if not has_shop_operator_access(shop, current_user):
         raise HTTPException(status_code=403, detail="Bạn không có quyền truy cập cửa hàng này")
     return shop
 

@@ -100,7 +100,15 @@ def toggle_shop_status(db: Session, current_user: models.User, shop_id: int) -> 
 
 def list_shops(db: Session, current_user: models.User) -> List[models.Shop]:
     log_to_file(f"get_shops requested by user='{current_user.username}' (ID={current_user.id})")
-    shops = db.query(models.Shop).filter(models.Shop.owner_id == current_user.id).all()
+    if current_user.role == "STAFF":
+        # Nhân viên chỉ thấy đúng shop được gán, không thấy shop nào khác.
+        shops = (
+            db.query(models.Shop)
+            .filter(models.Shop.id == current_user.staff_shop_id)
+            .all()
+        )
+    else:
+        shops = db.query(models.Shop).filter(models.Shop.owner_id == current_user.id).all()
     log_to_file(f"get_shops DB query returned: {[s.id for s in shops]}")
     return shops
 
