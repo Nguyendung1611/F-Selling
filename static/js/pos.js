@@ -1,4 +1,8 @@
-if(localStorage.getItem('role') !== 'SELLER') window.location.href = '/';
+// POS dùng chung cho chủ shop (SELLER) và nhân viên (STAFF).
+(function () {
+    const role = localStorage.getItem('role');
+    if(role !== 'SELLER' && role !== 'STAFF') window.location.href = '/';
+})();
 let allShops = [];
 let currentShopId = parseInt(localStorage.getItem('currentShopId'));
 

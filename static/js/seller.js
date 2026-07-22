@@ -1,4 +1,7 @@
-if(localStorage.getItem('role') !== 'SELLER') window.location.href = '/';
+// Chủ shop (SELLER) và nhân viên (STAFF) đều dùng trang này. Vai trò quyết định
+// những gì được hiển thị (xem applyRoleUI ở cuối file).
+const MY_ROLE = localStorage.getItem('role');
+if(MY_ROLE !== 'SELLER' && MY_ROLE !== 'STAFF') window.location.href = '/';
 
 const BANKS = [
     { code: 'VCB', label: 'Vietcombank (VCB)' },
@@ -51,7 +54,9 @@ async function init() {
     try {
         allShops = await apiCall('/shops');
         renderShopsList(); // Cho phần cài đặt
-        
+        // Danh sách nhân viên chỉ dành cho chủ shop (nhân viên gọi sẽ bị 404).
+        if (MY_ROLE !== 'STAFF') renderStaffShopOptions();
+
         if(allShops.length === 0) {
             document.getElementById('dashboardContent').style.display = 'none';
             document.getElementById('noShopMsg').style.display = 'block';
@@ -1034,3 +1039,78 @@ async function xemChiTietDon(orderId) {
 function dongChiTietDon() {
     document.getElementById('orderDetailModal').style.display = 'none';
 }
+
+
+// ===== C1d: phân biệt vai trò SELLER / STAFF trên giao diện =====
+function applyRoleUI() {
+    if (MY_ROLE !== 'STAFF') return;
+    // Nhân viên không quản lý cửa hàng: ẩn tab Cài Đặt và mọi lối vào nó.
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        const oc = btn.getAttribute('onclick') || '';
+        if (oc.includes("switchTab('settings')")) btn.style.display = 'none';
+    });
+    // Nếu POS shop selector có nút tạo shop... không áp dụng ở đây.
+}
+
+// ===== C1d: quản lý nhân viên (chỉ chủ shop) =====
+function renderStaffShopOptions() {
+    const sel = document.getElementById('staffShopSelect');
+    if (!sel) return;
+    sel.innerHTML = allShops.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+    if (allShops.length) loadStaff();
+}
+
+async function loadStaff() {
+    const sel = document.getElementById('staffShopSelect');
+    if (!sel || !sel.value) return;
+    try {
+        const list = await apiCall(`/staff/${sel.value}`);
+        const tbody = document.getElementById('staffList');
+        tbody.innerHTML = '';
+        if (!list.length) {
+            tbody.innerHTML = `<tr><td colspan="2" style="color: var(--text-muted);">Chưa có nhân viên</td></tr>`;
+            return;
+        }
+        list.forEach(nv => {
+            tbody.innerHTML += `<tr>
+                <td>${escapeHtml(nv.username)}</td>
+                <td style="text-align:right;">
+                    <button class="btn-outline" style="padding: 0.2rem 0.5rem; color:#ef4444;" onclick="xoaNhanVien(${nv.id}, '${escapeHtml(nv.username)}')" title="Xóa"><i class="ph ph-trash"></i></button>
+                </td>
+            </tr>`;
+        });
+    } catch (e) { showToast(e.message); }
+}
+
+async function taoNhanVien() {
+    const sel = document.getElementById('staffShopSelect');
+    const username = document.getElementById('staffUsername').value.trim();
+    const password = document.getElementById('staffPassword').value;
+    if (!sel || !sel.value) return showToast('Vui lòng chọn cửa hàng');
+    if (!username) return showToast('Vui lòng nhập tên đăng nhập');
+    if (!password) return showToast('Vui lòng nhập mật khẩu');
+    try {
+        await apiCall(`/staff/${sel.value}`, 'POST', { username, password });
+        showToast('Đã thêm nhân viên');
+        document.getElementById('staffUsername').value = '';
+        document.getElementById('staffPassword').value = '';
+        loadStaff();
+    } catch (e) { showToast(e.message); }
+}
+
+function xoaNhanVien(id, username) {
+    showCustomConfirm(
+        'Xóa nhân viên',
+        `Xóa nhân viên "${username}"? Tài khoản này sẽ không đăng nhập được nữa.`,
+        async () => {
+            try {
+                await apiCall(`/staff/member/${id}`, 'DELETE');
+                showToast('Đã xóa nhân viên');
+                loadStaff();
+            } catch (e) { showToast(e.message); }
+        }
+    );
+}
+
+// Chạy sau khi DOM và allShops sẵn sàng. init() sẽ gọi renderStaffShopOptions.
+applyRoleUI();

@@ -315,6 +315,37 @@
                 <h4 style="margin-bottom: 1rem; color: var(--text-muted);">Danh sách các cửa hàng (Tối đa 3)</h4>
                 <div id="myShopsList"></div>
             </div>
+
+            <!-- Quản lý nhân viên (chỉ chủ shop) -->
+            <div id="staffContainer" style="margin-bottom: 2rem;">
+                <hr style="border-color: var(--border-color); margin-bottom: 1.5rem;">
+                <h4 style="margin-bottom: 0.5rem; color: var(--text-muted);"><i class="ph ph-users"></i> Nhân viên bán hàng</h4>
+                <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Nhân viên bán hàng và quản lý sản phẩm/kho cho cửa hàng, nhưng không sửa được thông tin cửa hàng hay quản lý nhân viên khác.</p>
+
+                <div style="margin-bottom: 1rem;">
+                    <label style="font-size: 0.85rem; color: var(--text-muted);">Chọn cửa hàng</label>
+                    <select id="staffShopSelect" onchange="loadStaff()" style="margin-bottom: 0;"></select>
+                </div>
+
+                <div style="display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: 1rem;">
+                    <div>
+                        <label style="font-size: 0.85rem; color: var(--text-muted);">Tên đăng nhập</label>
+                        <input type="text" id="staffUsername" placeholder="vd: nhanvien_an" style="margin-bottom: 0;">
+                    </div>
+                    <div>
+                        <label style="font-size: 0.85rem; color: var(--text-muted);">Mật khẩu</label>
+                        <input type="password" id="staffPassword" placeholder="Chữ hoa, thường, số, ký tự đặc biệt" style="margin-bottom: 0;">
+                    </div>
+                    <button onclick="taoNhanVien()"><i class="ph ph-user-plus"></i> Thêm nhân viên</button>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="db-table">
+                        <thead><tr><th>Tên đăng nhập</th><th></th></tr></thead>
+                        <tbody id="staffList"></tbody>
+                    </table>
+                </div>
+            </div>
             
             <hr style="border-color: var(--border-color); margin-bottom: 2rem; display: none;" id="shopFormDivider">
 
