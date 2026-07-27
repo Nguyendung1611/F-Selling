@@ -28,6 +28,7 @@
             <button class="tab-btn active" onclick="switchTab('dashboard')"><i class="ph ph-chart-bar"></i> Thống Kê</button>
             <button class="tab-btn" onclick="switchTab('warehouse')"><i class="ph ph-package"></i> Kho Hàng</button>
             <button class="tab-btn" onclick="switchTab('voucher')"><i class="ph ph-ticket"></i> Khuyến Mãi</button>
+            <button class="tab-btn" onclick="switchTab('customers')"><i class="ph ph-users"></i> Khách Hàng</button>
             <button class="tab-btn" onclick="switchTab('settings')"><i class="ph ph-sliders"></i> Cài Đặt</button>
         </div>
 
@@ -302,6 +303,42 @@
             </div>
         </div>
 
+        <!-- TAB: KHÁCH HÀNG (CRM) -->
+        <div id="customers" class="tab-content glass-card">
+            <h3 style="margin-bottom: 1rem;"><i class="ph ph-users" style="color: var(--primary);"></i> Khách Hàng</h3>
+
+            <div style="margin-bottom: 1rem;">
+                <label style="font-size: 0.85rem; color: var(--text-muted);">Chọn cửa hàng</label>
+                <select id="custShopSelect" onchange="loadCustomers()" style="margin-bottom: 0;"></select>
+            </div>
+
+            <div class="modal-body-split">
+                <!-- Form thêm/sửa khách -->
+                <div class="modal-col-form" style="border-right: 1px solid var(--border-color); padding-right: 2rem;">
+                    <h3 style="font-size: 1.05rem; margin-bottom: 1rem;" id="custFormTitle">Thêm khách hàng</h3>
+                    <div class="form-group"><label>Tên khách *</label><div class="input-wrapper"><i class="ph ph-user"></i><input type="text" id="custName" placeholder="Tên khách"></div></div>
+                    <div class="form-group"><label>Số điện thoại *</label><div class="input-wrapper"><i class="ph ph-phone"></i><input type="text" id="custPhone" placeholder="SĐT"></div></div>
+                    <div class="form-group"><label>Địa chỉ</label><div class="input-wrapper"><i class="ph ph-map-pin"></i><input type="text" id="custAddress" placeholder="Địa chỉ (tùy chọn)"></div></div>
+                    <div class="form-group"><label>Ghi chú</label><div class="input-wrapper"><i class="ph ph-note"></i><input type="text" id="custNote" placeholder="Ghi chú (tùy chọn)"></div></div>
+                    <button id="btnSaveCustomer" onclick="saveCustomer()" style="width: 100%;"><i class="ph ph-plus"></i> Lưu khách</button>
+                    <button id="btnCancelEditCustomer" class="btn-outline" onclick="cancelEditCustomer()" style="width: 100%; margin-top: 0.5rem; display: none;">Hủy</button>
+                </div>
+
+                <!-- Danh sách khách -->
+                <div class="modal-col-list">
+                    <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                        <input type="text" id="custSearch" placeholder="Tìm theo tên / SĐT" style="flex: 1; margin-bottom: 0;" oninput="loadCustomers()">
+                    </div>
+                    <div class="table-responsive" style="max-height: 480px; overflow-y: auto;">
+                        <table class="db-table">
+                            <thead><tr><th>Tên</th><th>SĐT</th><th></th></tr></thead>
+                            <tbody id="customerList"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- TAB 4: SETTINGS -->
         <div id="settings" class="tab-content glass-card">
             
@@ -428,6 +465,21 @@
             <h3 style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem;"><i class="ph ph-desktop" style="color: var(--primary);"></i> Chọn Cửa Hàng Mở POS</h3>
             <div id="posShopList" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem;"></div>
             <button class="btn-outline" onclick="document.getElementById('posModal').style.display='none'" style="width: 100%;">Hủy bỏ</button>
+        </div>
+    </div>
+
+    <!-- Modal lịch sử mua của khách -->
+    <div id="customerHistoryModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.6); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
+        <div style="background: #ffffff; padding: 2rem; border-radius: 16px; width: 560px; max-width: 92%; border: 1px solid var(--border-color); box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);">
+            <h3 style="margin-bottom: 0.25rem;">Lịch sử mua — <span id="chTen" class="text-gradient"></span></h3>
+            <small id="chTongKet" style="color: var(--text-muted); display: block; margin-bottom: 1rem;"></small>
+            <div class="table-responsive" style="max-height: 340px; overflow-y: auto;">
+                <table class="db-table">
+                    <thead><tr><th>Mã ĐH</th><th>Ngày</th><th>Tổng</th><th>Trạng thái</th></tr></thead>
+                    <tbody id="chDanhSach"></tbody>
+                </table>
+            </div>
+            <button class="btn-outline" style="width: 100%; margin-top: 1rem;" onclick="dongLichSuKhach()">Đóng</button>
         </div>
     </div>
 

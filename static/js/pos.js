@@ -11,6 +11,7 @@ let products = [];
 let categories = [];
 let currentCategoryId = null;
 let currentVoucher = null;
+let selectedCustomerId = null;  // C2d: khách gắn vào đơn (null = vãng lai)
 let discount = 0;
 let subtotal = 0;
 let total = 0;
@@ -234,6 +235,7 @@ async function checkout() {
             voucher_code: currentVoucher,
             payment_method: paymentMethod
         };
+        if(selectedCustomerId !== null) body.customer_id = selectedCustomerId;
         const res = await apiCall(`/orders/${currentShopId}`, 'POST', body);
         currentOrderId = res.order_id;
         
@@ -318,8 +320,68 @@ function resetPOS() {
     document.getElementById('voucherMsg').innerText = '';
     document.getElementById('qrSection').style.display = 'none';
     currentOrderId = null;
+    boChonKhach();  // trả về khách vãng lai cho đơn tiếp theo
     calcCart();
     loadProducts(); // refresh stock
+}
+
+// ===== C2d: gắn khách hàng vào đơn ở POS =====
+function boChonKhach() {
+    selectedCustomerId = null;
+    const el = id => document.getElementById(id);
+    if (el('khachDaChon')) el('khachDaChon').innerText = 'Khách vãng lai';
+    if (el('khachChuaChon')) el('khachChuaChon').style.display = 'block';
+    if (el('khachBoChon')) el('khachBoChon').style.display = 'none';
+    if (el('posCustResults')) el('posCustResults').innerHTML = '';
+    if (el('posCustSearch')) el('posCustSearch').value = '';
+    if (el('posCustNewForm')) el('posCustNewForm').style.display = 'none';
+}
+
+function chonKhach(id, ten, sdt) {
+    selectedCustomerId = id;
+    document.getElementById('khachDaChon').innerText = `${ten} (${sdt})`;
+    document.getElementById('khachChuaChon').style.display = 'none';
+    document.getElementById('khachBoChon').style.display = 'block';
+}
+
+async function timKhachPOS() {
+    const q = document.getElementById('posCustSearch').value.trim();
+    if (!q) return;
+    try {
+        const list = await apiCall(`/customers/${currentShopId}?q=${encodeURIComponent(q)}`);
+        const box = document.getElementById('posCustResults');
+        if (!list.length) {
+            box.innerHTML = `<div style="color:#94A3B8; font-size:0.8rem;">Không tìm thấy. Bấm <i class="ph ph-user-plus"></i> để thêm mới.</div>`;
+            return;
+        }
+        box.innerHTML = list.slice(0, 5).map(c =>
+            `<button class="btn-outline" style="width:100%; text-align:left; padding:0.35rem 0.5rem; margin-bottom:0.25rem; font-size:0.85rem;" onclick="chonKhach(${c.id}, '${escapeHtml(c.name)}', '${escapeHtml(c.phone)}')">${escapeHtml(c.name)} — ${escapeHtml(c.phone)}</button>`
+        ).join('');
+    } catch (e) { showToast(e.message); }
+}
+
+function hienFormKhachMoi() {
+    const f = document.getElementById('posCustNewForm');
+    f.style.display = f.style.display === 'none' ? 'block' : 'none';
+    if (f.style.display === 'block') {
+        const q = document.getElementById('posCustSearch').value.trim();
+        // Nếu người dùng gõ số vào ô tìm, đoán đó là SĐT cho khách mới.
+        if (/^\d+$/.test(q)) document.getElementById('posCustNewPhone').value = q;
+    }
+}
+
+async function taoKhachPOS() {
+    const name = document.getElementById('posCustNewName').value.trim();
+    const phone = document.getElementById('posCustNewPhone').value.trim();
+    if (!name) return showToast('Vui lòng nhập tên khách');
+    if (!phone) return showToast('Vui lòng nhập số điện thoại');
+    try {
+        const kh = await apiCall(`/customers/${currentShopId}`, 'POST', { name, phone });
+        document.getElementById('posCustNewName').value = '';
+        document.getElementById('posCustNewPhone').value = '';
+        chonKhach(kh.id, kh.name, kh.phone);
+        showToast('Đã thêm và chọn khách');
+    } catch (e) { showToast(e.message); }
 }
 
 loadShop();

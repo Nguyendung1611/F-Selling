@@ -56,6 +56,8 @@ async function init() {
         renderShopsList(); // Cho phần cài đặt
         // Danh sách nhân viên chỉ dành cho chủ shop (nhân viên gọi sẽ bị 404).
         if (MY_ROLE !== 'STAFF') renderStaffShopOptions();
+        // Khách hàng: cả chủ shop lẫn nhân viên đều quản lý được.
+        renderCustomerShopOptions();
 
         if(allShops.length === 0) {
             document.getElementById('dashboardContent').style.display = 'none';
@@ -1114,3 +1116,130 @@ function xoaNhanVien(id, username) {
 
 // Chạy sau khi DOM và allShops sẵn sàng. init() sẽ gọi renderStaffShopOptions.
 applyRoleUI();
+
+
+// ===== C2d: quản lý khách hàng (CRM) =====
+let editingCustomerId = null;
+
+function renderCustomerShopOptions() {
+    const sel = document.getElementById('custShopSelect');
+    if (!sel) return;
+    sel.innerHTML = allShops.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+    if (allShops.length) loadCustomers();
+}
+
+async function loadCustomers() {
+    const sel = document.getElementById('custShopSelect');
+    if (!sel || !sel.value) return;
+    const q = (document.getElementById('custSearch')?.value || '').trim();
+    try {
+        const url = q ? `/customers/${sel.value}?q=${encodeURIComponent(q)}` : `/customers/${sel.value}`;
+        const list = await apiCall(url);
+        const tbody = document.getElementById('customerList');
+        tbody.innerHTML = '';
+        if (!list.length) {
+            tbody.innerHTML = `<tr><td colspan="3" style="color: var(--text-muted);">Chưa có khách hàng</td></tr>`;
+            return;
+        }
+        list.forEach(kh => {
+            tbody.innerHTML += `<tr>
+                <td>${escapeHtml(kh.name)}</td>
+                <td>${escapeHtml(kh.phone)}</td>
+                <td style="text-align:right; white-space:nowrap;">
+                    <button class="btn-outline" style="padding:0.2rem 0.5rem;" onclick="xemLichSuKhach(${kh.id})" title="Lịch sử mua"><i class="ph ph-clock-counter-clockwise"></i></button>
+                    <button class="btn-outline" style="padding:0.2rem 0.5rem;" onclick="editCustomer(${kh.id})" title="Sửa"><i class="ph ph-pencil-simple"></i></button>
+                    <button class="btn-outline" style="padding:0.2rem 0.5rem; color:#ef4444;" onclick="deleteCustomer(${kh.id}, '${escapeHtml(kh.name)}')" title="Xóa"><i class="ph ph-trash"></i></button>
+                </td>
+            </tr>`;
+        });
+        window._customersCache = list;
+    } catch (e) { showToast(e.message); }
+}
+
+async function saveCustomer() {
+    const sel = document.getElementById('custShopSelect');
+    const name = document.getElementById('custName').value.trim();
+    const phone = document.getElementById('custPhone').value.trim();
+    const address = document.getElementById('custAddress').value.trim();
+    const note = document.getElementById('custNote').value.trim();
+    if (!sel || !sel.value) return showToast('Vui lòng chọn cửa hàng');
+    if (!name) return showToast('Vui lòng nhập tên khách');
+    if (!phone) return showToast('Vui lòng nhập số điện thoại');
+    const body = { name, phone, address, note };
+    try {
+        if (editingCustomerId !== null) {
+            await apiCall(`/customers/member/${editingCustomerId}`, 'PUT', body);
+            showToast('Đã cập nhật khách');
+        } else {
+            await apiCall(`/customers/${sel.value}`, 'POST', body);
+            showToast('Đã thêm khách');
+        }
+        cancelEditCustomer();
+        loadCustomers();
+    } catch (e) { showToast(e.message); }
+}
+
+function editCustomer(id) {
+    const kh = (window._customersCache || []).find(c => c.id === id);
+    if (!kh) return;
+    editingCustomerId = id;
+    document.getElementById('custName').value = kh.name || '';
+    document.getElementById('custPhone').value = kh.phone || '';
+    document.getElementById('custAddress').value = kh.address || '';
+    document.getElementById('custNote').value = kh.note || '';
+    document.getElementById('custFormTitle').innerText = 'Sửa khách hàng';
+    document.getElementById('btnSaveCustomer').innerHTML = '<i class="ph ph-floppy-disk"></i> Cập nhật';
+    document.getElementById('btnCancelEditCustomer').style.display = 'block';
+}
+
+function cancelEditCustomer() {
+    editingCustomerId = null;
+    ['custName', 'custPhone', 'custAddress', 'custNote'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('custFormTitle').innerText = 'Thêm khách hàng';
+    document.getElementById('btnSaveCustomer').innerHTML = '<i class="ph ph-plus"></i> Lưu khách';
+    document.getElementById('btnCancelEditCustomer').style.display = 'none';
+}
+
+function deleteCustomer(id, ten) {
+    showCustomConfirm(
+        'Xóa khách hàng',
+        `Xóa khách "${ten}"? Các đơn cũ vẫn giữ nhưng sẽ không còn gắn tên khách.`,
+        async () => {
+            try {
+                await apiCall(`/customers/member/${id}`, 'DELETE');
+                showToast('Đã xóa khách');
+                loadCustomers();
+            } catch (e) { showToast(e.message); }
+        }
+    );
+}
+
+async function xemLichSuKhach(id) {
+    try {
+        const d = await apiCall(`/customers/member/${id}/history`);
+        document.getElementById('chTen').innerText = `${d.customer.name} (${d.customer.phone})`;
+        document.getElementById('chTongKet').innerText =
+            `${d.order_count} đơn • Đã chi (đã thanh toán): ${(d.total_paid || 0).toLocaleString()} ₫`;
+        const tbody = document.getElementById('chDanhSach');
+        tbody.innerHTML = '';
+        if (!d.orders.length) {
+            tbody.innerHTML = `<tr><td colspan="4" style="color: var(--text-muted);">Chưa có đơn nào</td></tr>`;
+        } else {
+            d.orders.forEach(o => {
+                const tt = window.moTaTrangThaiDon(o.status);
+                const ngay = new Date(o.date).toLocaleString('vi-VN');
+                tbody.innerHTML += `<tr>
+                    <td><strong>#${o.id}</strong></td>
+                    <td>${ngay}</td>
+                    <td>${(o.total || 0).toLocaleString()} ₫</td>
+                    <td style="color:${tt.color}; font-weight:600;">${escapeHtml(tt.label)}</td>
+                </tr>`;
+            });
+        }
+        document.getElementById('customerHistoryModal').style.display = 'flex';
+    } catch (e) { showToast(e.message); }
+}
+
+function dongLichSuKhach() {
+    document.getElementById('customerHistoryModal').style.display = 'none';
+}

@@ -86,6 +86,28 @@
                 <div class="summary-row total"><span>Tổng Cần Thu:</span><span id="txtTotal">0 ₫</span></div>
             </div>
 
+            <!-- Khách hàng (tùy chọn) -->
+            <div style="margin-bottom: 1rem; padding: 0.75rem; background: #0F172A; border-radius: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <span style="color: #94A3B8; font-size: 0.85rem;"><i class="ph ph-user"></i> Khách hàng (tùy chọn)</span>
+                    <span id="khachDaChon" style="color: var(--success); font-size: 0.85rem; font-weight: 600;">Khách vãng lai</span>
+                </div>
+                <div id="khachChuaChon">
+                    <div style="display: flex; gap: 0.4rem;">
+                        <input type="text" id="posCustSearch" placeholder="Tìm theo tên / SĐT" style="flex: 1; margin-bottom: 0; padding: 0.4rem; background: #1E293B; border: 1px solid #334155; color: white; border-radius: 4px;">
+                        <button onclick="timKhachPOS()" style="padding: 0.4rem 0.7rem;"><i class="ph ph-magnifying-glass"></i></button>
+                        <button class="btn-outline" onclick="hienFormKhachMoi()" style="padding: 0.4rem 0.7rem;" title="Thêm khách mới"><i class="ph ph-user-plus"></i></button>
+                    </div>
+                    <div id="posCustResults" style="margin-top: 0.4rem;"></div>
+                    <div id="posCustNewForm" style="display: none; margin-top: 0.5rem;">
+                        <input type="text" id="posCustNewName" placeholder="Tên khách" style="width: 100%; margin-bottom: 0.3rem; padding: 0.4rem; background: #1E293B; border: 1px solid #334155; color: white; border-radius: 4px;">
+                        <input type="text" id="posCustNewPhone" placeholder="Số điện thoại" style="width: 100%; margin-bottom: 0.3rem; padding: 0.4rem; background: #1E293B; border: 1px solid #334155; color: white; border-radius: 4px;">
+                        <button onclick="taoKhachPOS()" style="width: 100%; padding: 0.4rem;">Lưu khách</button>
+                    </div>
+                </div>
+                <button id="khachBoChon" onclick="boChonKhach()" class="btn-outline" style="display: none; width: 100%; padding: 0.3rem; font-size: 0.8rem;">Bỏ chọn khách</button>
+            </div>
+
             <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
                 <button class="method-btn active" id="btnMethodQR" onclick="setMethod('transfer')"><i class="ph ph-qr-code"></i><br>VietQR</button>
                 <button class="method-btn" id="btnMethodCash" onclick="setMethod('cash')"><i class="ph ph-money"></i><br>Tiền mặt</button>
