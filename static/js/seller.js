@@ -1015,6 +1015,15 @@ async function xemChiTietDon(orderId) {
         document.getElementById('odThongTin').innerText =
             `${ngay} • ${pttt} • ${tt.label}`;
 
+        const khachHang = document.getElementById('odKhachHang');
+        if (d.customer) {
+            khachHang.innerText = `Khách hàng: ${d.customer.name} (${d.customer.phone})`;
+            khachHang.style.display = 'block';
+        } else {
+            khachHang.innerText = '';
+            khachHang.style.display = 'none';
+        }
+
         const tbody = document.getElementById('odDanhSach');
         tbody.innerHTML = '';
         d.items.forEach(i => {
