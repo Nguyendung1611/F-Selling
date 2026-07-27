@@ -69,6 +69,7 @@ ROUTES_BO_SUNG = {
     ("GET", "/api/customers/member/{customer_id}"),  # C2b: chi tiết khách
     ("PUT", "/api/customers/member/{customer_id}"),  # C2b: sửa khách
     ("DELETE", "/api/customers/member/{customer_id}"),  # C2b: xóa khách
+    ("GET", "/api/customers/member/{customer_id}/history"),  # C2c: lịch sử mua
 }
 
 

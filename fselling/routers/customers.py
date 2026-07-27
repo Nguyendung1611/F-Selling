@@ -41,6 +41,15 @@ def get_customer(
     return customer_service.get_customer(db, current_user, customer_id)
 
 
+@router.get("/member/{customer_id}/history")
+def customer_history(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return customer_service.customer_history(db, current_user, customer_id)
+
+
 @router.put("/member/{customer_id}")
 def update_customer(
     customer_id: int,

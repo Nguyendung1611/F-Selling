@@ -37,6 +37,7 @@ def test_chi_tiet_don_mot_san_pham(client):
         "voucher_code",
         "discount_amount",
         "total_amount",
+        "customer",  # C2c: khách gắn vào đơn (null nếu khách vãng lai)
         "subtotal",
         "items",
     }

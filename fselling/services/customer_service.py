@@ -127,6 +127,33 @@ def update_customer(
     return _to_out(kh)
 
 
+def customer_history(db: Session, current_user: models.User, customer_id: int) -> Dict:
+    """Lịch sử mua của một khách: thông tin khách + danh sách đơn + tổng đã chi
+    (chỉ tính đơn đã thanh toán)."""
+    kh = _get_owned_customer(db, current_user, customer_id)
+    orders = (
+        db.query(models.Order)
+        .filter(models.Order.customer_id == customer_id)
+        .order_by(models.Order.created_at.desc())
+        .all()
+    )
+    tong_da_chi = sum(o.total_amount or 0 for o in orders if o.status == "PAID")
+    return {
+        "customer": _to_out(kh),
+        "total_paid": tong_da_chi,
+        "order_count": len(orders),
+        "orders": [
+            {
+                "id": o.id,
+                "total": o.total_amount,
+                "status": o.status,
+                "date": o.created_at,
+            }
+            for o in orders
+        ],
+    }
+
+
 def delete_customer(db: Session, current_user: models.User, customer_id: int) -> Dict[str, str]:
     kh = _get_owned_customer(db, current_user, customer_id)
     ten = kh.name

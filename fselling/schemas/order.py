@@ -13,6 +13,8 @@ class OrderCreate(BaseModel):
     items: List[OrderItemCreate]
     voucher_code: Optional[str] = None
     payment_method: str = "transfer"
+    # Gắn khách vào đơn (tùy chọn). Bỏ trống = khách vãng lai.
+    customer_id: Optional[int] = None
 
 
 class PaymentWebhook(BaseModel):

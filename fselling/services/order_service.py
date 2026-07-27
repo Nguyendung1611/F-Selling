@@ -96,12 +96,31 @@ def create_order(
     if total < 0:
         total = 0
 
+    # Khách hàng gắn vào đơn (tùy chọn). Phải là khách của ĐÚNG shop này -
+    # không cho mượn customer_id của shop khác.
+    customer_id = None
+    if order.customer_id is not None:
+        kh = (
+            db.query(models.Customer)
+            .filter(
+                models.Customer.id == order.customer_id,
+                models.Customer.shop_id == shop_id,
+            )
+            .first()
+        )
+        if not kh:
+            raise HTTPException(
+                status_code=404, detail="Khách hàng không tồn tại trong cửa hàng này"
+            )
+        customer_id = kh.id
+
     new_order = models.Order(
         shop_id=shop_id,
         total_amount=total,
         discount_amount=discount_amount,
         voucher_code=order.voucher_code,
         payment_method=order.payment_method,
+        customer_id=customer_id,
     )
     db.add(new_order)
     db.flush()  # lấy new_order.id mà chưa commit, cùng một transaction
@@ -212,6 +231,12 @@ def get_order_detail(db: Session, current_user: models.User, order_id: int) -> D
         .all()
     )
 
+    customer = None
+    if order.customer_id is not None:
+        kh = db.query(models.Customer).filter(models.Customer.id == order.customer_id).first()
+        if kh:
+            customer = {"id": kh.id, "name": kh.name, "phone": kh.phone}
+
     return {
         "id": order.id,
         "shop_id": order.shop_id,
@@ -222,6 +247,7 @@ def get_order_detail(db: Session, current_user: models.User, order_id: int) -> D
         "voucher_code": order.voucher_code,
         "discount_amount": order.discount_amount or 0,
         "total_amount": order.total_amount,
+        "customer": customer,
         "subtotal": sum((i.price or 0) * (i.quantity or 0) for i in items),
         "items": [
             {
