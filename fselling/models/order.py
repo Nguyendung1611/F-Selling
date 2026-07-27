@@ -16,9 +16,12 @@ class Order(Base):
     payment_method = Column(String, default="transfer")  # 'transfer' or 'cash'
     status = Column(String, default="PENDING")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    # Khách hàng gắn vào đơn (tùy chọn). NULL với đơn khách vãng lai. (C2a)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
 
     shop = relationship("Shop", back_populates="orders")
     items = relationship("OrderItem", back_populates="order")
+    customer = relationship("Customer")
 
 
 class OrderItem(Base):

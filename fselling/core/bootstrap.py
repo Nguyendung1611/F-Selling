@@ -29,6 +29,10 @@ _MIGRATIONS = [
     # C1a: nhân viên (role=STAFF) được gán vào đúng một shop. NULL với ADMIN/SELLER.
     "ALTER TABLE users ADD COLUMN staff_shop_id INTEGER",
     "CREATE INDEX IF NOT EXISTS ix_users_staff_shop_id ON users(staff_shop_id)",
+    # C2a: khách hàng gắn vào đơn (tùy chọn). Bảng `customers` do create_all() tự
+    # tạo; ở đây chỉ cần thêm cột customer_id cho bảng orders đã tồn tại.
+    "ALTER TABLE orders ADD COLUMN customer_id INTEGER",
+    "CREATE INDEX IF NOT EXISTS ix_orders_customer_id ON orders(customer_id)",
 ]
 
 # Backfill A1a: khớp dòng đơn hàng cũ với sản phẩm theo (shop của đơn, tên sản phẩm).

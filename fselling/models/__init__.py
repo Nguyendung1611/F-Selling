@@ -2,6 +2,7 @@
 (quan hệ khai báo bằng chuỗi tên class cần các class đã được nạp)."""
 from ..core.database import Base
 from .catalog import Category, Product, Voucher
+from .customer import Customer
 from .order import Order, OrderItem
 from .shop import Shop
 from .system_log import SystemLog
@@ -17,4 +18,5 @@ __all__ = [
     "Order",
     "OrderItem",
     "SystemLog",
+    "Customer",
 ]
