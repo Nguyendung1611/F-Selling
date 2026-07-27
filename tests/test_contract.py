@@ -64,6 +64,11 @@ ROUTES_BO_SUNG = {
     ("GET", "/api/staff/{shop_id}"),                # C1b: danh sách nhân viên
     ("DELETE", "/api/staff/member/{staff_id}"),     # C1b: xóa nhân viên
     ("PUT", "/api/staff/member/{staff_id}/password"),  # C1b: đặt lại mật khẩu NV
+    ("POST", "/api/customers/{shop_id}"),            # C2b: thêm khách hàng
+    ("GET", "/api/customers/{shop_id}"),             # C2b: danh sách/tìm khách
+    ("GET", "/api/customers/member/{customer_id}"),  # C2b: chi tiết khách
+    ("PUT", "/api/customers/member/{customer_id}"),  # C2b: sửa khách
+    ("DELETE", "/api/customers/member/{customer_id}"),  # C2b: xóa khách
 }
 
 

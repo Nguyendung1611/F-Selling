@@ -20,6 +20,7 @@ from .routers import (
     admin,
     auth,
     categories,
+    customers,
     orders,
     pages,
     products,
@@ -92,6 +93,7 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
     application.include_router(webhooks.router)
     application.include_router(orders.router)
     application.include_router(staff.router)
+    application.include_router(customers.router)
     application.include_router(vouchers.router)
     application.include_router(reports.router)
     application.include_router(admin.router)
