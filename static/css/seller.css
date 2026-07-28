@@ -274,13 +274,13 @@
     } */
 
     /* .sub-tab-btn{
-        width:48%;
+        width:100%;
         font-size:0.85rem;
         padding:0.75rem;
     } */
 
     .table-responsive-product {
-    width: 48%;
+    width: 100%;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     /* margin-top: 1rem; */
@@ -294,16 +294,16 @@
     }
     
     .create-product_btn{
-            width: 48%;
+            width: 100%;
     }
 
     .product_img-input{
         margin-bottom: 1rem; 
-        width: 48%;
+        width: 100%;
     }
 
     .input-wrapper input{
-        width: 48%;
+        width: 100%;
     }
 
     .input-wrapper-shop input{
@@ -311,18 +311,18 @@
     }
 
     /* .sub-tab-btn.active {
-            width: 48%;
+            width: 100%;
             background: var(--primary);
             color: white;
             border-color: var(--primary);
     } */
 
     .form-group label{
-        width: 48%;
+        width: 100%;
     }
 
       .cate-selection{
-        width: 48%; 
+        width: 100%; 
         padding: 0.75rem; 
         border-radius: 8px; 
         border: 1px solid var(--border-color); 
@@ -393,30 +393,30 @@
     }
 
     /* .sub-tab-btn{
-        width:48%;
+        width:100%;
         font-size:0.85rem;
         padding:0.75rem;
     } */
 
 
     .table-responsive-product {
-    width: 48%;
+    width: 100%;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     /* margin-top: 1rem; */
     }
 
     .create-product_btn{
-            width: 48%;
+            width: 100%;
     }
 
     .product_img-input{
         margin-bottom: 1rem; 
-        width: 48%;
+        width: 100%;
     }
 
     .input-wrapper input{
-        width: 48%;
+        width: 100%;
     }
 
     .input-wrapper-shop input{
@@ -424,18 +424,18 @@
     }
 
     /* .sub-tab-btn.active {
-        width: 48%;
+        width: 100%;
         background: var(--primary);
         color: white;
         border-color: var(--primary);
     } */
 
     .form-group label{
-        width: 48%;
+        width: 100%;
     }
 
     .cate-selection{
-        width: 48%; 
+        width: 100%; 
         padding: 0.75rem; 
         border-radius: 8px; 
         border: 1px solid var(--border-color); 

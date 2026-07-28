@@ -383,6 +383,12 @@ th {
         min-width: 0 !important;
     }
 
+    /* Lưới an toàn: chặn tràn ngang ở cấp panel + container, để không nội dung
+       nào đẩy lệch cả trang trên điện thoại. Bảng vẫn cuộn trong wrapper riêng
+       (đã có overflow-x:auto ở trên), nên không mất dữ liệu. */
+    .container { overflow-x: hidden; max-width: 100%; }
+    .tab-content { overflow-x: hidden; }
+
     #dashShopList, #whShopList, #vcShopList {
         width: 100%;
     }
