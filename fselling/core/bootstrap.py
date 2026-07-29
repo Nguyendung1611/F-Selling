@@ -42,13 +42,27 @@ _MIGRATIONS = [
     # dedupe_product_codes(), nếu không lệnh này thất bại vì dữ liệu còn trùng.
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_products_shop_code "
     "ON products(shop_id, code)",
+    # B1d: tên sản phẩm cũng phải duy nhất theo shop. `create_product` và
+    # `update_product` đã từ chối tên trùng từ lâu, nhưng không có ràng buộc ở
+    # DB nên hai request đồng thời vẫn lọt được - và lọt trong IM LẶNG.
+    # CỐ Ý không có bước dồn dữ liệu tự động như với `code`: tên sản phẩm là dữ
+    # liệu do người dùng đặt, tự ý đổi thành "... (2)" là quyết định không nên
+    # thay họ. DB nào còn tên trùng thì lệnh này thất bại và
+    # verify_required_indexes() sẽ nêu tên index bị thiếu để người vận hành tự
+    # sửa - vẫn hơn hẳn tình trạng hiện nay là không có ràng buộc nào cả.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_products_shop_name "
+    "ON products(shop_id, name)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
 # lỗi để chạy lặp lại được, nên một lệnh CREATE UNIQUE INDEX thất bại (ví dụ DB
 # đang có sẵn dữ liệu trùng) sẽ trôi qua im lặng và app vẫn khởi động bình
 # thường - rồi ràng buộc trùng lặp bị hổng mà không ai biết. Kiểm lại tường minh.
-_REQUIRED_INDEXES = ["ix_products_shop_barcode", "ix_products_shop_code"]
+_REQUIRED_INDEXES = [
+    "ix_products_shop_barcode",
+    "ix_products_shop_code",
+    "ix_products_shop_name",
+]
 
 _INDEX_EXISTS = (
     "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = :name"

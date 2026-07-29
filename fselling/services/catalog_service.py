@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -74,6 +75,54 @@ def _ensure_barcode_unique(
             status_code=400,
             detail=f"Mã vạch '{barcode}' đã được dùng cho sản phẩm '{holder.name}'",
         )
+
+
+# Ràng buộc duy nhất ở tầng DB -> thông báo cho người dùng. Khóa là mảnh chuỗi
+# xuất hiện trong thông báo lỗi của SQLite ("UNIQUE constraint failed: <cột>").
+_RANG_BUOC_DUY_NHAT = {
+    "products.code": "Mã sản phẩm vừa được sản phẩm khác dùng. Vui lòng thử lại.",
+    "products.barcode": "Mã vạch vừa được sản phẩm khác dùng. Vui lòng thử lại.",
+    "products.name": "Tên sản phẩm vừa được sản phẩm khác dùng. Vui lòng thử lại.",
+}
+
+
+def _ghi_bat_trung(db: Session, ghi) -> None:
+    """Chạy `ghi()` (flush hoặc commit), đổi lỗi ràng buộc duy nhất thành 400.
+
+    Các hàm bên dưới đều kiểm trùng trước khi ghi, nhưng giữa lúc kiểm và lúc
+    ghi vẫn có khe: hai request cùng gửi một mã có thể cùng vượt qua bước kiểm.
+    Unique index chặn được ở tầng dưới, nhưng nó ném `IntegrityError` nên người
+    dùng nhận 500 thay vì biết mình cần đổi mã.
+
+    Phải bọc CẢ `flush()` lẫn `commit()`: `create_product` flush để lấy id nên
+    câu INSERT chạy ngay tại đó, còn `update_product` không flush nên câu UPDATE
+    chạy lúc commit.
+
+    CHỈ dịch những ràng buộc có tên trong `_RANG_BUOC_DUY_NHAT`; mọi
+    `IntegrityError` khác được ném tiếp để vẫn nổ 500 - đó là lỗi lập trình cần
+    sửa, không được giấu đi.
+
+    Lưu ý: cách nhận biết dựa vào chuỗi thông báo của SQLite. Nếu sau này đổi
+    sang database khác, chuỗi sẽ khác và hàm này lặng lẽ hết tác dụng (quay về
+    500) - không sai nghiêm trọng, nhưng phải nhớ mà sửa.
+    """
+    try:
+        ghi()
+    except IntegrityError as e:
+        db.rollback()
+        chi_tiet = str(getattr(e, "orig", e))
+        for khoa, thong_bao in _RANG_BUOC_DUY_NHAT.items():
+            if khoa in chi_tiet:
+                raise HTTPException(status_code=400, detail=thong_bao) from e
+        raise
+
+
+def _flush_bat_trung(db: Session) -> None:
+    _ghi_bat_trung(db, db.flush)
+
+
+def _commit_bat_trung(db: Session) -> None:
+    _ghi_bat_trung(db, db.commit)
 
 
 def _ensure_code_unique(
@@ -325,11 +374,11 @@ def create_product(
     # nên hai sản phẩm tạo cách nhau dưới một giây là trùng mã; id thì không bao
     # giờ đụng nhau, kể cả khi hai người tạo cùng lúc. flush() để có id trước
     # khi commit, vẫn nằm trong một transaction duy nhất.
-    db.flush()
+    _flush_bat_trung(db)
     if not p.code:
         p.code = f"SP-{p.id}"
     code = p.code
-    db.commit()
+    _commit_bat_trung(db)
     log_system_action(
         db,
         current_user.id,
@@ -441,7 +490,7 @@ def update_product(
     if image and image.filename:
         prod.image_url = save_product_image(image)
 
-    db.commit()
+    _commit_bat_trung(db)
     log_system_action(
         db,
         current_user.id,
