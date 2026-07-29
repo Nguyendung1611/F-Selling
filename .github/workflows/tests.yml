@@ -1,0 +1,27 @@
+name: Tests
+
+# Tự chạy toàn bộ test mỗi khi push lên GitHub hoặc mở Pull Request.
+# Kết quả (xanh/đỏ) hiện ngay trên trang repo và trong từng commit.
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Lấy code về
+        uses: actions/checkout@v4
+
+      - name: Cài Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Cài thư viện (bản đã pin trong requirements-dev.txt)
+        run: pip install -r requirements-dev.txt
+
+      - name: Chạy toàn bộ test
+        run: python -m pytest -q
