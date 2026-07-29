@@ -53,18 +53,57 @@ body { overflow: hidden; } /* Ngăn cuộn trang chính để tạo cảm giác 
 .product-stock { position: absolute; top: 5px; right: 5px; background: rgba(0,0,0,0.7); padding: 2px 6px; font-size: 0.7rem; border-radius: 4px; }
 
 /* Cart Table */
+/* Bốn cột: tên (co giãn) | nút số lượng | thành tiền | nút xóa.
+   Trước đây thiếu `display: grid` nên khai báo cột không có tác dụng: bốn ô
+   xếp dọc thành khối, cộng thêm `margin: 1em` mỗi ô làm một dòng cao tới 171px
+   - điện thoại chỉ nhìn được 2-3 món, rất bất tiện khi quét mã vạch nhiều món. */
 .cart-item {
-    /* display: flex; */
-    grid-template-columns: 2fr 1fr 1fr 20px;
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    grid-template-areas: "ten sl tien xoa";
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 0;
+    gap: 0.6rem;
+    padding: 0.55rem 0;
     border-bottom: 1px dashed #334155;
     font-size: 0.9rem;
 }
 
+.cart-o-ten  { grid-area: ten; min-width: 0; }
+.cart-o-sl   { grid-area: sl; }
+.cart-o-tien { grid-area: tien; }
+.cart-o-xoa  { grid-area: xoa; }
+
+.cart-item .btn-del {
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
 .cart-item div {
-    margin: 1em 0;
+    margin: 0;
+}
+
+.cart-name {
+    font-weight: 600;
+    color: #F8FAFC;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cart-donGia {
+    font-size: 0.78rem;
+    color: #94A3B8;
+}
+
+.cart-thanhTien {
+    color: var(--success);
+    font-weight: 700;
+    white-space: nowrap;
+    text-align: right;
 }
 .btn-qty { background: #334155; border: none; color: white; padding: 2px 6px; border-radius: 4px; cursor: pointer; }
 .btn-qty:hover { background: var(--primary); }
@@ -138,9 +177,26 @@ h2{
         gap: 0.5rem;
     }
     
+    /* Điện thoại: xuống hai hàng. Tên chiếm trọn hàng trên nên không bị cắt cụt,
+       hàng dưới còn đủ chỗ cho nút bấm to đúng chuẩn chạm ngón tay. */
     .cart-item {
-        grid-template-columns: 1.5fr 1fr 1fr 20px;
+        grid-template-columns: auto 1fr auto;
+        grid-template-areas:
+            "ten  ten  ten"
+            "sl   tien xoa";
+        row-gap: 0.45rem;
+        gap: 0.5rem;
         font-size: 0.85rem;
+    }
+
+    .cart-item .btn-qty {
+        min-width: 40px;
+        min-height: 40px;
+    }
+
+    .cart-item .btn-del {
+        width: 40px;
+        height: 40px;
     }
 
     .flex-row button{

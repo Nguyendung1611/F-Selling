@@ -240,14 +240,17 @@ function updateUI() {
         const thanhTien = item.price * item.quantity;
         container.innerHTML += `
             <div class="cart-item">
-                <div style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #F8FAFC;" title="${escapeHtml(item.product_name)}">${escapeHtml(item.product_name)}</div>
-                <div><span style="color:#94A3B8;">${item.price.toLocaleString()} × ${item.quantity} =</span> <span style="color: var(--success); font-weight: 700;">${thanhTien.toLocaleString()} ₫</span></div>
-                <div style="display: flex; gap: 0.3rem; align-items: center; color: white;">
+                <div class="cart-o-ten">
+                    <div class="cart-name" title="${escapeHtml(item.product_name)}">${escapeHtml(item.product_name)}</div>
+                    <div class="cart-donGia">${item.price.toLocaleString()} × ${item.quantity}</div>
+                </div>
+                <div class="cart-o-sl" style="display: flex; gap: 0.3rem; align-items: center; color: white;">
                     <button class="btn-qty" onclick="updateQty(${index}, -1)">-</button>
                     <span>${item.quantity}</span>
                     <button class="btn-qty" onclick="updateQty(${index}, 1)">+</button>
                 </div>
-                <button class="btn-del" onclick="removeItem(${index})"><i class="ph ph-trash"></i></button>
+                <div class="cart-thanhTien cart-o-tien">${thanhTien.toLocaleString()} ₫</div>
+                <button class="btn-del cart-o-xoa" onclick="removeItem(${index})"><i class="ph ph-trash"></i></button>
             </div>
         `;
     });

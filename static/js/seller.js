@@ -810,8 +810,25 @@ async function kkApDung() {
     if (!items.length) return;
 
     const soLech = items.filter(i => i.counted !== i.stock_snapshot).length;
-    if (!confirm(`Áp dụng kiểm kê cho ${items.length} sản phẩm (${soLech} sản phẩm bị lệch)?\n\n`
-        + `Tồn kho sẽ được đặt đúng bằng số đếm thực tế.`)) return;
+
+    // Nêu thẳng mức thay đổi của TỔNG tồn kho. Chỉ nói "N sản phẩm bị lệch" là
+    // không đủ: quét thử mỗi món một lần rồi bấm Áp dụng sẽ đặt tồn về 1 cho
+    // tất cả, tổng tồn có thể tụt từ vài trăm xuống vài đơn vị mà con số đó
+    // không hiện ra ở đâu cả.
+    const tongTon = items.reduce((s, i) => s + i.stock_snapshot, 0);
+    const tongDem = items.reduce((s, i) => s + i.counted, 0);
+    const chenh = tongDem - tongTon;
+    const moTaChenh = chenh === 0
+        ? 'không đổi'
+        : (chenh < 0 ? `GIẢM ${-chenh}` : `TĂNG ${chenh}`);
+
+    if (!confirm(
+        `Áp dụng kiểm kê cho ${items.length} sản phẩm?\n\n`
+        + `Tổng tồn kho: ${tongTon} → ${tongDem}  (${moTaChenh})\n`
+        + `${soLech} sản phẩm bị lệch.\n\n`
+        + `Tồn kho sẽ được đặt đúng bằng số đếm thực tế.\n`
+        + `Sản phẩm không có trong phiếu giữ nguyên tồn kho.`
+    )) return;
 
     try {
         const res = await apiCall(`/products/${currentShopId}/stocktake`, 'POST', { items });
