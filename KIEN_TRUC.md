@@ -156,11 +156,34 @@ Bản đầu sinh mã bằng `SP-<timestamp giây>`, nên mọi sản phẩm t�
 giây đều trùng mã. Nay `create_product` gọi `db.flush()` để lấy `id` rồi đặt
 `SP-<id>` — duy nhất tuyệt đối, không phụ thuộc tốc độ tạo.
 
-Cả `code` và `barcode` đều duy nhất trong phạm vi một shop
-(`ix_products_shop_code`, `ix_products_shop_barcode`) và đều được kiểm ở service
-để báo tên sản phẩm đang giữ mã. `dedupe_product_codes()` dọn dữ liệu cũ và
-**phải chạy trước `run_migrations()`**, nếu không lệnh tạo unique index sẽ thất
-bại trên DB còn mã trùng.
+`code`, `barcode` và `name` đều duy nhất trong phạm vi một shop
+(`ix_products_shop_code`, `ix_products_shop_barcode`, `ix_products_shop_name`)
+và đều được kiểm ở service để báo tên sản phẩm đang giữ mã.
+`dedupe_product_codes()` dọn dữ liệu cũ và **phải chạy trước
+`run_migrations()`**, nếu không lệnh tạo unique index sẽ thất bại trên DB còn mã
+trùng. Riêng `name` cố ý KHÔNG có bước dồn tự động: tên là dữ liệu người dùng
+đặt, tự đổi thành "... (2)" là quyết định không nên thay họ - DB nào còn tên
+trùng thì `verify_required_indexes()` sẽ nêu index bị thiếu để tự sửa.
+
+### 7. Kiểm trùng ở service không thay được ràng buộc ở DB
+
+Giữa lúc service kiểm trùng và lúc ghi vẫn có khe cho hai request cùng lọt.
+Unique index chặn được nhưng ném `IntegrityError` → 500. `_ghi_bat_trung()`
+trong `catalog_service` bọc **cả `flush()` lẫn `commit()`** (create flush để lấy
+id nên INSERT chạy ở đó; update không flush nên UPDATE chạy lúc commit) và chỉ
+dịch những ràng buộc có tên trong `_RANG_BUOC_DUY_NHAT` thành 400. Mọi
+`IntegrityError` khác vẫn ném tiếp - lỗi lập trình phải lộ ra, không được giấu.
+
+Cách nhận biết dựa vào chuỗi thông báo của SQLite; đổi database khác là phải
+sửa lại bảng khóa đó.
+
+### 8. Đơn hàng định danh sản phẩm bằng `product_id`
+
+`OrderItemCreate` nhận cả `product_id` và `product_name`; `product_id` được ưu
+tiên, `product_name` chỉ dùng khi thiếu id (client cũ). `resolve_items` **luôn**
+lọc kèm `shop_id` kể cả khi tra theo id - thiếu điều kiện đó thì đoán id là đặt
+được hàng của shop khác. Giỏ hàng ở POS cũng gộp dòng theo `product_id`, không
+theo tên.
 
 ### 6. Không dùng `.subquery()` cho `in_()` trong SQLAlchemy 2.0
 

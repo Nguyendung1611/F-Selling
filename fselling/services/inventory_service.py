@@ -1,7 +1,7 @@
 """Kiểm tra và trừ tồn kho. Giá LUÔN lấy từ database, không tin client."""
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -9,40 +9,65 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..schemas.order import OrderItemCreate
 
+# Cách định danh một dòng hàng: ("id", 7) hoặc ("name", "Sữa tươi").
+# Gom theo khóa này thay vì theo tên trần để hai sản phẩm trùng tên không bị
+# cộng dồn vào cùng một dòng.
+KhoaSanPham = Tuple[str, Any]
 
-def collect_quantities(items: Iterable[OrderItemCreate]) -> Dict[str, int]:
-    """Gom số lượng theo tên sản phẩm; từ chối số lượng <= 0."""
-    wanted: Dict[str, int] = {}
+
+def _khoa_cua(item: OrderItemCreate) -> KhoaSanPham:
+    if item.product_id is not None:
+        return ("id", item.product_id)
+    ten = (item.product_name or "").strip()
+    if not ten:
+        raise HTTPException(
+            status_code=400,
+            detail="Dòng hàng phải có product_id hoặc product_name",
+        )
+    return ("name", ten)
+
+
+def collect_quantities(items: Iterable[OrderItemCreate]) -> Dict[KhoaSanPham, int]:
+    """Gom số lượng theo từng sản phẩm; từ chối số lượng <= 0."""
+    wanted: Dict[KhoaSanPham, int] = {}
     for item in items:
         if item.quantity is None or item.quantity <= 0:
             raise HTTPException(status_code=400, detail="Số lượng sản phẩm không hợp lệ")
-        wanted[item.product_name] = wanted.get(item.product_name, 0) + item.quantity
+        khoa = _khoa_cua(item)
+        wanted[khoa] = wanted.get(khoa, 0) + item.quantity
     return wanted
 
 
 def resolve_items(
-    db: Session, shop_id: int, wanted: Dict[str, int]
+    db: Session, shop_id: int, wanted: Dict[KhoaSanPham, int]
 ) -> Tuple[List[Tuple[models.Product, int]], float]:
-    """Tra sản phẩm trong DB, kiểm tra tồn kho, tính subtotal theo giá DB."""
+    """Tra sản phẩm trong DB, kiểm tra tồn kho, tính subtotal theo giá DB.
+
+    Mọi truy vấn đều bị chặn trong `shop_id` của đơn, kể cả khi client gửi
+    `product_id`: thiếu điều kiện đó thì đoán id là đặt được hàng của shop khác.
+    """
     resolved: List[Tuple[models.Product, int]] = []
     subtotal = 0.0
-    for product_name, qty in wanted.items():
-        prod = (
-            db.query(models.Product)
-            .filter(
-                models.Product.name == product_name,
-                models.Product.shop_id == shop_id,
-                models.Product.is_active == True,  # noqa: E712 - SQLAlchemy cần so sánh ==
-            )
-            .first()
+    for (loai, gia_tri), qty in wanted.items():
+        query = db.query(models.Product).filter(
+            models.Product.shop_id == shop_id,
+            models.Product.is_active == True,  # noqa: E712 - SQLAlchemy cần so sánh ==
         )
+        if loai == "id":
+            query = query.filter(models.Product.id == gia_tri)
+            nhan = f"id={gia_tri}"
+        else:
+            query = query.filter(models.Product.name == gia_tri)
+            nhan = f"'{gia_tri}'"
+
+        prod = query.first()
         if not prod:
             raise HTTPException(
-                status_code=404, detail=f"Sản phẩm '{product_name}' không tồn tại hoặc đã ẩn"
+                status_code=404, detail=f"Sản phẩm {nhan} không tồn tại hoặc đã ẩn"
             )
         if prod.stock < qty:
             raise HTTPException(
-                status_code=400, detail=f"Sản phẩm '{product_name}' không đủ tồn kho"
+                status_code=400, detail=f"Sản phẩm '{prod.name}' không đủ tồn kho"
             )
         subtotal += prod.price * qty
         resolved.append((prod, qty))

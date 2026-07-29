@@ -150,16 +150,19 @@ BarcodeScanner.batDau(xuLyQuetPOS);
 
 // Trả về true nếu thực sự thêm được. Lượt quét dựa vào kết quả này để bíp đúng:
 // bíp "xong" trong khi hàng không vào giỏ là kiểu sai nguy hiểm nhất ở quầy.
+//
+// Dòng trong giỏ được gộp theo product_id chứ không theo tên: hai sản phẩm khác
+// nhau mà trùng tên từng bị cộng dồn vào một dòng, tính tiền sai.
 function addToCart(p) {
     try {
         if(!cart) cart = [];
         if(p.stock <= 0) { showToast("Sản phẩm đã hết hàng!"); return false; }
-        const existing = cart.find(i => i.product_name === p.name);
+        const existing = cart.find(i => i.product_id === p.id);
         if(existing) {
             if(existing.quantity >= p.stock) { showToast("Vượt quá số lượng tồn kho!"); return false; }
             existing.quantity++;
         }
-        else cart.push({ product_name: p.name, price: p.price, quantity: 1, max_stock: p.stock });
+        else cart.push({ product_id: p.id, product_name: p.name, price: p.price, quantity: 1, max_stock: p.stock });
         calcCart();
         return true;
     } catch (err) {
@@ -268,7 +271,9 @@ async function checkout() {
     if(cart.length === 0) return showToast("Giỏ hàng trống!");
     try {
         const body = {
-            items: cart.map(i => ({product_name: i.product_name, price: i.price, quantity: i.quantity})),
+            // Gửi kèm product_name để hóa đơn/log vẫn đọc được nếu cần đối chiếu,
+            // nhưng server định danh sản phẩm bằng product_id.
+            items: cart.map(i => ({product_id: i.product_id, product_name: i.product_name, price: i.price, quantity: i.quantity})),
             voucher_code: currentVoucher,
             payment_method: paymentMethod
         };

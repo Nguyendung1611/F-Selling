@@ -4,7 +4,19 @@ from pydantic import BaseModel
 
 
 class OrderItemCreate(BaseModel):
-    product_name: str
+    """Một dòng hàng do client gửi lên.
+
+    `product_id` là cách định danh chuẩn. `product_name` được giữ lại cho client
+    cũ và chỉ dùng khi không có `product_id`: khớp theo tên không tin cậy vì tên
+    có thể đổi, và trước đây hai sản phẩm trùng tên là gộp nhầm dòng.
+    Phải có ít nhất một trong hai (kiểm ở `inventory_service`).
+
+    `price` được nhận nhưng KHÔNG dùng để tính tiền - giá luôn lấy lại từ
+    database, không tin giá client gửi.
+    """
+
+    product_id: Optional[int] = None
+    product_name: Optional[str] = None
     price: float
     quantity: int
 
