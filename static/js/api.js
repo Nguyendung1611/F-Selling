@@ -25,6 +25,27 @@ function moTaTrangThaiDon(status) {
     return NHAN_TRANG_THAI_DON[status] || { label: status, color: '#94A3B8' };
 }
 
+/**
+ * Đổi mốc thời gian do server trả về thành giờ địa phương đọc được.
+ *
+ * Server lưu bằng `datetime.utcnow()` nên chuỗi trả về là giờ UTC nhưng KHÔNG
+ * kèm ký hiệu múi giờ, ví dụ "2026-07-29T18:41:52". Trình duyệt gặp chuỗi kiểu
+ * đó sẽ hiểu là giờ địa phương, nên giờ hiển thị bị lệch đúng bằng múi giờ máy
+ * - ở Việt Nam là 7 tiếng, khiến đơn bán buổi tối bị ghi lùi sang hôm trước.
+ * Thêm "Z" để trình duyệt hiểu đúng là UTC rồi tự quy về giờ máy.
+ *
+ * Chuỗi đã có sẵn múi giờ ("Z" hoặc "+07:00") thì giữ nguyên.
+ */
+function dinhDangNgayGio(chuoi) {
+    if (!chuoi) return '';
+    let s = String(chuoi);
+    const daCoMuiGio = /(Z|[+-]\d{2}:?\d{2})$/.test(s);
+    if (!daCoMuiGio) s += 'Z';
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return String(chuoi);
+    return d.toLocaleString('vi-VN');
+}
+
 // Ghi đè localStorage.setItem để cập nhật cachedToken riêng cho tab này
 const originalSetItem = localStorage.setItem;
 localStorage.setItem = function(key, value) {

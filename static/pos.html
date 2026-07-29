@@ -127,6 +127,12 @@
                 <button class="btn-success" style="width: 100%; margin-top: 1rem; padding: 0.75rem;" onclick="confirmPayment()"><i class="ph ph-hand-coins"></i> Xác nhận Đã Nhận Tiền</button>
                 <button class="btn-outline" style="width: 100%; margin-top: 0.5rem; padding: 0.75rem;" onclick="cancelOrder()"><i class="ph ph-x-circle"></i> Hủy đơn &amp; Hoàn kho</button>
             </div>
+
+            <!-- Hóa đơn hiện sau khi thanh toán xong -->
+            <div id="hoaDonSection" style="display: none; background:#F8FAFC; color:#0F172A; border-radius:10px; padding:1rem; margin-top:1rem;">
+                <div id="hoaDonNoiDung"></div>
+                <button class="btn-outline" style="width:100%; margin-top:1rem; padding:0.7rem;" onclick="dongHoaDon()"><i class="ph ph-plus-circle"></i> Đơn mới</button>
+            </div>
         </div>
     </div>
 

@@ -55,7 +55,7 @@ async function loadLogs() {
         const tbody = document.getElementById('logList');
         tbody.innerHTML = '';
         data.forEach(item => {
-            const dt = new Date(item.created_at).toLocaleString('vi-VN');
+            const dt = dinhDangNgayGio(item.created_at);
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td>#${item.id}</td>

@@ -153,7 +153,7 @@ async function loadDashboardShop(id) {
         tbody.innerHTML = '';
         res.orders.forEach(o => {
             const hienThi = window.moTaTrangThaiDon(o.status);
-            const dt = new Date(o.date).toLocaleString('vi-VN');
+            const dt = dinhDangNgayGio(o.date);
             tbody.innerHTML += `<tr>
                 <td><strong>#${o.id}</strong></td>
                 <td>${dt}</td>
@@ -1245,7 +1245,7 @@ async function xemChiTietDon(orderId) {
         document.getElementById('odMaDon').innerText = `#${d.id}`;
 
         const tt = window.moTaTrangThaiDon(d.status);
-        const ngay = new Date(d.created_at).toLocaleString('vi-VN');
+        const ngay = dinhDangNgayGio(d.created_at);
         const pttt = d.payment_method === 'cash' ? 'Tiền mặt' : 'Chuyển khoản';
         document.getElementById('odThongTin').innerText =
             `${ngay} • ${pttt} • ${tt.label}`;
@@ -1471,7 +1471,7 @@ async function xemLichSuKhach(id) {
         } else {
             d.orders.forEach(o => {
                 const tt = window.moTaTrangThaiDon(o.status);
-                const ngay = new Date(o.date).toLocaleString('vi-VN');
+                const ngay = dinhDangNgayGio(o.date);
                 tbody.innerHTML += `<tr>
                     <td><strong>#${o.id}</strong></td>
                     <td>${ngay}</td>

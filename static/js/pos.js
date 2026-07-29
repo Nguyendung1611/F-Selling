@@ -235,10 +235,13 @@ function updateUI() {
     const container = document.getElementById('cartContainer');
     container.innerHTML = '';
     cart.forEach((item, index) => {
+        // Hiện cả phép nhân lẫn thành tiền: quét nhanh nhiều món thì không ai
+        // nhớ đã quét mấy lần món nào, nhìn thành tiền là thấy ngay bất thường.
+        const thanhTien = item.price * item.quantity;
         container.innerHTML += `
             <div class="cart-item">
                 <div style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #F8FAFC;" title="${escapeHtml(item.product_name)}">${escapeHtml(item.product_name)}</div>
-                <div style="color: var(--success);">${item.price.toLocaleString()}</div>
+                <div><span style="color:#94A3B8;">${item.price.toLocaleString()} × ${item.quantity} =</span> <span style="color: var(--success); font-weight: 700;">${thanhTien.toLocaleString()} ₫</span></div>
                 <div style="display: flex; gap: 0.3rem; align-items: center; color: white;">
                     <button class="btn-qty" onclick="updateQty(${index}, -1)">-</button>
                     <span>${item.quantity}</span>
@@ -269,6 +272,21 @@ let paymentPollingInterval = null;
 
 async function checkout() {
     if(cart.length === 0) return showToast("Giỏ hàng trống!");
+
+    // Xác nhận trước khi chốt. Tạo đơn là TRỪ TỒN KHO ngay, và với tiền mặt còn
+    // thu tiền luôn - không có bước quay lại. Khi quét mã vạch, quét thừa một
+    // món rất dễ xảy ra mà danh sách lại cuộn nên khó thấy, nên bắt buộc phải
+    // có một lần đối chiếu tổng số món và tổng tiền bằng mắt.
+    const soMon = cart.reduce((n, i) => n + i.quantity, 0);
+    const tenPTTT = paymentMethod === 'cash' ? 'Tiền mặt' : 'Chuyển khoản (VietQR)';
+    const dongTomTat = cart.map(i => `  ${i.product_name}  ${i.price.toLocaleString()} × ${i.quantity}`).join('\n');
+    if (!confirm(
+        `Chốt đơn ${cart.length} mặt hàng (${soMon} món)?\n\n`
+        + `${dongTomTat}\n\n`
+        + `TỔNG CẦN THU: ${total.toLocaleString()} đ\n`
+        + `Thanh toán: ${tenPTTT}`
+    )) return;
+
     try {
         const body = {
             // Gửi kèm product_name để hóa đơn/log vẫn đọc được nếu cần đối chiếu,
@@ -289,20 +307,23 @@ async function checkout() {
             startPaymentPolling();
         } else {
             // Tiền mặt -> auto pay for simplicity or just show success
-            await apiCall(`/orders/${currentOrderId}/pay`, 'POST');
+            const idDon = currentOrderId;
+            await apiCall(`/orders/${idDon}/pay`, 'POST');
             showToast("Thu tiền mặt thành công!");
-            resetPOS();
+            await hienHoaDon(idDon);
         }
     } catch (e) { showToast(e.message); }
 }
 
 async function confirmPayment() {
     if(!currentOrderId) return;
+    // Giữ lại id trước khi reset xóa mất, để còn tải hóa đơn.
+    const idDon = currentOrderId;
     try {
-        await apiCall(`/orders/${currentOrderId}/pay`, 'POST');
+        await apiCall(`/orders/${idDon}/pay`, 'POST');
         stopPaymentPolling();
         showToast("Đã xác nhận tiền vào tài khoản!");
-        resetPOS();
+        await hienHoaDon(idDon);
     } catch (e) { showToast(e.message); }
 }
 
@@ -325,12 +346,13 @@ function startPaymentPolling() {
     stopPaymentPolling();
     paymentPollingInterval = setInterval(async () => {
         if(!currentOrderId) return stopPaymentPolling();
+        const idDon = currentOrderId;
         try {
-            const statusRes = await apiCall(`/orders/${currentOrderId}`);
+            const statusRes = await apiCall(`/orders/${idDon}`);
             if(statusRes.status === 'PAID') {
                 stopPaymentPolling();
                 showToast('Thanh toán chuyển khoản thành công!');
-                resetPOS();
+                await hienHoaDon(idDon);
             } else if(statusRes.status === 'CANCELLED') {
                 // Đơn có thể bị hủy tự động do quá hạn thanh toán
                 stopPaymentPolling();
@@ -354,8 +376,73 @@ function stopPaymentPolling() {
     }
 }
 
+// ===== Hóa đơn sau khi thanh toán =====
+
+/**
+ * Tải chi tiết đơn rồi hiện hóa đơn trên màn hình.
+ *
+ * Gọi `resetPOS()` TRƯỚC khi vẽ: reset dọn giỏ hàng và ẩn khối hóa đơn cũ, nên
+ * vẽ sau thì tờ hóa đơn vừa tạo mới không bị dọn mất. Quầy cũng sẵn sàng cho
+ * khách tiếp theo ngay trong lúc hóa đơn còn hiển thị.
+ */
+async function hienHoaDon(orderId) {
+    if (!orderId) return resetPOS();
+    let d = null;
+    try {
+        d = await apiCall(`/orders/${orderId}/detail`);
+    } catch (e) {
+        resetPOS();
+        return showToast(`Đã thanh toán đơn #${orderId}, nhưng không tải được hóa đơn: ${e.message}`);
+    }
+    resetPOS();
+    veHoaDon(d);
+    document.getElementById('hoaDonSection').style.display = 'block';
+}
+
+function veHoaDon(d) {
+    const nhanVien = localStorage.getItem('username') || '—';
+    const pttt = d.payment_method === 'cash' ? 'Tiền mặt' : 'Chuyển khoản';
+
+    const dongHang = (d.items || []).map(i => `
+        <tr>
+            <td style="padding:0.25rem 0;">${escapeHtml(i.product_name)}<br>
+                <span style="color:#64748B; font-size:0.8rem;">${(i.price || 0).toLocaleString()} × ${i.quantity}</span></td>
+            <td style="padding:0.25rem 0; text-align:right; white-space:nowrap; font-weight:600;">${(i.line_total || 0).toLocaleString()} ₫</td>
+        </tr>`).join('');
+
+    let tongKet = `<div style="display:flex; justify-content:space-between;"><span>Tạm tính</span><span>${(d.subtotal || 0).toLocaleString()} ₫</span></div>`;
+    if (d.discount_amount > 0) {
+        const ma = d.voucher_code ? ` (${escapeHtml(d.voucher_code)})` : '';
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#B45309;"><span>Giảm giá${ma}</span><span>- ${d.discount_amount.toLocaleString()} ₫</span></div>`;
+    }
+    tongKet += `<div style="display:flex; justify-content:space-between; font-size:1.15rem; font-weight:700; margin-top:0.4rem; padding-top:0.4rem; border-top:2px solid #0F172A;"><span>TỔNG CỘNG</span><span>${(d.total_amount || 0).toLocaleString()} ₫</span></div>`;
+
+    document.getElementById('hoaDonNoiDung').innerHTML = `
+        <div style="text-align:center; border-bottom:1px dashed #94A3B8; padding-bottom:0.6rem; margin-bottom:0.6rem;">
+            <div style="font-weight:700; font-size:1.05rem;">${escapeHtml(d.shop_name || '')}</div>
+            <div style="font-size:0.9rem;">HÓA ĐƠN BÁN HÀNG</div>
+        </div>
+        <div style="font-size:0.85rem; line-height:1.7; margin-bottom:0.6rem;">
+            <div><b>Số đơn:</b> #${d.id}</div>
+            <div><b>Thời gian:</b> ${dinhDangNgayGio(d.created_at)}</div>
+            <div><b>Nhân viên:</b> ${escapeHtml(nhanVien)}</div>
+            <div><b>Thanh toán:</b> ${pttt}</div>
+            ${d.customer ? `<div><b>Khách hàng:</b> ${escapeHtml(d.customer.name)} (${escapeHtml(d.customer.phone)})</div>` : ''}
+        </div>
+        <table style="width:100%; border-collapse:collapse; font-size:0.88rem; border-top:1px dashed #94A3B8; border-bottom:1px dashed #94A3B8;">
+            ${dongHang}
+        </table>
+        <div style="margin-top:0.6rem; font-size:0.92rem;">${tongKet}</div>
+        <div style="text-align:center; margin-top:0.7rem; font-size:0.8rem; color:#64748B;">Cảm ơn quý khách!</div>`;
+}
+
+function dongHoaDon() {
+    document.getElementById('hoaDonSection').style.display = 'none';
+}
+
 function resetPOS() {
     stopPaymentPolling();
+    dongHoaDon();
     cart = [];
     currentVoucher = null;
     document.getElementById('voucherInput').value = '';
