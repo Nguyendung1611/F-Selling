@@ -190,7 +190,23 @@ Camera đọc lại cùng một mã ở mọi khung hình. Nếu chỉ chờ h�
 nhận lại thì để yên máy vài giây là món hàng bị cộng thêm mấy lần - tính thừa
 tiền mà không ai để ý. Xem `NGUONG_ROI_KHUNG_MS` trong `barcode-camera.js`.
 
-### 9. Đơn hàng định danh sản phẩm bằng `product_id`
+### 9. Kiểm kê: ba nguyên tắc không được phá
+
+`apply_stocktake()` đặt tồn kho bằng số đếm thực tế. Ba điều bắt buộc giữ:
+
+1. **Chỉ đụng vào sản phẩm có trong phiếu.** Sản phẩm không đếm tới giữ nguyên
+   tồn, KHÔNG coi là 0 - quên quét một kệ mà bị xóa sạch tồn thì tai hại hơn
+   nhiều so với kiểm kê thiếu.
+2. **Dòng nào tồn kho đã đổi so với lúc bắt đầu đếm thì bỏ qua và báo lại.**
+   Bán hàng vẫn chạy song song khi đang kiểm kê; ghi đè lúc đó sẽ hồi sinh số
+   hàng vừa bán. Máy khách gửi kèm `stock_snapshot` để server so.
+3. **Không nhận số đếm âm.**
+
+Máy quét USB bắt phím ở tầm `document` nên `xuLyQuetSeller()` phải tự phân
+biệt: tab Kiểm Kê đang mở thì mã vào phiếu đếm, ngược lại mới đi đường
+nhập/xuất kho.
+
+### 10. Đơn hàng định danh sản phẩm bằng `product_id`
 
 `OrderItemCreate` nhận cả `product_id` và `product_name`; `product_id` được ưu
 tiên, `product_name` chỉ dùng khi thiếu id (client cũ). `resolve_items` **luôn**

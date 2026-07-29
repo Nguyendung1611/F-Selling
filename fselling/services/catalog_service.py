@@ -501,6 +501,112 @@ def update_product(
     return prod
 
 
+def apply_stocktake(
+    db: Session, current_user: models.User, shop_id: int, items: List[Any]
+) -> Dict[str, Any]:
+    """Áp dụng kết quả kiểm kê: đặt tồn kho bằng số đếm được thực tế.
+
+    Ba nguyên tắc an toàn:
+
+    1. CHỈ đụng vào sản phẩm có trong danh sách gửi lên. Sản phẩm không đếm tới
+       được giữ nguyên, KHÔNG coi là tồn 0 - quên quét một kệ hàng mà bị xóa
+       sạch tồn kho thì tai hại hơn nhiều so với việc kiểm kê thiếu.
+
+    2. Dòng nào có tồn kho đã đổi so với lúc bắt đầu đếm thì BỎ QUA và báo lại.
+       Bán hàng vẫn chạy song song khi đang kiểm kê; ghi đè lúc đó sẽ nuốt mất
+       số hàng vừa bán. Không đoán - trả về để người dùng đếm lại đúng sản phẩm
+       đó.
+
+    3. Không cho số đếm âm.
+    """
+    _require_shop_operator_403(db, shop_id, current_user)
+
+    if not items:
+        raise HTTPException(status_code=400, detail="Chưa có sản phẩm nào được đếm")
+
+    ids = [it.product_id for it in items]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(
+            status_code=400, detail="Một sản phẩm xuất hiện nhiều lần trong phiếu kiểm kê"
+        )
+    for it in items:
+        if it.counted < 0:
+            raise HTTPException(status_code=400, detail="Số đếm không được âm")
+
+    san_pham = {
+        p.id: p
+        for p in db.query(models.Product)
+        .filter(models.Product.shop_id == shop_id, models.Product.id.in_(ids))
+        .all()
+    }
+
+    da_dieu_chinh: List[Dict[str, Any]] = []
+    bo_qua: List[Dict[str, Any]] = []
+    khong_doi = 0
+
+    for it in items:
+        prod = san_pham.get(it.product_id)
+        if prod is None:
+            bo_qua.append({
+                "product_id": it.product_id,
+                "name": None,
+                "ly_do": "Sản phẩm không còn tồn tại trong cửa hàng",
+            })
+            continue
+
+        ton_hien_tai = prod.stock or 0
+        if ton_hien_tai != it.stock_snapshot:
+            bo_qua.append({
+                "product_id": prod.id,
+                "name": prod.name,
+                "ly_do": (
+                    f"Tồn kho đã đổi từ {it.stock_snapshot} thành {ton_hien_tai} "
+                    "trong lúc kiểm kê. Vui lòng đếm lại sản phẩm này."
+                ),
+            })
+            continue
+
+        if ton_hien_tai == it.counted:
+            khong_doi += 1
+            continue
+
+        lech = it.counted - ton_hien_tai
+        prod.stock = it.counted
+        da_dieu_chinh.append({
+            "product_id": prod.id,
+            "name": prod.name,
+            "truoc": ton_hien_tai,
+            "sau": it.counted,
+            "lech": lech,
+        })
+
+    db.commit()
+
+    if da_dieu_chinh:
+        tong_lech = sum(d["lech"] for d in da_dieu_chinh)
+        # Liệt kê tối đa 10 sản phẩm để một phiếu kiểm kê lớn không sinh ra
+        # dòng log dài vô hạn; con số tổng vẫn phản ánh đủ.
+        chi_tiet = ", ".join(
+            f"{d['name']}: {d['truoc']}->{d['sau']}" for d in da_dieu_chinh[:10]
+        )
+        if len(da_dieu_chinh) > 10:
+            chi_tiet += f" (và {len(da_dieu_chinh) - 10} SP khác)"
+        log_system_action(
+            db,
+            current_user.id,
+            "STOCKTAKE",
+            f"Kiểm kê shop {shop_id}: điều chỉnh {len(da_dieu_chinh)} SP, "
+            f"lệch tổng {tong_lech:+d}. {chi_tiet}",
+        )
+
+    return {
+        "da_dieu_chinh": da_dieu_chinh,
+        "bo_qua": bo_qua,
+        "khong_doi": khong_doi,
+        "tong_lech": sum(d["lech"] for d in da_dieu_chinh),
+    }
+
+
 _ADJUST_STOCK = text(
     "UPDATE products SET stock = stock + :delta "
     "WHERE id = :product_id AND stock + :delta >= 0"

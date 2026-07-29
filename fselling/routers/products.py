@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..dependencies import get_current_user, get_db
-from ..schemas.catalog import StockAdjust
+from ..schemas.catalog import StockAdjust, StocktakeApply
 from ..services import catalog_service
 
 router = APIRouter(prefix="/api/products", tags=["products"])
@@ -109,6 +109,16 @@ def adjust_stock(
     current_user: models.User = Depends(get_current_user),
 ):
     return catalog_service.adjust_stock(db, current_user, product_id, payload.delta)
+
+
+@router.post("/{shop_id}/stocktake")
+def apply_stocktake(
+    shop_id: int,
+    payload: StocktakeApply,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return catalog_service.apply_stocktake(db, current_user, shop_id, payload.items)
 
 
 @router.put("/{product_id}/status")

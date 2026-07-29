@@ -27,6 +27,7 @@
         <div class="tabs-wrapper">
             <button class="tab-btn active" onclick="switchTab('dashboard')"><i class="ph ph-chart-bar"></i> Thống Kê</button>
             <button class="tab-btn" onclick="switchTab('warehouse')"><i class="ph ph-package"></i> Kho Hàng</button>
+            <button class="tab-btn" onclick="switchTab('kiemke')"><i class="ph ph-clipboard-text"></i> Kiểm Kê</button>
             <button class="tab-btn" onclick="switchTab('voucher')"><i class="ph ph-ticket"></i> Khuyến Mãi</button>
             <button class="tab-btn" onclick="switchTab('customers')"><i class="ph ph-users"></i> Khách Hàng</button>
             <button class="tab-btn" onclick="switchTab('settings')"><i class="ph ph-sliders"></i> Cài Đặt</button>
@@ -259,6 +260,50 @@
         </div>
 
         <!-- TAB 3: VOUCHER -->
+        <!-- ========== KIỂM KÊ ========== -->
+        <div id="kiemke" class="tab-content glass-card">
+            <div id="kkShopSelector" style="margin-bottom: 2rem;">
+                <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> Chọn Cửa Hàng Để Kiểm Kê</h3>
+                <div id="kkShopList" style="display: flex; gap: 1rem; flex-wrap: wrap;"></div>
+            </div>
+
+            <div id="kkContent" style="display: none;">
+                <h3 style="color: var(--primary);">Kiểm kê: <span id="kkShopName"></span></h3>
+
+                <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin: 1.25rem 0;">
+                    <button class="btn-outline" onclick="kkQuetCamera()" style="padding: 0.5rem 1rem;"><i class="ph ph-camera"></i> Quét bằng camera</button>
+                    <div class="input-wrapper" style="margin: 0; min-width: 240px;">
+                        <i class="ph ph-barcode"></i>
+                        <input type="text" id="kkNhapTay" placeholder="Hoặc gõ mã rồi Enter" onkeydown="if(event.key==='Enter'){kkNhapMaTay();event.preventDefault();}">
+                    </div>
+                    <button class="btn-outline" onclick="kkXoaHet()" style="padding: 0.5rem 1rem; color:#ef4444;"><i class="ph ph-trash"></i> Xóa phiếu</button>
+                </div>
+
+                <div style="background:#0F172A; border:1px solid var(--border-color); border-radius:10px; padding:0.85rem 1rem; margin-bottom:1rem; color:#CBD5E1; font-size:0.87rem; line-height:1.55;">
+                    Quét mã vạch để đếm — mỗi lần quét cộng 1. Máy quét USB dùng được ngay, không cần bấm gì.
+                    <br>Sản phẩm <b>không có trong phiếu sẽ được giữ nguyên tồn kho</b>, không bị coi là hết hàng.
+                </div>
+
+                <div style="display:flex; gap:1.5rem; flex-wrap:wrap; margin-bottom:1rem; font-size:0.9rem;">
+                    <span>Đã đếm: <b id="kkSoSP">0</b> sản phẩm</span>
+                    <span style="color:#ef4444;">Thiếu: <b id="kkSoThieu">0</b></span>
+                    <span style="color:var(--success);">Thừa: <b id="kkSoThua">0</b></span>
+                    <span>Khớp: <b id="kkSoKhop">0</b></span>
+                </div>
+
+                <div class="table-responsive-product" style="max-height: 420px; overflow-y: auto;">
+                    <table class="db-table">
+                        <thead><tr><th>Sản phẩm</th><th>Tồn hệ thống</th><th>Đếm thực tế</th><th>Lệch</th><th>Bỏ</th></tr></thead>
+                        <tbody id="kkList"></tbody>
+                    </table>
+                </div>
+
+                <div id="kkKetQua" style="display:none; margin-top:1rem; padding:0.85rem 1rem; border-radius:10px; font-size:0.88rem; line-height:1.6;"></div>
+
+                <button id="kkBtnApDung" onclick="kkApDung()" style="width:100%; margin-top:1rem;" disabled><i class="ph ph-check-circle"></i> Áp dụng điều chỉnh tồn kho</button>
+            </div>
+        </div>
+
         <div id="voucher" class="tab-content glass-card">
             <div id="voucherShopSelector" style="margin-bottom: 2rem;">
                 <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> Chọn Cửa Hàng Quản Lý Khuyến Mãi</h3>

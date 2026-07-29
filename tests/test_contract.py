@@ -71,6 +71,7 @@ ROUTES_BO_SUNG = {
     ("DELETE", "/api/customers/member/{customer_id}"),  # C2b: xóa khách
     ("GET", "/api/customers/member/{customer_id}/history"),  # C2c: lịch sử mua
     ("GET", "/api/products/{shop_id}/barcode/{barcode}"),  # B1a: tra SP theo mã vạch
+    ("POST", "/api/products/{shop_id}/stocktake"),  # B4: áp dụng kết quả kiểm kê
 }
 
 

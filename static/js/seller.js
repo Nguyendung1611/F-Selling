@@ -109,6 +109,16 @@ function renderShopSelectors() {
             whList.appendChild(btn2);
         }
 
+        // Kiểm kê
+        const kkList = document.getElementById('kkShopList');
+        if(kkList) {
+            const btnKK = document.createElement('button');
+            btnKK.className = currentShopId === s.id ? 'btn-primary' : 'btn-outline';
+            btnKK.innerText = s.name;
+            btnKK.onclick = () => { currentShopId = s.id; loadDataForCurrentShop(); };
+            kkList.appendChild(btnKK);
+        }
+
         // Voucher
         if(vouList) {
             const btn3 = document.createElement('button');
@@ -243,12 +253,15 @@ function loadDataForCurrentShop() {
     document.getElementById('dashboardContent').style.display = 'block';
     document.getElementById('warehouseContent').style.display = 'grid';
     document.getElementById('voucherContent').style.display = 'grid';
+    document.getElementById('kkContent').style.display = 'block';
     document.getElementById('noShopMsg').style.display = 'none';
     
     const shop = allShops.find(s => s.id === currentShopId);
     document.getElementById('currentShopName').innerText = shop.name;
     document.getElementById('whShopName').innerText = shop.name;
     document.getElementById('vcShopName').innerText = shop.name;
+    document.getElementById('kkShopName').innerText = shop.name;
+    kkXoaHet();   // đổi shop thì phiếu đếm của shop cũ không còn nghĩa lý gì
     
     // Clear inputs for new shop
     document.getElementById('prodCode').value = '';
@@ -686,7 +699,161 @@ function xuLyQuetKho(ma) {
     nhapXuatKho(sp.id);
 }
 
-BarcodeScanner.batDau(xuLyQuetKho);
+// ===== Kiểm kê =====
+
+// Phiếu đếm đang mở: product_id -> { counted, stock_snapshot, name }
+// `stock_snapshot` là tồn kho lúc sản phẩm này được đếm LẦN ĐẦU. Server so lại
+// với tồn hiện tại lúc áp dụng; lệch nghĩa là có bán/nhập xen vào giữa và dòng
+// đó bị bỏ qua thay vì ghi đè làm mất số hàng vừa bán.
+let phieuKiemKe = {};
+
+function _kiemKeDangMo() {
+    const tab = document.getElementById('kiemke');
+    return !!tab && tab.classList.contains('active');
+}
+
+function kkDem(sp, soLuong) {
+    const cu = phieuKiemKe[sp.id];
+    if (cu) {
+        cu.counted += soLuong;
+        if (cu.counted < 0) cu.counted = 0;
+    } else {
+        phieuKiemKe[sp.id] = {
+            counted: Math.max(0, soLuong),
+            stock_snapshot: sp.stock,
+            name: sp.name
+        };
+    }
+    kkVeBang();
+}
+
+function kkDatSo(id, giaTri) {
+    const dong = phieuKiemKe[id];
+    if (!dong) return;
+    const n = parseInt(giaTri, 10);
+    dong.counted = (isNaN(n) || n < 0) ? 0 : n;
+    kkVeBang();
+}
+
+function kkBo(id) {
+    delete phieuKiemKe[id];
+    kkVeBang();
+}
+
+function kkXoaHet() {
+    phieuKiemKe = {};
+    const kq = document.getElementById('kkKetQua');
+    if (kq) kq.style.display = 'none';
+    kkVeBang();
+}
+
+function kkVeBang() {
+    const tbody = document.getElementById('kkList');
+    if (!tbody) return;
+    const cacDong = Object.entries(phieuKiemKe);
+    tbody.innerHTML = '';
+
+    let thieu = 0, thua = 0, khop = 0;
+    cacDong.forEach(([id, d]) => {
+        const lech = d.counted - d.stock_snapshot;
+        if (lech < 0) thieu++; else if (lech > 0) thua++; else khop++;
+        const mau = lech < 0 ? '#ef4444' : (lech > 0 ? 'var(--success)' : '#94A3B8');
+        tbody.innerHTML += `<tr>
+            <td>${escapeHtml(d.name)}</td>
+            <td>${d.stock_snapshot}</td>
+            <td><input type="number" min="0" value="${d.counted}" onchange="kkDatSo(${id}, this.value)"
+                       style="width:80px; padding:0.3rem; border-radius:6px; border:1px solid #334155; background:#0F172A; color:#F8FAFC;"></td>
+            <td style="color:${mau}; font-weight:600;">${lech > 0 ? '+' : ''}${lech}</td>
+            <td><button class="btn-outline" onclick="kkBo(${id})" style="padding:0.2rem 0.5rem; color:#ef4444;"><i class="ph ph-x"></i></button></td>
+        </tr>`;
+    });
+
+    document.getElementById('kkSoSP').innerText = cacDong.length;
+    document.getElementById('kkSoThieu').innerText = thieu;
+    document.getElementById('kkSoThua').innerText = thua;
+    document.getElementById('kkSoKhop').innerText = khop;
+    document.getElementById('kkBtnApDung').disabled = cacDong.length === 0;
+}
+
+/** Tìm SP theo mã rồi cộng 1 vào phiếu đếm. */
+function kkQuet(ma) {
+    const sp = currentProducts.find(p => p.barcode && p.barcode.toUpperCase() === ma)
+        || currentProducts.find(p => p.code && p.code.toUpperCase() === ma);
+    if (!sp) {
+        BarcodeScanner.bipLoi();
+        showToast(`Không tìm thấy sản phẩm có mã "${ma}"`);
+        return;
+    }
+    BarcodeScanner.bipOk();
+    kkDem(sp, 1);
+}
+
+function kkNhapMaTay() {
+    const o = document.getElementById('kkNhapTay');
+    const ma = BarcodeScanner.chuanHoa(o.value);
+    if (!ma) return;
+    o.value = '';
+    kkQuet(ma);
+}
+
+function kkQuetCamera() {
+    // Để mở để quét liên tiếp cả kệ hàng, không phải bấm lại từng lần.
+    BarcodeCamera.mo();
+}
+
+async function kkApDung() {
+    const items = Object.entries(phieuKiemKe).map(([id, d]) => ({
+        product_id: parseInt(id, 10),
+        counted: d.counted,
+        stock_snapshot: d.stock_snapshot
+    }));
+    if (!items.length) return;
+
+    const soLech = items.filter(i => i.counted !== i.stock_snapshot).length;
+    if (!confirm(`Áp dụng kiểm kê cho ${items.length} sản phẩm (${soLech} sản phẩm bị lệch)?\n\n`
+        + `Tồn kho sẽ được đặt đúng bằng số đếm thực tế.`)) return;
+
+    try {
+        const res = await apiCall(`/products/${currentShopId}/stocktake`, 'POST', { items });
+        kkHienKetQua(res);
+        phieuKiemKe = {};
+        kkVeBang();
+        loadProducts();
+    } catch (e) {
+        showToast(e.message);
+    }
+}
+
+function kkHienKetQua(res) {
+    const box = document.getElementById('kkKetQua');
+    const boQua = res.bo_qua || [];
+    box.style.display = 'block';
+    box.style.background = boQua.length ? '#422006' : '#052e16';
+    box.style.border = `1px solid ${boQua.length ? '#a16207' : '#15803d'}`;
+    box.style.color = '#F8FAFC';
+
+    let html = `<b>Đã điều chỉnh ${res.da_dieu_chinh.length} sản phẩm</b>`
+        + ` (lệch tổng ${res.tong_lech > 0 ? '+' : ''}${res.tong_lech}),`
+        + ` ${res.khong_doi} sản phẩm khớp sẵn.`;
+    if (boQua.length) {
+        html += `<br><b style="color:#fbbf24;">${boQua.length} sản phẩm bị bỏ qua:</b><ul style="margin:0.4rem 0 0 1.1rem;">`
+            + boQua.map(b => `<li>${escapeHtml(b.name || ('SP #' + b.product_id))}: ${escapeHtml(b.ly_do)}</li>`).join('')
+            + `</ul>`;
+    }
+    box.innerHTML = html;
+    showToast(boQua.length ? 'Kiểm kê xong, có dòng bị bỏ qua - xem chi tiết bên dưới bảng.'
+                           : 'Đã áp dụng kiểm kê.');
+}
+
+// ===== Định tuyến lượt quét theo tab đang mở =====
+
+/** Máy quét USB bắt ở tầm document nên phải tự phân biệt người dùng đang ở đâu. */
+function xuLyQuetSeller(ma) {
+    if (_kiemKeDangMo()) return kkQuet(ma);
+    return xuLyQuetKho(ma);
+}
+
+BarcodeScanner.batDau(xuLyQuetSeller);
 
 /** Nút camera cạnh ô mã vạch: quét xong điền thẳng vào ô, không đụng tồn kho.
  *  Phải truyền handler riêng vì camera mở lên là ô mất focus, nên `xuLyQuetKho`

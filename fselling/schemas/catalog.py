@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -27,3 +27,21 @@ class VoucherCreate(BaseModel):
 
 class StockAdjust(BaseModel):
     delta: int  # >0 nhập kho, <0 xuất kho
+
+
+class StocktakeItem(BaseModel):
+    """Một dòng đếm thực tế trong phiên kiểm kê.
+
+    `stock_snapshot` là tồn kho mà máy khách nhìn thấy lúc BẮT ĐẦU đếm sản phẩm
+    này. Server so lại với tồn hiện tại: nếu khác nghĩa là có bán hoặc nhập xen
+    vào giữa lúc đếm, và số vừa đếm không còn phản ánh đúng thực tế nữa - dòng
+    đó bị bỏ qua thay vì ghi đè làm mất số hàng vừa bán.
+    """
+
+    product_id: int
+    counted: int
+    stock_snapshot: int
+
+
+class StocktakeApply(BaseModel):
+    items: List[StocktakeItem]
