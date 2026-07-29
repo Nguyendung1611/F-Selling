@@ -688,6 +688,25 @@ function xuLyQuetKho(ma) {
 
 BarcodeScanner.batDau(xuLyQuetKho);
 
+/** Nút camera cạnh ô mã vạch: quét xong điền thẳng vào ô, không đụng tồn kho.
+ *  Phải truyền handler riêng vì camera mở lên là ô mất focus, nên `xuLyQuetKho`
+ *  không còn suy ra được ý định "đang gán mã" như khi dùng máy quét USB. */
+function quetMaVachBangCamera() {
+    BarcodeCamera.mo({
+        dongSauKhiQuet: true,
+        xuLy: (ma) => {
+            document.getElementById('prodBarcode').value = ma;
+            BarcodeScanner.bipOk();
+            showToast(`Đã điền mã vạch: ${ma}`);
+        }
+    });
+}
+
+/** Nút camera trên danh sách: quét xong mở hộp nhập/xuất kho cho SP đó. */
+function quetNhapXuatBangCamera() {
+    BarcodeCamera.mo({ dongSauKhiQuet: true });
+}
+
 function deleteProduct(id) {
     showCustomConfirm(
         "Xác nhận xóa sản phẩm",

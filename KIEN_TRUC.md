@@ -177,7 +177,20 @@ dịch những ràng buộc có tên trong `_RANG_BUOC_DUY_NHAT` thành 400. M�
 Cách nhận biết dựa vào chuỗi thông báo của SQLite; đổi database khác là phải
 sửa lại bảng khóa đó.
 
-### 8. Đơn hàng định danh sản phẩm bằng `product_id`
+### 8. Quét bằng camera: hai cái bẫy đã mất công tìm ra
+
+**Không tự gọi `video.play()` rồi mới đưa cho ZXing.** Hàm
+`decodeFromVideoElementContinuously` chờ sự kiện `canplay`; nếu video đã chạy
+thì sự kiện đó bắn xong rồi và nó chờ mãi - camera hiện hình bình thường nhưng
+không bao giờ quét ra gì. Dùng `decodeFromStream(stream, video, callback)` để
+ZXing tự gắn stream và tự phát.
+
+**Chống quét lặp phải dựa vào "mã rời khỏi khung", không dựa vào thời gian.**
+Camera đọc lại cùng một mã ở mọi khung hình. Nếu chỉ chờ hết một khoảng rồi
+nhận lại thì để yên máy vài giây là món hàng bị cộng thêm mấy lần - tính thừa
+tiền mà không ai để ý. Xem `NGUONG_ROI_KHUNG_MS` trong `barcode-camera.js`.
+
+### 9. Đơn hàng định danh sản phẩm bằng `product_id`
 
 `OrderItemCreate` nhận cả `product_id` và `product_name`; `product_id` được ưu
 tiên, `product_name` chỉ dùng khi thiếu id (client cũ). `resolve_items` **luôn**
