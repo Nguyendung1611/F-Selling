@@ -130,7 +130,35 @@ return obj
 Mặc định vẫn là `python_app/request_log.txt`. Test set `LOG_FILE` sang thư mục
 tạm để không ghi đè log thật.
 
-### 3. Không dùng `.subquery()` cho `in_()` trong SQLAlchemy 2.0
+### 3. Form field rỗng bị FastAPI quy về giá trị mặc định
+
+`Optional[str] = Form(None)` trả về `None` cho **cả hai** trường hợp "form không
+gửi field" và "form gửi field rỗng". Đặt default khác `None` cũng không cứu
+được: field rỗng vẫn rơi về đúng default đó.
+
+Khi cần phân biệt (ví dụ `barcode`: không gửi = giữ nguyên, gửi rỗng = xóa),
+phải đọc lại form thô — xem `routers/products.py::barcode_field`. Dependency đó
+là `async` nhưng endpoint vẫn để `def` đồng bộ: FastAPI giải dependency trên
+event loop rồi chạy endpoint trong threadpool, nên phần gọi database đồng bộ
+không chặn event loop.
+
+### 4. `run_migrations()` nuốt lỗi, nên index bắt buộc phải được kiểm lại
+
+Hàm này bọc mọi câu lệnh trong `except SQLAlchemyError` để chạy lặp lại được.
+Hệ quả: một `CREATE UNIQUE INDEX` thất bại (DB đang có sẵn dữ liệu trùng) sẽ
+**trôi qua im lặng**, app vẫn khởi động, và ràng buộc trùng lặp bị hổng mà
+không ai biết. Thêm index bắt buộc thì phải khai vào `_REQUIRED_INDEXES` để
+`verify_required_indexes()` kiểm lại và in cảnh báo.
+
+### 5. `Product.code` KHÔNG duy nhất
+
+`create_product` sinh mã dạng `SP-<giây>`, nên mọi sản phẩm được tạo trong cùng
+một giây sẽ **trùng mã nội bộ**. Đừng dùng `code` như khóa định danh. Mã vạch
+(`Product.barcode`) mới là mã duy nhất — có unique index `(shop_id, barcode)`.
+Chỗ quét mã ở frontend từ chối hẳn khi mã nội bộ trỏ tới nhiều sản phẩm, thay
+vì đoán bừa một cái.
+
+### 6. Không dùng `.subquery()` cho `in_()` trong SQLAlchemy 2.0
 
 Truyền thẳng `Query` vào `in_()` (SQLAlchemy tự coerce thành scalar subquery);
 gọi `.subquery()` sẽ sinh `SAWarning` về coercion.
