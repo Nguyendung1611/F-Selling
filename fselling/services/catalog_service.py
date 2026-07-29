@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -23,6 +24,79 @@ from ..schemas.catalog import CategoryUpdate
 from .log_service import log_system_action
 
 DEFAULT_PRODUCT_IMAGE = "https://placehold.co/150x150/1E293B/FFF?text=SP"
+
+# Chữ, số và dấu gạch ngang. CỐ Ý không kiểm checksum EAN-13/UPC: rất nhiều shop
+# tự in mã nội bộ dạng Code128 không theo chuẩn EAN, ép checksum sẽ chặn oan.
+_BARCODE_PATTERN = re.compile(r"^[A-Z0-9\-]{4,64}$")
+
+
+def normalize_barcode(raw: Optional[str]) -> Optional[str]:
+    """Chuẩn hóa mã vạch về dạng lưu trong DB, hoặc None nếu bỏ trống.
+
+    Viết hoa toàn bộ để tra cứu không phụ thuộc hoa/thường: người dùng gõ tay
+    'abc-123' và máy quét bắn ra 'ABC-123' phải khớp cùng một sản phẩm.
+    Khoảng trắng bị loại bỏ vì một số máy quét chèn thêm khi đọc mã dài.
+    """
+    if raw is None:
+        return None
+    cleaned = "".join(raw.split()).upper()
+    if not cleaned:
+        return None
+    if not _BARCODE_PATTERN.match(cleaned):
+        raise HTTPException(
+            status_code=400,
+            detail="Mã vạch chỉ gồm chữ, số và dấu gạch ngang, dài 4-64 ký tự",
+        )
+    return cleaned
+
+
+def _ensure_barcode_unique(
+    db: Session,
+    shop_id: int,
+    barcode: Optional[str],
+    exclude_product_id: Optional[int] = None,
+) -> None:
+    """Chặn hai sản phẩm cùng shop dùng chung một mã vạch.
+
+    Có unique index ở tầng DB đỡ phía sau, nhưng kiểm ở đây để báo lỗi nêu rõ
+    sản phẩm nào đang giữ mã, thay vì để IntegrityError bật lên thành 500.
+    """
+    if not barcode:
+        return
+    query = db.query(models.Product).filter(
+        models.Product.shop_id == shop_id,
+        models.Product.barcode == barcode,
+    )
+    if exclude_product_id is not None:
+        query = query.filter(models.Product.id != exclude_product_id)
+    holder = query.first()
+    if holder:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Mã vạch '{barcode}' đã được dùng cho sản phẩm '{holder.name}'",
+        )
+
+
+def find_by_barcode(
+    db: Session, shop_id: int, barcode: str
+) -> Optional[models.Product]:
+    """Tra sản phẩm theo mã vạch, giới hạn trong một shop.
+
+    Chỉ trả sản phẩm đang hiện: quét trúng SP đã ẩn mà vẫn bán được thì việc ẩn
+    sản phẩm thành vô nghĩa.
+    """
+    normalized = normalize_barcode(barcode)
+    if not normalized:
+        return None
+    return (
+        db.query(models.Product)
+        .filter(
+            models.Product.shop_id == shop_id,
+            models.Product.barcode == normalized,
+            models.Product.is_active == True,  # noqa: E712 - SQLAlchemy cần so sánh ==
+        )
+        .first()
+    )
 
 
 def is_valid_image(data: bytes) -> bool:
@@ -140,6 +214,36 @@ def save_product_image(image: UploadFile) -> str:
     return f"/uploads/{filename}"
 
 
+def lookup_by_barcode(
+    db: Session, current_user: models.User, shop_id: int, barcode: str
+) -> Dict[str, Any]:
+    """Tra sản phẩm theo mã vạch cho màn hình quét. 404 nếu không có mã đó.
+
+    Frontend đã giữ sẵn danh sách sản phẩm trong bộ nhớ nên phần lớn lượt quét
+    khớp được ngay tại máy khách. Endpoint này để đối chiếu lại khi máy khách
+    không tìm thấy: danh sách có thể đã cũ (nhân viên khác vừa thêm sản phẩm),
+    lúc đó câu trả lời "không tìm thấy" phải do server quyết định.
+    """
+    _require_shop_operator_403(db, shop_id, current_user)
+    prod = find_by_barcode(db, shop_id, barcode)
+    if not prod:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy sản phẩm có mã vạch '{barcode}'"
+        )
+    return {
+        "id": prod.id,
+        "code": prod.code,
+        "barcode": prod.barcode,
+        "name": prod.name,
+        "price": prod.price,
+        "stock": prod.stock,
+        "image_url": prod.image_url,
+        "is_active": prod.is_active,
+        "category_id": prod.category_id,
+        "shop_id": prod.shop_id,
+    }
+
+
 def create_product(
     db: Session,
     current_user: models.User,
@@ -149,6 +253,7 @@ def create_product(
     stock: int,
     category_id: int,
     code: Optional[str] = None,
+    barcode: Optional[str] = None,
     image: Optional[UploadFile] = None,
 ) -> models.Product:
     _require_shop_operator_403(db, shop_id, current_user)
@@ -168,6 +273,9 @@ def create_product(
     if stock < 0:
         raise HTTPException(status_code=400, detail="Số lượng tồn kho không được âm")
 
+    barcode_value = normalize_barcode(barcode)
+    _ensure_barcode_unique(db, shop_id, barcode_value)
+
     image_url = DEFAULT_PRODUCT_IMAGE
     if image and image.filename:
         image_url = save_product_image(image)
@@ -177,6 +285,7 @@ def create_product(
 
     p = models.Product(
         code=code,
+        barcode=barcode_value,
         name=name,
         price=price,
         stock=stock,
@@ -207,6 +316,7 @@ def list_products(db: Session, shop_id: int) -> List[Dict]:
             {
                 "id": p.id,
                 "code": p.code,
+                "barcode": p.barcode,
                 "name": p.name,
                 "price": p.price,
                 "stock": p.stock,
@@ -228,9 +338,15 @@ def update_product(
     price: float,
     category_id: int,
     code: Optional[str] = None,
+    barcode: Optional[str] = None,
     image: Optional[UploadFile] = None,
 ) -> models.Product:
-    """Sửa thông tin sản phẩm: tên, giá, mã, danh mục, ảnh.
+    """Sửa thông tin sản phẩm: tên, giá, mã, mã vạch, danh mục, ảnh.
+
+    `barcode` phân biệt hai trường hợp mà `code` không phân biệt:
+    - `None` (form không gửi field) -> giữ nguyên mã vạch cũ.
+    - `""` (form gửi field rỗng)    -> xóa mã vạch, đặt về NULL.
+    Cần tách như vậy để sửa được lỗi gán nhầm mã vạch cho sản phẩm.
 
     CỐ Ý KHÔNG đụng vào `stock`. Ghi đè tồn kho từ form sửa gây mất hàng khi
     có bán song song (seller mở form thấy tồn 100, POS bán vài đơn, seller bấm
@@ -273,6 +389,11 @@ def update_product(
             status_code=400,
             detail="Sản phẩm với tên này đã tồn tại trong cửa hàng!",
         )
+
+    if barcode is not None:
+        barcode_value = normalize_barcode(barcode)
+        _ensure_barcode_unique(db, prod.shop_id, barcode_value, exclude_product_id=product_id)
+        prod.barcode = barcode_value
 
     prod.code = code.strip() if code and code.strip() else prod.code
     prod.name = name_stripped

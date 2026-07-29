@@ -19,6 +19,10 @@ class Product(Base):
     __tablename__ = "products"
     id = Column(Integer, primary_key=True, index=True)
     code = Column(String, index=True, nullable=True)  # Mã SP tự sinh hoặc nhập
+    # Mã vạch in trên bao bì (EAN-13/UPC/Code128). Tách riêng khỏi `code` vì
+    # `code` là mã nội bộ tự sinh dạng SP-<timestamp>. NULL = chưa gán mã vạch;
+    # duy nhất trong phạm vi một shop (unique index ix_products_shop_barcode).
+    barcode = Column(String(64), index=True, nullable=True)
     name = Column(String, index=True)
     price = Column(Float)
     stock = Column(Integer, default=0)

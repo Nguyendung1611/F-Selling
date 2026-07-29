@@ -70,6 +70,7 @@ ROUTES_BO_SUNG = {
     ("PUT", "/api/customers/member/{customer_id}"),  # C2b: sửa khách
     ("DELETE", "/api/customers/member/{customer_id}"),  # C2b: xóa khách
     ("GET", "/api/customers/member/{customer_id}/history"),  # C2c: lịch sử mua
+    ("GET", "/api/products/{shop_id}/barcode/{barcode}"),  # B1a: tra SP theo mã vạch
 }
 
 
@@ -163,6 +164,7 @@ def test_danh_sach_san_pham_giu_nguyen_cac_truong(client):
     assert set(item.keys()) == {
         "id",
         "code",
+        "barcode",  # B1a: thêm khóa là thay đổi an toàn với frontend hiện tại
         "name",
         "price",
         "stock",

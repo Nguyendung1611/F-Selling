@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Tuple
+from typing import List, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -33,7 +33,22 @@ _MIGRATIONS = [
     # tạo; ở đây chỉ cần thêm cột customer_id cho bảng orders đã tồn tại.
     "ALTER TABLE orders ADD COLUMN customer_id INTEGER",
     "CREATE INDEX IF NOT EXISTS ix_orders_customer_id ON orders(customer_id)",
+    # B1a: mã vạch sản phẩm. Duy nhất theo shop - SQLite coi mỗi NULL là một giá
+    # trị khác nhau, nên nhiều sản phẩm chưa gán mã vạch vẫn cùng tồn tại được.
+    "ALTER TABLE products ADD COLUMN barcode VARCHAR(64)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_products_shop_barcode "
+    "ON products(shop_id, barcode)",
 ]
+
+# Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
+# lỗi để chạy lặp lại được, nên một lệnh CREATE UNIQUE INDEX thất bại (ví dụ DB
+# đang có sẵn dữ liệu trùng) sẽ trôi qua im lặng và app vẫn khởi động bình
+# thường - rồi ràng buộc trùng lặp bị hổng mà không ai biết. Kiểm lại tường minh.
+_REQUIRED_INDEXES = ["ix_products_shop_barcode"]
+
+_INDEX_EXISTS = (
+    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = :name"
+)
 
 # Backfill A1a: khớp dòng đơn hàng cũ với sản phẩm theo (shop của đơn, tên sản phẩm).
 # An toàn vì `create_product` đảm bảo tên sản phẩm là duy nhất trong một shop,
@@ -65,6 +80,31 @@ def run_migrations(db: Session) -> None:
         except SQLAlchemyError:
             # Cột/index đã tồn tại - bỏ qua, đây là migration idempotent.
             db.rollback()
+
+
+def verify_required_indexes(db: Session) -> List[str]:
+    """Kiểm các index bắt buộc có thật sự tồn tại sau khi migrate.
+
+    Trả về danh sách index bị thiếu (rỗng = mọi thứ ổn). Không ném exception:
+    app vẫn phải khởi động được, nhưng lỗi phải hiện ra ở log chứ không im lặng.
+    """
+    missing: List[str] = []
+    for name in _REQUIRED_INDEXES:
+        try:
+            found = db.execute(text(_INDEX_EXISTS), {"name": name}).scalar() or 0
+        except SQLAlchemyError as e:
+            print(f"[MIGRATE] Không kiểm được index '{name}': {e}")
+            continue
+        if not found:
+            missing.append(name)
+
+    if missing:
+        print(
+            "[MIGRATE] CẢNH BÁO: thiếu index "
+            f"{', '.join(missing)} - ràng buộc trùng lặp KHÔNG được đảm bảo ở "
+            "tầng database. Kiểm tra dữ liệu trùng rồi khởi động lại."
+        )
+    return missing
 
 
 def backfill_order_item_product_id(db: Session) -> Tuple[int, int]:
@@ -131,6 +171,7 @@ def initialize() -> None:
     db = SessionLocal()
     try:
         run_migrations(db)
+        verify_required_indexes(db)
         backfill_order_item_product_id(db)
         seed_admin(db)
     finally:
