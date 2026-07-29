@@ -77,6 +77,34 @@ def _ensure_barcode_unique(
         )
 
 
+def _ensure_code_unique(
+    db: Session,
+    shop_id: int,
+    code: Optional[str],
+    exclude_product_id: Optional[int] = None,
+) -> None:
+    """Chặn hai sản phẩm cùng shop dùng chung một mã nội bộ.
+
+    Trước đây không có kiểm tra này, và mã tự sinh dựa trên timestamp theo giây
+    nên mọi sản phẩm tạo trong cùng một giây đều trùng mã. Mã trùng làm hỏng
+    việc tra cứu: quét/tìm ra mã đó thì không biết là sản phẩm nào.
+    """
+    if not code:
+        return
+    query = db.query(models.Product).filter(
+        models.Product.shop_id == shop_id,
+        models.Product.code == code,
+    )
+    if exclude_product_id is not None:
+        query = query.filter(models.Product.id != exclude_product_id)
+    holder = query.first()
+    if holder:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Mã sản phẩm '{code}' đã được dùng cho sản phẩm '{holder.name}'",
+        )
+
+
 def find_by_barcode(
     db: Session, shop_id: int, barcode: str
 ) -> Optional[models.Product]:
@@ -276,15 +304,15 @@ def create_product(
     barcode_value = normalize_barcode(barcode)
     _ensure_barcode_unique(db, shop_id, barcode_value)
 
+    code_stripped = code.strip() if code else ""
+    _ensure_code_unique(db, shop_id, code_stripped)
+
     image_url = DEFAULT_PRODUCT_IMAGE
     if image and image.filename:
         image_url = save_product_image(image)
 
-    if not code:
-        code = f"SP-{int(datetime.utcnow().timestamp())}"
-
     p = models.Product(
-        code=code,
+        code=code_stripped or None,
         barcode=barcode_value,
         name=name,
         price=price,
@@ -294,6 +322,14 @@ def create_product(
         shop_id=shop_id,
     )
     db.add(p)
+    # Mã tự sinh lấy từ chính id của sản phẩm. Bản cũ dùng timestamp theo GIÂY
+    # nên hai sản phẩm tạo cách nhau dưới một giây là trùng mã; id thì không bao
+    # giờ đụng nhau, kể cả khi hai người tạo cùng lúc. flush() để có id trước
+    # khi commit, vẫn nằm trong một transaction duy nhất.
+    db.flush()
+    if not p.code:
+        p.code = f"SP-{p.id}"
+    code = p.code
     db.commit()
     log_system_action(
         db,
@@ -395,7 +431,11 @@ def update_product(
         _ensure_barcode_unique(db, prod.shop_id, barcode_value, exclude_product_id=product_id)
         prod.barcode = barcode_value
 
-    prod.code = code.strip() if code and code.strip() else prod.code
+    # Để trống ô mã thì giữ mã cũ (hành vi sẵn có, có test bảo vệ).
+    code_stripped = code.strip() if code and code.strip() else None
+    if code_stripped and code_stripped != prod.code:
+        _ensure_code_unique(db, prod.shop_id, code_stripped, exclude_product_id=product_id)
+        prod.code = code_stripped
     prod.name = name_stripped
     prod.price = price
     prod.category_id = category_id

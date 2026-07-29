@@ -38,13 +38,17 @@ _MIGRATIONS = [
     "ALTER TABLE products ADD COLUMN barcode VARCHAR(64)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_products_shop_barcode "
     "ON products(shop_id, barcode)",
+    # B1c: mã nội bộ cũng phải duy nhất theo shop. PHẢI chạy sau
+    # dedupe_product_codes(), nếu không lệnh này thất bại vì dữ liệu còn trùng.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_products_shop_code "
+    "ON products(shop_id, code)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
 # lỗi để chạy lặp lại được, nên một lệnh CREATE UNIQUE INDEX thất bại (ví dụ DB
 # đang có sẵn dữ liệu trùng) sẽ trôi qua im lặng và app vẫn khởi động bình
 # thường - rồi ràng buộc trùng lặp bị hổng mà không ai biết. Kiểm lại tường minh.
-_REQUIRED_INDEXES = ["ix_products_shop_barcode"]
+_REQUIRED_INDEXES = ["ix_products_shop_barcode", "ix_products_shop_code"]
 
 _INDEX_EXISTS = (
     "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = :name"
@@ -67,6 +71,42 @@ WHERE product_id IS NULL
 
 _COUNT_MISSING_PRODUCT_ID = "SELECT COUNT(*) FROM order_items WHERE product_id IS NULL"
 
+# Dedupe B1c: mã nội bộ trùng nhau trong cùng một shop.
+# Nguyên nhân: bản cũ sinh mã bằng `SP-<timestamp giây>` nên mọi sản phẩm được
+# tạo trong cùng một giây đều mang chung một mã, và sửa sản phẩm không hề kiểm
+# trùng. Mã trùng làm việc tra cứu theo mã trở nên vô nghĩa.
+#
+# Quy tắc: trong mỗi nhóm trùng, sản phẩm có id NHỎ NHẤT được giữ mã (thường là
+# cái được tạo trước, nhiều khả năng đã in ra nhãn/phiếu); các sản phẩm còn lại
+# nhận mã mới `SP-<id>`. Chỉ đụng vào đúng những dòng đang trùng.
+_DEDUPE_PRODUCT_CODES = """
+UPDATE products
+SET code = 'SP-' || id
+WHERE EXISTS (
+    SELECT 1 FROM products cu
+    WHERE cu.shop_id = products.shop_id
+      AND cu.code = products.code
+      AND cu.id < products.id
+)
+"""
+
+# Sản phẩm không có mã: unique index của SQLite bỏ qua NULL nên NULL không gây
+# xung đột, nhưng chuỗi rỗng thì có. Gán luôn mã thật cho chúng.
+_FILL_EMPTY_PRODUCT_CODES = """
+UPDATE products SET code = 'SP-' || id
+WHERE code IS NULL OR TRIM(code) = ''
+"""
+
+_COUNT_DUPLICATE_CODES = """
+SELECT COUNT(*) FROM products p
+WHERE EXISTS (
+    SELECT 1 FROM products q
+    WHERE q.shop_id = p.shop_id AND q.code = p.code AND q.id < p.id
+)
+"""
+
+_COUNT_EMPTY_CODES = "SELECT COUNT(*) FROM products WHERE code IS NULL OR TRIM(code) = ''"
+
 
 def create_tables() -> None:
     models.Base.metadata.create_all(bind=engine)
@@ -80,6 +120,38 @@ def run_migrations(db: Session) -> None:
         except SQLAlchemyError:
             # Cột/index đã tồn tại - bỏ qua, đây là migration idempotent.
             db.rollback()
+
+
+def dedupe_product_codes(db: Session) -> Tuple[int, int]:
+    """Dọn mã sản phẩm trùng/rỗng để `ix_products_shop_code` tạo được.
+
+    PHẢI chạy TRƯỚC `run_migrations`: `CREATE UNIQUE INDEX` sẽ thất bại nếu dữ
+    liệu còn trùng, và `run_migrations` nuốt lỗi nên thất bại đó sẽ không ai
+    thấy (chỉ còn `verify_required_indexes` cảnh báo).
+
+    Chạy lặp lại được: lần thứ hai không còn dòng nào trùng để sửa.
+    Trả về (số mã trùng đã đổi, số mã rỗng đã điền).
+    """
+    try:
+        trung = db.execute(text(_COUNT_DUPLICATE_CODES)).scalar() or 0
+        rong = db.execute(text(_COUNT_EMPTY_CODES)).scalar() or 0
+        if not trung and not rong:
+            return 0, 0
+
+        if trung:
+            db.execute(text(_DEDUPE_PRODUCT_CODES))
+        if rong:
+            db.execute(text(_FILL_EMPTY_PRODUCT_CODES))
+        db.commit()
+
+        print(
+            f"[MIGRATE] products.code: doi {trung} ma trung, dien {rong} ma rong"
+        )
+        return trung, rong
+    except SQLAlchemyError as e:
+        db.rollback()
+        print(f"[MIGRATE] Dedupe products.code failed: {e}")
+        return 0, 0
 
 
 def verify_required_indexes(db: Session) -> List[str]:
@@ -170,6 +242,8 @@ def initialize() -> None:
     create_tables()
     db = SessionLocal()
     try:
+        # Dọn dữ liệu trùng trước, rồi mới tạo unique index trên đó.
+        dedupe_product_codes(db)
         run_migrations(db)
         verify_required_indexes(db)
         backfill_order_item_product_id(db)

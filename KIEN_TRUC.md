@@ -150,13 +150,17 @@ Hệ quả: một `CREATE UNIQUE INDEX` thất bại (DB đang có sẵn dữ li
 không ai biết. Thêm index bắt buộc thì phải khai vào `_REQUIRED_INDEXES` để
 `verify_required_indexes()` kiểm lại và in cảnh báo.
 
-### 5. `Product.code` KHÔNG duy nhất
+### 5. Mã sản phẩm tự sinh phải lấy từ `id`, không lấy từ đồng hồ
 
-`create_product` sinh mã dạng `SP-<giây>`, nên mọi sản phẩm được tạo trong cùng
-một giây sẽ **trùng mã nội bộ**. Đừng dùng `code` như khóa định danh. Mã vạch
-(`Product.barcode`) mới là mã duy nhất — có unique index `(shop_id, barcode)`.
-Chỗ quét mã ở frontend từ chối hẳn khi mã nội bộ trỏ tới nhiều sản phẩm, thay
-vì đoán bừa một cái.
+Bản đầu sinh mã bằng `SP-<timestamp giây>`, nên mọi sản phẩm tạo trong cùng một
+giây đều trùng mã. Nay `create_product` gọi `db.flush()` để lấy `id` rồi đặt
+`SP-<id>` — duy nhất tuyệt đối, không phụ thuộc tốc độ tạo.
+
+Cả `code` và `barcode` đều duy nhất trong phạm vi một shop
+(`ix_products_shop_code`, `ix_products_shop_barcode`) và đều được kiểm ở service
+để báo tên sản phẩm đang giữ mã. `dedupe_product_codes()` dọn dữ liệu cũ và
+**phải chạy trước `run_migrations()`**, nếu không lệnh tạo unique index sẽ thất
+bại trên DB còn mã trùng.
 
 ### 6. Không dùng `.subquery()` cho `in_()` trong SQLAlchemy 2.0
 

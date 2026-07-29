@@ -674,24 +674,12 @@ function xuLyQuetKho(ma) {
         return;
     }
 
-    // Mã vạch là duy nhất theo shop nên khớp là chắc chắn. Mã nội bộ thì không:
-    // `create_product` sinh SP-<giây>, nhiều SP tạo cùng một giây sẽ trùng mã.
-    // Trùng thì từ chối, không đoán bừa rồi sửa nhầm tồn kho của sản phẩm khác.
-    const sp = currentProducts.find(p => p.barcode && p.barcode.toUpperCase() === ma);
+    // Mã vạch và mã nội bộ đều duy nhất theo shop, nên khớp được là chắc chắn.
+    const sp = currentProducts.find(p => p.barcode && p.barcode.toUpperCase() === ma)
+        || currentProducts.find(p => p.code && p.code.toUpperCase() === ma);
     if (!sp) {
-        const theoMaNoiBo = currentProducts.filter(p => p.code && p.code.toUpperCase() === ma);
-        if (theoMaNoiBo.length > 1) {
-            BarcodeScanner.bipLoi();
-            showToast(`Mã "${ma}" đang trùng ở ${theoMaNoiBo.length} sản phẩm. Hãy gán mã vạch riêng cho từng sản phẩm.`);
-            return;
-        }
-        if (theoMaNoiBo.length === 0) {
-            BarcodeScanner.bipLoi();
-            showToast(`Không tìm thấy sản phẩm có mã "${ma}"`);
-            return;
-        }
-        BarcodeScanner.bipOk();
-        nhapXuatKho(theoMaNoiBo[0].id);
+        BarcodeScanner.bipLoi();
+        showToast(`Không tìm thấy sản phẩm có mã "${ma}"`);
         return;
     }
     BarcodeScanner.bipOk();

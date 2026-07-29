@@ -119,31 +119,16 @@ document.getElementById('searchProd').addEventListener('input', (e) => {
 
 /**
  * Tìm trong danh sách đã tải: ưu tiên mã vạch, sau đó tới mã nội bộ (SP-xxx).
- * Trả về { sp } khi khớp đúng một sản phẩm, { nhapNhang: true } khi mã trỏ tới
- * nhiều sản phẩm, hoặc {} khi không khớp.
- *
- * Mã vạch được database đảm bảo duy nhất trong mỗi shop nên khớp là chắc chắn.
- * Mã nội bộ thì KHÔNG: `create_product` sinh mã dạng SP-<giây>, nên nhiều sản
- * phẩm tạo trong cùng một giây sẽ trùng mã. Gặp trùng thì từ chối hẳn - quét ra
- * nhầm sản phẩm rồi tính tiền sai còn tệ hơn nhiều so với báo không tìm thấy.
+ * Cả hai mã đều được database đảm bảo duy nhất trong mỗi shop, nên khớp được là
+ * chắc chắn đúng một sản phẩm.
  */
 function timTheoMaQuet(ma) {
-    const theoMaVach = products.find(p => p.barcode && p.barcode.toUpperCase() === ma);
-    if (theoMaVach) return { sp: theoMaVach };
-
-    const theoMaNoiBo = products.filter(p => p.code && p.code.toUpperCase() === ma);
-    if (theoMaNoiBo.length === 1) return { sp: theoMaNoiBo[0] };
-    if (theoMaNoiBo.length > 1) return { nhapNhang: true };
-    return {};
+    return products.find(p => p.barcode && p.barcode.toUpperCase() === ma)
+        || products.find(p => p.code && p.code.toUpperCase() === ma);
 }
 
 async function xuLyQuetPOS(ma) {
-    const { sp, nhapNhang } = timTheoMaQuet(ma);
-    if (nhapNhang) {
-        BarcodeScanner.bipLoi();
-        showToast(`Mã "${ma}" đang trùng ở nhiều sản phẩm. Vào Kho hàng gán mã vạch riêng cho từng sản phẩm.`);
-        return;
-    }
+    const sp = timTheoMaQuet(ma);
     if (sp) {
         addToCart(sp) ? BarcodeScanner.bipOk() : BarcodeScanner.bipLoi();
         return;
