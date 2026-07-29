@@ -6,6 +6,7 @@ request_log.txt
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest-tmp/
 .coverage
 htmlcov/
 
