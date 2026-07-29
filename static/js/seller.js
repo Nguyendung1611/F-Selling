@@ -252,6 +252,7 @@ function loadDataForCurrentShop() {
     
     // Clear inputs for new shop
     document.getElementById('prodCode').value = '';
+    document.getElementById('prodBarcode').value = '';
     document.getElementById('prodName').value = '';
     document.getElementById('prodPrice').value = '';
     document.getElementById('prodImage').value = '';
@@ -573,7 +574,7 @@ function filterProducts() {
     filtered.forEach(p => {
         const activeText = p.is_active ? '<span style="color:var(--success); font-weight:600; font-size: 0.8rem;">ACTIVE</span>' : '<span style="color:#ef4444; font-weight:600; font-size: 0.8rem;">INACTIVE</span>';
         tbody.innerHTML += `<tr>
-            <td>${escapeHtml(p.code||'--')}</td>
+            <td>${escapeHtml(p.code||'--')}${p.barcode ? `<br><span style="font-size:0.75rem; color:#64748B;" title="Mã vạch"><i class="ph ph-barcode"></i> ${escapeHtml(p.barcode)}</span>` : ''}</td>
             <td>${escapeHtml(p.name)} <br>${activeText}</td>
             <td>${p.price.toLocaleString()} ₫</td>
             <td>${p.stock}</td>
@@ -602,6 +603,7 @@ function editProduct(id) {
     if(!product) return;
     editingProductId = id;
     document.getElementById('prodCode').value = product.code || '';
+    document.getElementById('prodBarcode').value = product.barcode || '';
     document.getElementById('prodName').value = product.name;
     document.getElementById('prodPrice').value = product.price;
     document.getElementById('prodStock').value = product.stock;
@@ -615,6 +617,7 @@ function editProduct(id) {
 function cancelEditProduct() {
     editingProductId = null;
     document.getElementById('prodCode').value = '';
+    document.getElementById('prodBarcode').value = '';
     document.getElementById('prodName').value = '';
     document.getElementById('prodPrice').value = '';
     document.getElementById('prodStock').value = '100';
@@ -641,6 +644,61 @@ async function nhapXuatKho(id) {
         loadProducts();
     } catch(e) { showToast(e.message); }
 }
+
+// ===== Quét mã vạch ở màn Kho hàng =====
+
+/** Tab Kho hàng đang mở và đang hiện phần sản phẩm (không phải phần danh mục). */
+function _khoHangDangMo() {
+    const tab = document.getElementById('warehouse');
+    if (!tab || !tab.classList.contains('active')) return false;
+    const noiDung = document.getElementById('warehouseContent');
+    if (!noiDung || noiDung.style.display === 'none') return false;
+    const phanSP = document.getElementById('warehouseProductsSection');
+    return !!phanSP && phanSP.style.display !== 'none';
+}
+
+function xuLyQuetKho(ma) {
+    // Con trỏ đang nằm trong ô mã vạch của form: người dùng đang muốn GÁN mã cho
+    // sản phẩm, không phải nhập/xuất kho. Đây là cách phân biệt hai ý định mà
+    // không cần thêm nút bật/tắt chế độ.
+    const oMaVach = document.getElementById('prodBarcode');
+    if (oMaVach && document.activeElement === oMaVach) {
+        oMaVach.value = ma;
+        BarcodeScanner.bipOk();
+        return;
+    }
+
+    if (!_khoHangDangMo()) {
+        BarcodeScanner.bipLoi();
+        showToast('Mở tab Kho hàng để quét nhập/xuất, hoặc dùng màn POS để bán.');
+        return;
+    }
+
+    // Mã vạch là duy nhất theo shop nên khớp là chắc chắn. Mã nội bộ thì không:
+    // `create_product` sinh SP-<giây>, nhiều SP tạo cùng một giây sẽ trùng mã.
+    // Trùng thì từ chối, không đoán bừa rồi sửa nhầm tồn kho của sản phẩm khác.
+    const sp = currentProducts.find(p => p.barcode && p.barcode.toUpperCase() === ma);
+    if (!sp) {
+        const theoMaNoiBo = currentProducts.filter(p => p.code && p.code.toUpperCase() === ma);
+        if (theoMaNoiBo.length > 1) {
+            BarcodeScanner.bipLoi();
+            showToast(`Mã "${ma}" đang trùng ở ${theoMaNoiBo.length} sản phẩm. Hãy gán mã vạch riêng cho từng sản phẩm.`);
+            return;
+        }
+        if (theoMaNoiBo.length === 0) {
+            BarcodeScanner.bipLoi();
+            showToast(`Không tìm thấy sản phẩm có mã "${ma}"`);
+            return;
+        }
+        BarcodeScanner.bipOk();
+        nhapXuatKho(theoMaNoiBo[0].id);
+        return;
+    }
+    BarcodeScanner.bipOk();
+    nhapXuatKho(sp.id);
+}
+
+BarcodeScanner.batDau(xuLyQuetKho);
 
 function deleteProduct(id) {
     showCustomConfirm(
@@ -672,6 +730,9 @@ async function createProduct() {
     }
     const formData = new FormData();
     formData.append('code', document.getElementById('prodCode').value);
+    // Luôn gửi, kể cả khi rỗng: backend phân biệt "không gửi" (giữ mã vạch cũ)
+    // với "gửi rỗng" (xóa mã vạch). Xóa trắng ô phải thực sự gỡ được mã.
+    formData.append('barcode', document.getElementById('prodBarcode').value);
     formData.append('name', document.getElementById('prodName').value);
     const priceStr = document.getElementById('prodPrice').value;
     const stockStr = document.getElementById('prodStock').value;

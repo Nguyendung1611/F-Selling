@@ -110,25 +110,77 @@ function renderProducts(list) {
     });
 }
 
-// Tìm kiếm / Quét mã vạch
+// Tìm kiếm
 document.getElementById('searchProd').addEventListener('input', (e) => {
     filterAndRenderProducts();
 });
 
+// ===== Quét mã vạch =====
+
+/**
+ * Tìm trong danh sách đã tải: ưu tiên mã vạch, sau đó tới mã nội bộ (SP-xxx).
+ * Trả về { sp } khi khớp đúng một sản phẩm, { nhapNhang: true } khi mã trỏ tới
+ * nhiều sản phẩm, hoặc {} khi không khớp.
+ *
+ * Mã vạch được database đảm bảo duy nhất trong mỗi shop nên khớp là chắc chắn.
+ * Mã nội bộ thì KHÔNG: `create_product` sinh mã dạng SP-<giây>, nên nhiều sản
+ * phẩm tạo trong cùng một giây sẽ trùng mã. Gặp trùng thì từ chối hẳn - quét ra
+ * nhầm sản phẩm rồi tính tiền sai còn tệ hơn nhiều so với báo không tìm thấy.
+ */
+function timTheoMaQuet(ma) {
+    const theoMaVach = products.find(p => p.barcode && p.barcode.toUpperCase() === ma);
+    if (theoMaVach) return { sp: theoMaVach };
+
+    const theoMaNoiBo = products.filter(p => p.code && p.code.toUpperCase() === ma);
+    if (theoMaNoiBo.length === 1) return { sp: theoMaNoiBo[0] };
+    if (theoMaNoiBo.length > 1) return { nhapNhang: true };
+    return {};
+}
+
+async function xuLyQuetPOS(ma) {
+    const { sp, nhapNhang } = timTheoMaQuet(ma);
+    if (nhapNhang) {
+        BarcodeScanner.bipLoi();
+        showToast(`Mã "${ma}" đang trùng ở nhiều sản phẩm. Vào Kho hàng gán mã vạch riêng cho từng sản phẩm.`);
+        return;
+    }
+    if (sp) {
+        addToCart(sp) ? BarcodeScanner.bipOk() : BarcodeScanner.bipLoi();
+        return;
+    }
+
+    // Không có trong danh sách đang giữ: có thể danh sách đã cũ (nhân viên khác
+    // vừa thêm sản phẩm). Hỏi lại server rồi mới kết luận là không tìm thấy.
+    try {
+        const spMoi = await apiCall(`/products/${currentShopId}/barcode/${encodeURIComponent(ma)}`);
+        addToCart(spMoi) ? BarcodeScanner.bipOk() : BarcodeScanner.bipLoi();
+        loadProducts();  // đồng bộ lại để lượt quét sau khớp ngay tại máy
+    } catch (e) {
+        BarcodeScanner.bipLoi();
+        showToast(`Không tìm thấy sản phẩm có mã "${ma}"`);
+    }
+}
+
+BarcodeScanner.batDau(xuLyQuetPOS);
+
+// Trả về true nếu thực sự thêm được. Lượt quét dựa vào kết quả này để bíp đúng:
+// bíp "xong" trong khi hàng không vào giỏ là kiểu sai nguy hiểm nhất ở quầy.
 function addToCart(p) {
     try {
         if(!cart) cart = [];
-        if(p.stock <= 0) return showToast("Sản phẩm đã hết hàng!");
+        if(p.stock <= 0) { showToast("Sản phẩm đã hết hàng!"); return false; }
         const existing = cart.find(i => i.product_name === p.name);
         if(existing) {
-            if(existing.quantity >= p.stock) return showToast("Vượt quá số lượng tồn kho!");
+            if(existing.quantity >= p.stock) { showToast("Vượt quá số lượng tồn kho!"); return false; }
             existing.quantity++;
         }
         else cart.push({ product_name: p.name, price: p.price, quantity: 1, max_stock: p.stock });
         calcCart();
+        return true;
     } catch (err) {
         console.error("Lỗi thêm vào giỏ:", err);
         showToast("Lỗi hệ thống khi thêm sản phẩm.");
+        return false;
     }
 }
 

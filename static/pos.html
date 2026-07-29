@@ -26,7 +26,7 @@
         <div class="pos-col">
             <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
                 <div class="input-wrapper" style="flex: 1; margin: 0;">
-                    <input type="text" id="searchProd" placeholder="Nhập tên sản phẩm để tìm..." style="background: #0F172A;">
+                    <input type="text" id="searchProd" placeholder="Quét mã vạch, hoặc nhập tên sản phẩm để tìm..." style="background: #0F172A;">
                 </div>
             </div>
             <div id="categoryFilter" style="display: flex; gap: 0.5rem; margin-bottom: 1rem; overflow-x: auto; padding-bottom: 0.5rem;">
@@ -132,6 +132,8 @@
     <div id="toast"></div>
 
     <script src="/js/api.js"></script>
+    <!-- barcode.js phải nạp trước pos.js: pos.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
+    <script src="/js/barcode.js"></script>
     <script src="/js/pos.js"></script>
 </body>
 </html>
