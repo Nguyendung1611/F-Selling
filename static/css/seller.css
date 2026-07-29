@@ -26,6 +26,7 @@
 .shop-list-card {
     background: #F8FAFC; border: 1px solid var(--border-color); border-radius: 8px;
     padding: 1rem; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 0.75rem; /* cụm nút xuống hàng khi màn hẹp, không tràn */
 }
 .shop-list-card h4 { margin: 0; color: var(--text-main); }
 

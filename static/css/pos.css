@@ -146,5 +146,19 @@ h2{
     .flex-row button{
         margin-bottom: 0.5em !important;
     }
+
+    /* Vùng bấm dễ chạm trên điện thoại (~40-42px) */
+    #shopSelect,
+    #posCustSearch,
+    #posCustNewName,
+    #posCustNewPhone {
+        min-height: 42px;
+    }
+
+    .category-btn,
+    #posCustResults button,
+    #posCustNewForm button {
+        min-height: 40px;
+    }
 }
 

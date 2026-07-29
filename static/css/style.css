@@ -389,6 +389,21 @@ th {
     .container { overflow-x: hidden; max-width: 100%; }
     .tab-content { overflow-x: hidden; }
 
+    /* --- Vùng bấm dễ chạm bằng ngón tay trên điện thoại (~44px) --- */
+    .tab-btn { min-height: 44px; }
+
+    /* Nút thao tác nhỏ trong bảng (sửa / kho / bật-tắt / xóa) */
+    .db-table td .btn-outline,
+    .db-table td button {
+        min-height: 40px;
+        min-width: 40px;
+    }
+
+    /* input 16px: vừa dễ đọc, vừa tránh iOS tự phóng to khi focus */
+    input, select, textarea {
+        font-size: 16px;
+    }
+
     #dashShopList, #whShopList, #vcShopList {
         width: 100%;
     }
@@ -419,7 +434,7 @@ th {
     }
     .otp-field {
         width: 2.5rem !important;
-        height: 2.5rem !important;
+        height: 2.75rem !important; /* cao ~44px để dễ chạm; giữ rộng 40px cho 6 ô vừa hàng */
         font-size: 1.25rem !important;
     }
     .nav-bar h2 {
