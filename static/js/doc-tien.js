@@ -12,9 +12,12 @@
     'use strict';
 
     const KHOA = {
-        bat: 'docTien.bat',
-        giong: 'docTien.giong'
+        bat: 'docTien.bat'
     };
+    const TEP_CANH_BAO_THIEU_TIEN = '/audio/canh_bao_thieu_tien.mp3';
+    const TEP_CON_THIEU = '/audio/con_thieu.mp3';
+    const TEP_CHUYEN_THUA = '/audio/chuyen_thua.mp3';
+    const TEP_CAN_HOAN_LAI = '/audio/can_hoan_lai.mp3';
 
     // Server có sinh được giọng Việt không. null = chưa hỏi.
     let serverDocDuoc = null;
@@ -117,13 +120,9 @@
     }
 
     function giongDangChon() {
-        const ten = localStorage.getItem(KHOA.giong);
-        const tatCa = danhSachGiong();
-        if (ten) {
-            const khop = tatCa.find(v => v.name === ten);
-            if (khop) return khop;
-        }
-        return giongTiengViet()[0] || null;   // ưu tiên giọng Việt bất kỳ
+        // Không dùng lựa chọn cũ có thể là giọng English. Tầng dự phòng chỉ
+        // được phép nói khi máy thật sự có giọng tiếng Việt.
+        return giongTiengViet()[0] || null;
     }
 
     // ----- Đọc -----
@@ -156,16 +155,35 @@
      * Bộ file được sinh trước nên máy POS không cần giọng Việt của hệ điều
      * hành và server cũng không cần API key TTS cho thông báo quan trọng này.
      */
-    function tepDocSoTien(soTien) {
+    function tepPhanSoTien(soTien) {
         const giaTri = Number(soTien);
         if (!Number.isFinite(giaTri) || giaTri < 0) return [];
-        const tep = ['/audio/da_nhan.mp3'];
+        const tep = [];
         for (const tu of docSo(giaTri).split(' ')) {
             if (!TEP_TU[tu]) return [];
             tep.push('/audio/' + TEP_TU[tu]);
         }
         tep.push('/audio/dong.mp3');
         return tep;
+    }
+
+    function tepDocSoTien(soTien) {
+        const phanSo = tepPhanSoTien(soTien);
+        return phanSo.length ? ['/audio/da_nhan.mp3'].concat(phanSo) : [];
+    }
+
+    function tepCanhBaoThieu(received, remaining) {
+        const daNhan = tepDocSoTien(received);
+        const conThieu = tepPhanSoTien(remaining);
+        if (!daNhan.length || !conThieu.length) return [];
+        return daNhan.concat([TEP_CON_THIEU], conThieu);
+    }
+
+    function tepCanhBaoThua(received, excess) {
+        const daNhan = tepDocSoTien(received);
+        const tienThua = tepPhanSoTien(excess);
+        if (!daNhan.length || !tienThua.length) return [];
+        return daNhan.concat([TEP_CHUYEN_THUA], tienThua, [TEP_CAN_HOAN_LAI]);
     }
 
     /** Nạp một file vào RAM; cùng một từ chỉ tải đúng một lần trong phiên. */
@@ -225,7 +243,14 @@
 
     /** Tải trước đúng các từ của đơn đang chờ để tiền về là đọc ngay. */
     function chuanBiSoTien(soTien) {
-        const tep = tepDocSoTien(soTien);
+        // Một giao dịch đang chờ có thể đủ hoặc thiếu tiền, nên tải sẵn cả
+        // câu cảnh báo thiếu tiền ngay từ lúc QR vừa hiện.
+        const tep = tepDocSoTien(soTien).concat([
+            TEP_CANH_BAO_THIEU_TIEN,
+            TEP_CON_THIEU,
+            TEP_CHUYEN_THUA,
+            TEP_CAN_HOAN_LAI
+        ]);
         return Promise.all(tep.map(taiTep)).then(() => true).catch(() => false);
     }
 
@@ -265,21 +290,16 @@
     }
 
     /**
-     * Đọc một câu. Hai tầng:
-     *   1. Thiết bị có giọng tiếng Việt -> đọc ngay tại máy. Nhanh, miễn phí,
-     *      không cần mạng.
-     *   2. Không có -> nhờ server sinh. Chrome trên Windows rơi vào đây vì bộ
-     *      giọng kèm theo Chrome không có tiếng Việt.
-     * Cả hai đều không được thì đọc bằng giọng nước ngoài còn hơn im lặng -
-     * người bán vẫn nghe thấy CÓ tiếng và biết mà nhìn màn hình.
+     * Tầng dự phòng CHỈ dùng giọng tiếng Việt: giọng Việt của thiết bị hoặc
+     * server TTS. Không bao giờ lùi về Microsoft David/giọng English.
      */
     function noi(cauChu) {
         if (giongTiengViet().length) return noiBangThietBi(cauChu);
         if (serverDocDuoc !== false) {
-            noiBangServer(cauChu).then(ok => { if (!ok) noiBangThietBi(cauChu); });
+            noiBangServer(cauChu);
             return true;
         }
-        return noiBangThietBi(cauChu);
+        return false;
     }
 
     /** Hỏi server một lần xem có sinh được giọng không, để giao diện báo đúng. */
@@ -308,17 +328,48 @@
         return noiSoTien(soTien, cauDaNhan(soTien, orderId));
     }
 
-    /** Gọi khi đơn rơi vào trạng thái cần đối soát (thường là khách chuyển thiếu). */
-    function canhBaoDoiSoat(orderId) {
+    /** Đọc mỗi lần tổng thực nhận đổi: "Đã nhận X, còn thiếu Y". */
+    function canhBaoThieuTien(orderId, received, remaining) {
         if (!dangBat()) return false;
-        const khoa = 'UNREC:' + orderId;
+        const khoa = `UNDER:${orderId}:${Math.round(Number(received) || 0)}`;
         if (daDoc.has(khoa)) return false;
         daDoc.add(khoa);
-        return noi(`Chú ý! Đơn hàng số ${docSo(orderId)} cần đối soát. Kiểm tra lại số tiền.`);
+        const cauDuPhong = `Đã nhận ${docSo(received)} đồng. Còn thiếu ${docSo(remaining)} đồng.`;
+        const tep = tepCanhBaoThieu(received, remaining);
+        phatChuoiTep(tep).then(ok => {
+            if (!ok) noi(cauDuPhong);
+        });
+        return true;
     }
 
-    function thuGiong() {
+    /** Đơn vẫn PAID/xuất hóa đơn, nhưng thu ngân phải biết số cần hoàn. */
+    function canhBaoThuaTien(orderId, received, excess) {
+        if (!dangBat()) return false;
+        const khoa = `OVER:${orderId}:${Math.round(Number(received) || 0)}`;
+        if (daDoc.has(khoa)) return false;
+        daDoc.add(khoa);
+        const cauDuPhong = `Đã nhận ${docSo(received)} đồng. Chuyển thừa ${docSo(excess)} đồng. Cần hoàn lại.`;
+        phatChuoiTep(tepCanhBaoThua(received, excess)).then(ok => {
+            if (!ok) noi(cauDuPhong);
+        });
+        return true;
+    }
+
+    /** Tương thích trang cũ đang cache: cảnh báo chung vẫn hoàn toàn tiếng Việt. */
+    function canhBaoDoiSoat(orderId) {
+        return canhBaoThieuTien(orderId, 0, 0);
+    }
+
+    function thuDuTien() {
         return noiSoTien(150000, cauDaNhan(150000, 42));
+    }
+
+    function thuThieuTien() {
+        return phatChuoiTep(tepCanhBaoThieu(50000, 100000));
+    }
+
+    function thuThuaTien() {
+        return phatChuoiTep(tepCanhBaoThua(170000, 20000));
     }
 
     global.DocTien = {
@@ -328,8 +379,13 @@
         noi: noi,
         chuanBiSoTien: chuanBiSoTien,
         thongBaoDaNhan: thongBaoDaNhan,
+        canhBaoThieuTien: canhBaoThieuTien,
+        canhBaoThuaTien: canhBaoThuaTien,
         canhBaoDoiSoat: canhBaoDoiSoat,
-        thuGiong: thuGiong,
+        thuGiong: thuDuTien,   // tương thích nút cũ nếu trang còn cache
+        thuDuTien: thuDuTien,
+        thuThieuTien: thuThieuTien,
+        thuThuaTien: thuThuaTien,
         dangBat: dangBat,
         datBat: datBat,
         danhSachGiong: danhSachGiong,

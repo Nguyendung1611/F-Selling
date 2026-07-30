@@ -30,6 +30,14 @@ let editShopId = null; // null = create mode, id = edit mode
 let dashboardShopId = null;
 let chartInstance = null;
 let pieChartInstance = null;
+let doiSoatShopId = null;
+let trangDoiSoat = 1;
+const DOI_SOAT_MOI_TRANG = 50;
+let doiSoatRequestId = 0;
+let refundOrderId = null;
+let refundDueAmount = 0;
+let refundOperationId = null;
+let dangLuuHoanTien = false;
 
 function renderBankOptions() {
     const bankSelect = document.getElementById('bankCode');
@@ -38,11 +46,15 @@ function renderBankOptions() {
         BANKS.map(bank => `<option value="${bank.code}">${bank.label}</option>`).join('');
 }
 
-function switchTab(tabId) {
+function switchTab(tabId, buttonEl = null) {
     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-    document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-    document.getElementById(tabId).classList.add('active');
-    event.currentTarget.classList.add('active');
+    document.querySelectorAll('.tab-btn[data-main-tab]').forEach(el => el.classList.remove('active'));
+    const tab = document.getElementById(tabId);
+    if (!tab) return;
+    tab.classList.add('active');
+    const nutTab = buttonEl || document.querySelector(`.tab-btn[data-main-tab="${tabId}"]`);
+    if (nutTab) nutTab.classList.add('active');
+    if (tabId === 'reconciliation') loadDoiSoat();
 }
 
 // Live Preview Logic
@@ -86,11 +98,22 @@ function renderShopSelectors() {
     const whList = document.getElementById('whShopList');
     const vouList = document.getElementById('vouShopList');
     const posList = document.getElementById('posShopList');
+    const doiSoatSelect = document.getElementById('doiSoatShopSelect');
     
     dashList.innerHTML = '';
     if(whList) whList.innerHTML = '';
     if(vouList) vouList.innerHTML = '';
     if(posList) posList.innerHTML = '';
+
+    if (doiSoatSelect) {
+        if (!doiSoatShopId || !allShops.some(s => s.id === doiSoatShopId)) {
+            doiSoatShopId = currentShopId || allShops[0]?.id || null;
+        }
+        doiSoatSelect.innerHTML = allShops.map(s =>
+            `<option value="${s.id}">${escapeHtml(s.name)}</option>`
+        ).join('');
+        if (doiSoatShopId) doiSoatSelect.value = String(doiSoatShopId);
+    }
     
     allShops.forEach(s => {
         // Dashboard (Thống Kê)
@@ -149,6 +172,10 @@ async function loadDashboardShop(id) {
 
         // Đơn hàng: phân trang + lọc theo khoảng ngày
         const res = await apiCall(`/dashboard/seller/${id}${chuoiThamSoDon()}`);
+        if (!doiSoatShopId) doiSoatShopId = id;
+        if (doiSoatShopId === id) {
+            capNhatBadgeDoiSoat(res.reconciliation_count || 0);
+        }
         const tbody = document.getElementById('orderList');
         tbody.innerHTML = '';
         res.orders.forEach(o => {
@@ -234,6 +261,385 @@ async function loadDashboardShop(id) {
             });
         }
     } catch(e) { showToast(e.message); }
+}
+
+// ===== D4: danh sách đơn cần đối soát =====
+
+function dinhDangTienDoiSoat(value) {
+    const so = Number(value);
+    return `${(Number.isFinite(so) ? Math.round(so) : 0).toLocaleString('vi-VN')} ₫`;
+}
+
+function thongTinLoaiDoiSoat(reason) {
+    const loai = {
+        UNDERPAID: {
+            title: 'Khách chuyển thiếu',
+            cardClass: 'underpaid',
+            stateClass: 'waiting',
+            stateLabel: 'Chưa xuất hóa đơn',
+            note: 'Tiếp tục chờ khách chuyển bù hoặc thu đúng phần còn thiếu bằng tiền mặt.'
+        },
+        OVERPAID: {
+            title: 'Khách chuyển thừa',
+            cardClass: 'overpaid',
+            stateClass: 'invoice',
+            stateLabel: 'Đã xuất hóa đơn',
+            note: 'Đơn đã hoàn tất. Cần trả lại đúng khoản tiền thừa rồi ghi nhận tại đây.'
+        },
+        LATE_PAYMENT: {
+            title: 'Tiền về sau khi hủy đơn',
+            cardClass: 'late-payment',
+            stateClass: 'cancelled',
+            stateLabel: 'Đơn đã hủy',
+            note: 'Không giao hàng và không xuất hóa đơn. Cần hoàn lại toàn bộ khoản tiền đã nhận.'
+        },
+        LEGACY_REVIEW: {
+            title: 'Dữ liệu cũ cần kiểm tra',
+            cardClass: 'legacy-review',
+            stateClass: 'review',
+            stateLabel: 'Chỉ kiểm tra',
+            note: 'Đơn được tạo trước khi có sổ giao dịch. Hãy mở chi tiết và kiểm tra sao kê, không xử lý tự động.'
+        }
+    };
+    return loai[reason] || {
+        title: reason ? `Cần kiểm tra (${reason})` : 'Cần kiểm tra',
+        cardClass: 'legacy-review',
+        stateClass: 'review',
+        stateLabel: 'Chỉ kiểm tra',
+        note: 'Trạng thái đối soát chưa được nhận diện. Hãy mở chi tiết trước khi xử lý.'
+    };
+}
+
+function capNhatBadgeDoiSoat(count) {
+    const badge = document.getElementById('doiSoatBadge');
+    if (!badge) return;
+    const soLuong = Math.max(0, Number.parseInt(count, 10) || 0);
+    badge.innerText = soLuong > 99 ? '99+' : String(soLuong);
+    badge.style.display = soLuong > 0 ? 'inline-flex' : 'none';
+    badge.title = `${soLuong} đơn đang cần đối soát`;
+}
+
+function chonShopDoiSoat(value) {
+    const id = Number.parseInt(value, 10);
+    if (!Number.isInteger(id) || !allShops.some(s => s.id === id)) return;
+    doiSoatShopId = id;
+    trangDoiSoat = 1;
+    loadDoiSoat();
+}
+
+async function loadDoiSoat() {
+    const shopId = doiSoatShopId || currentShopId || dashboardShopId;
+    const list = document.getElementById('doiSoatList');
+    const loading = document.getElementById('doiSoatLoading');
+    const empty = document.getElementById('doiSoatEmpty');
+    const reloadButton = document.getElementById('btnTaiLaiDoiSoat');
+    if (!list || !loading || !empty) return;
+
+    if (!shopId) {
+        capNhatBadgeDoiSoat(0);
+        document.getElementById('doiSoatCount').innerText = '0 trường hợp đang chờ';
+        list.innerHTML = '';
+        loading.style.display = 'none';
+        empty.style.display = 'block';
+        empty.innerHTML = '<i class="ph ph-storefront" style="display:block; margin-bottom:0.5rem; font-size:2.2rem;"></i>Chưa có cửa hàng để đối soát.';
+        return;
+    }
+
+    doiSoatShopId = shopId;
+    const select = document.getElementById('doiSoatShopSelect');
+    if (select) select.value = String(shopId);
+
+    const requestId = ++doiSoatRequestId;
+    loading.style.display = 'block';
+    empty.style.display = 'none';
+    if (reloadButton) reloadButton.disabled = true;
+
+    try {
+        const params = new URLSearchParams({
+            page: String(trangDoiSoat),
+            per_page: String(DOI_SOAT_MOI_TRANG),
+            reconciliation_only: 'true'
+        });
+        const res = await apiCall(`/dashboard/seller/${shopId}?${params.toString()}`);
+        if (requestId !== doiSoatRequestId) return;
+
+        const tongDangChoRaw = Number(res.reconciliation_count ?? res.total_orders ?? 0);
+        const tongDangCho = Number.isFinite(tongDangChoRaw)
+            ? Math.max(0, tongDangChoRaw)
+            : 0;
+        capNhatBadgeDoiSoat(tongDangCho);
+        document.getElementById('doiSoatCount').innerText =
+            `${tongDangCho.toLocaleString('vi-VN')} trường hợp đang chờ`;
+
+        if ((!res.orders || res.orders.length === 0) && trangDoiSoat > 1 && res.total_orders > 0) {
+            trangDoiSoat -= 1;
+            return loadDoiSoat();
+        }
+
+        renderDoiSoat(res.orders || []);
+        capNhatPhanTrangDoiSoat(res);
+    } catch (e) {
+        if (requestId !== doiSoatRequestId) return;
+        list.innerHTML = '';
+        empty.style.display = 'block';
+        empty.innerHTML = `<i class="ph ph-warning-circle" style="display:block; margin-bottom:0.5rem; color:#DC2626; font-size:2.2rem;"></i>${escapeHtml(e.message)}`;
+        showToast(e.message);
+    } finally {
+        if (requestId === doiSoatRequestId) {
+            loading.style.display = 'none';
+            if (reloadButton) reloadButton.disabled = false;
+        }
+    }
+}
+
+async function lamMoiBadgeDoiSoatNen() {
+    if (document.hidden || !doiSoatShopId) return;
+    const tabDangMo = document.getElementById('reconciliation')?.classList.contains('active');
+    if (tabDangMo) return loadDoiSoat();
+    try {
+        const params = new URLSearchParams({
+            page: '1',
+            per_page: '1',
+            reconciliation_only: 'true'
+        });
+        const res = await apiCall(
+            `/dashboard/seller/${doiSoatShopId}?${params.toString()}`
+        );
+        capNhatBadgeDoiSoat(res.reconciliation_count ?? res.total_orders ?? 0);
+    } catch (e) {
+        // Làm mới nền không chen toast vào công việc đang làm.
+        console.debug('Chưa làm mới được badge đối soát:', e.message);
+    }
+}
+
+function renderDoiSoat(orders) {
+    const list = document.getElementById('doiSoatList');
+    const empty = document.getElementById('doiSoatEmpty');
+    const hopLe = (orders || []).filter(o => Number.isInteger(Number(o.id)));
+    list.innerHTML = hopLe.map(taoTheDoiSoat).join('');
+    empty.style.display = hopLe.length ? 'none' : 'block';
+    if (!hopLe.length) {
+        empty.innerHTML = '<i class="ph ph-check-circle" style="display:block; margin-bottom:0.5rem; color:var(--success); font-size:2.2rem;"></i>Không có đơn nào đang chờ đối soát.';
+    }
+}
+
+function taoTheDoiSoat(order) {
+    const orderId = Number(order.id);
+    const reason = String(order.reconciliation_reason || 'LEGACY_REVIEW');
+    const meta = thongTinLoaiDoiSoat(reason);
+    const tongDon = Number(order.total) || 0;
+    const tienNganHang = Number(order.bank_paid_amount) || 0;
+    const tienMat = Number(order.cash_paid_amount) || 0;
+    const daNhan = Number(order.received_amount) || 0;
+    const conThieu = Math.max(Number(order.remaining_amount) || 0, 0);
+    const canHoan = Math.max(Number(order.refund_due_amount) || 0, 0);
+    const ngay = dinhDangNgayGio(order.date);
+
+    let nhanChenhLech = 'Thực nhận';
+    let tienChenhLech = daNhan;
+    if (reason === 'UNDERPAID') {
+        nhanChenhLech = 'Còn thiếu';
+        tienChenhLech = conThieu;
+    } else if (reason === 'OVERPAID') {
+        nhanChenhLech = 'Cần hoàn khách';
+        tienChenhLech = canHoan;
+    } else if (reason === 'LATE_PAYMENT') {
+        nhanChenhLech = 'Cần hoàn toàn bộ';
+        tienChenhLech = canHoan;
+    }
+
+    let nutXuLy = '';
+    if (reason === 'UNDERPAID' && conThieu > 0) {
+        nutXuLy = `
+            <button id="btnBuTienMat-${orderId}" onclick="thuBuTienMatDoiSoat(${orderId}, ${conThieu})">
+                <i class="ph ph-money"></i> Thu bù ${dinhDangTienDoiSoat(conThieu)}
+            </button>`;
+    } else if (
+        (reason === 'OVERPAID' || reason === 'LATE_PAYMENT')
+        && order.refund_pending
+        && canHoan > 0
+    ) {
+        nutXuLy = `
+            <button id="btnDaHoan-${orderId}" onclick="moModalHoanTien(${orderId}, ${canHoan}, '${reason}')">
+                <i class="ph ph-arrow-u-up-left"></i> Ghi nhận đã hoàn
+            </button>`;
+    }
+
+    return `
+        <article class="doi-soat-card ${meta.cardClass}" id="doiSoatCard-${orderId}">
+            <div class="doi-soat-card-head">
+                <div>
+                    <h4 class="doi-soat-card-title">Đơn #${orderId} · ${escapeHtml(meta.title)}</h4>
+                    <div class="doi-soat-card-time">${escapeHtml(ngay)}</div>
+                </div>
+                <span class="doi-soat-state ${meta.stateClass}">${escapeHtml(meta.stateLabel)}</span>
+            </div>
+            <div class="doi-soat-money-grid">
+                <div class="doi-soat-money">
+                    <span>Tổng đơn</span>
+                    <strong>${dinhDangTienDoiSoat(tongDon)}</strong>
+                </div>
+                <div class="doi-soat-money">
+                    <span>Tiền ngân hàng</span>
+                    <strong>${dinhDangTienDoiSoat(tienNganHang)}</strong>
+                </div>
+                <div class="doi-soat-money">
+                    <span>Bù tiền mặt</span>
+                    <strong>${dinhDangTienDoiSoat(tienMat)}</strong>
+                </div>
+                <div class="doi-soat-money highlight">
+                    <span>${escapeHtml(nhanChenhLech)}</span>
+                    <strong>${dinhDangTienDoiSoat(tienChenhLech)}</strong>
+                </div>
+            </div>
+            <p class="doi-soat-note">${escapeHtml(meta.note)}</p>
+            <div class="doi-soat-actions">
+                <button class="btn-outline" onclick="xemChiTietDon(${orderId})">
+                    <i class="ph ph-receipt"></i> Xem chi tiết
+                </button>
+                ${nutXuLy}
+            </div>
+        </article>`;
+}
+
+function capNhatPhanTrangDoiSoat(res) {
+    const box = document.getElementById('doiSoatPagination');
+    const info = document.getElementById('doiSoatThongTinTrang');
+    const truoc = document.getElementById('doiSoatTrangTruoc');
+    const sau = document.getElementById('doiSoatTrangSau');
+    const tong = Number(res.total_orders) || 0;
+    if (!box || !info || !truoc || !sau) return;
+
+    box.style.display = tong > DOI_SOAT_MOI_TRANG ? 'flex' : 'none';
+    if (tong > 0) {
+        const dau = (res.page - 1) * res.per_page + 1;
+        const cuoi = Math.min(res.page * res.per_page, tong);
+        info.innerText = `Hiển thị ${dau}-${cuoi} trên ${tong} trường hợp`;
+    } else {
+        info.innerText = '';
+    }
+    truoc.disabled = res.page <= 1;
+    sau.disabled = !res.has_more;
+}
+
+function doiTrangDoiSoat(buoc) {
+    const trangMoi = trangDoiSoat + buoc;
+    if (trangMoi < 1) return;
+    trangDoiSoat = trangMoi;
+    loadDoiSoat();
+}
+
+function thuBuTienMatDoiSoat(orderId, conThieu) {
+    const id = Number(orderId);
+    const soTien = Number(conThieu);
+    if (!Number.isInteger(id) || !Number.isFinite(soTien) || soTien <= 0) return;
+
+    showCustomConfirm(
+        `Thu bù tiền mặt cho đơn #${id}`,
+        `Xác nhận đã nhận đủ ${dinhDangTienDoiSoat(soTien)} tiền mặt từ khách? Hệ thống sẽ tự kiểm tra lại số còn thiếu trước khi hoàn tất đơn.`,
+        async () => {
+            const button = document.getElementById(`btnBuTienMat-${id}`);
+            if (button) button.disabled = true;
+            try {
+                const res = await apiCall(`/orders/${id}/cash-topup`, 'POST', {});
+                showToast(res.msg || 'Đã ghi nhận tiền mặt bù thiếu');
+                await loadDoiSoat();
+            } catch (e) {
+                showToast(e.message);
+                await loadDoiSoat();
+            } finally {
+                const currentButton = document.getElementById(`btnBuTienMat-${id}`);
+                if (currentButton) currentButton.disabled = false;
+            }
+        },
+        'Đã nhận tiền'
+    );
+}
+
+function taoOperationIdHoanTien() {
+    if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+        return globalThis.crypto.randomUUID();
+    }
+    return `refund-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function moModalHoanTien(orderId, amount, reason) {
+    const id = Number(orderId);
+    const soTien = Number(amount);
+    if (!Number.isInteger(id) || !Number.isFinite(soTien) || soTien <= 0) return;
+
+    refundOrderId = id;
+    refundDueAmount = soTien;
+    refundOperationId = taoOperationIdHoanTien();
+    document.getElementById('refundOrderLabel').innerText =
+        reason === 'LATE_PAYMENT'
+            ? `Đơn #${id} đã hủy — hoàn lại toàn bộ tiền khách chuyển sau khi hủy.`
+            : `Đơn #${id} đã xuất hóa đơn — hoàn lại phần khách chuyển thừa.`;
+    document.getElementById('refundAmount').innerText = dinhDangTienDoiSoat(soTien);
+    document.getElementById('refundMethod').value = 'cash';
+    document.getElementById('refundReference').value = '';
+    document.getElementById('refundNote').value = '';
+    capNhatFormHoanTien();
+    document.getElementById('refundModal').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    document.getElementById('refundMethod').focus();
+}
+
+function capNhatFormHoanTien() {
+    const method = document.getElementById('refundMethod')?.value;
+    const group = document.getElementById('refundReferenceGroup');
+    if (group) group.style.display = method === 'transfer' ? 'block' : 'none';
+}
+
+function dongModalHoanTien() {
+    if (dangLuuHoanTien) return;
+    const modal = document.getElementById('refundModal');
+    if (modal) modal.style.display = 'none';
+    document.body.style.overflow = '';
+    refundOrderId = null;
+    refundDueAmount = 0;
+    refundOperationId = null;
+}
+
+async function xacNhanDaHoanTien() {
+    if (
+        dangLuuHoanTien
+        || !refundOrderId
+        || refundDueAmount <= 0
+        || !refundOperationId
+    ) return;
+    const method = document.getElementById('refundMethod').value;
+    if (method !== 'cash' && method !== 'transfer') {
+        return showToast('Vui lòng chọn phương thức hoàn tiền');
+    }
+
+    const note = document.getElementById('refundNote').value.trim();
+    const reference = method === 'transfer'
+        ? document.getElementById('refundReference').value.trim()
+        : '';
+    const payload = { method, operation_id: refundOperationId };
+    if (note) payload.note = note;
+    if (reference) payload.reference = reference;
+
+    const orderId = refundOrderId;
+    const button = document.getElementById('btnSubmitRefund');
+    dangLuuHoanTien = true;
+    button.disabled = true;
+    button.innerHTML = '<i class="ph ph-spinner-gap"></i> Đang lưu...';
+    try {
+        const res = await apiCall(`/orders/${orderId}/refund-complete`, 'POST', payload);
+        showToast(res.msg || 'Đã ghi nhận hoàn tiền');
+        dangLuuHoanTien = false;
+        dongModalHoanTien();
+        await loadDoiSoat();
+    } catch (e) {
+        showToast(e.message);
+        await loadDoiSoat();
+    } finally {
+        dangLuuHoanTien = false;
+        button.disabled = false;
+        button.innerHTML = '<i class="ph ph-check-circle"></i> Ghi nhận đã hoàn';
+    }
 }
 
 function goToPOS(id) {
@@ -822,23 +1228,25 @@ async function kkApDung() {
         ? 'không đổi'
         : (chenh < 0 ? `GIẢM ${-chenh}` : `TĂNG ${chenh}`);
 
-    if (!confirm(
-        `Áp dụng kiểm kê cho ${items.length} sản phẩm?\n\n`
-        + `Tổng tồn kho: ${tongTon} → ${tongDem}  (${moTaChenh})\n`
+    showCustomConfirm(
+        `Áp dụng kiểm kê cho ${items.length} sản phẩm?`,
+        `Tổng tồn kho: ${tongTon} → ${tongDem}  (${moTaChenh})\n`
         + `${soLech} sản phẩm bị lệch.\n\n`
         + `Tồn kho sẽ được đặt đúng bằng số đếm thực tế.\n`
-        + `Sản phẩm không có trong phiếu giữ nguyên tồn kho.`
-    )) return;
-
-    try {
-        const res = await apiCall(`/products/${currentShopId}/stocktake`, 'POST', { items });
-        kkHienKetQua(res);
-        phieuKiemKe = {};
-        kkVeBang();
-        loadProducts();
-    } catch (e) {
-        showToast(e.message);
-    }
+        + `Sản phẩm không có trong phiếu giữ nguyên tồn kho.`,
+        async () => {
+            try {
+                const res = await apiCall(`/products/${currentShopId}/stocktake`, 'POST', { items });
+                kkHienKetQua(res);
+                phieuKiemKe = {};
+                kkVeBang();
+                loadProducts();
+            } catch (e) {
+                showToast(e.message);
+            }
+        },
+        'Áp dụng kiểm kê'
+    );
 }
 
 function kkHienKetQua(res) {
@@ -1152,7 +1560,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await apiCall('/auth/change-password', 'POST', { old_password, new_password });
             successMsg.innerText = "Đổi mật khẩu thành công!";
             localStorage.setItem('token', res.access_token);
-            alert("Đổi mật khẩu thành công!");
+            showToast("Đổi mật khẩu thành công!");
             closeChangePasswordModal();
         } catch (err) {
             errorMsg.innerText = err.message;
@@ -1162,12 +1570,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 let confirmCallback = null;
 
-function showCustomConfirm(title, message, onConfirm) {
+function showCustomConfirm(title, message, onConfirm, confirmLabel = 'Xác nhận') {
     const titleEl = document.getElementById('confirmTitle');
     const msgEl = document.getElementById('confirmMessage');
     const modalEl = document.getElementById('confirmModal');
+    const okEl = document.getElementById('btnConfirmOk');
     if (titleEl) titleEl.innerText = title;
     if (msgEl) msgEl.innerText = message;
+    if (okEl) okEl.innerText = confirmLabel;
     confirmCallback = onConfirm;
     if (modalEl) modalEl.style.display = 'flex';
 }
@@ -1190,6 +1600,9 @@ if (btnOk) {
 }
 
 init();
+// Bắt cả giao dịch chuyển thêm sau khi POS đã xuất hóa đơn và dọn đơn hiện
+// tại. Khi tab ẩn chỉ tải 1 dòng để cập nhật badge; khi tab mở tải lại danh sách.
+setInterval(lamMoiBadgeDoiSoatNen, 30000);
 
 // ===== Phân trang + lọc ngày cho danh sách đơn (nhóm B) =====
 let trangDonHienTai = 1;
@@ -1255,7 +1668,82 @@ function xoaLocNgay() {
     if (dashboardShopId) loadDashboardShop(dashboardShopId);
 }
 
-// ===== Xem chi tiết đơn (nhóm B) =====
+// ===== Xem chi tiết đơn (nhóm B + D4 đối soát) =====
+
+function nhanLoaiButToan(entryType) {
+    const nhan = {
+        BANK_IN: 'Ngân hàng báo tiền vào',
+        CASH_TOPUP: 'Thu tiền mặt',
+        REFUND_CASH: 'Hoàn bằng tiền mặt',
+        REFUND_TRANSFER: 'Hoàn bằng chuyển khoản'
+    };
+    return nhan[entryType] || entryType || 'Giao dịch';
+}
+
+function veChiTietDoiSoat(d) {
+    const box = document.getElementById('odDoiSoat');
+    const tomTat = document.getElementById('odDoiSoatTomTat');
+    const paymentSection = document.getElementById('odThanhToanSection');
+    const paymentList = document.getElementById('odThanhToanList');
+    if (!box || !tomTat || !paymentSection || !paymentList) return;
+
+    const reason = d.reconciliation_reason;
+    if (!reason && !d.reconciliation_pending) {
+        box.style.display = 'none';
+        tomTat.innerHTML = '';
+        paymentSection.style.display = 'none';
+        paymentList.innerHTML = '';
+        return;
+    }
+
+    const meta = thongTinLoaiDoiSoat(reason);
+    let chenhLech = `Thực nhận: <strong>${dinhDangTienDoiSoat(d.received_amount)}</strong>`;
+    if (reason === 'UNDERPAID') {
+        chenhLech = `Còn thiếu: <strong style="color:#B45309;">${dinhDangTienDoiSoat(d.remaining_amount)}</strong>`;
+    } else if (reason === 'OVERPAID' || reason === 'LATE_PAYMENT') {
+        chenhLech = `Cần hoàn khách: <strong style="color:#B91C1C;">${dinhDangTienDoiSoat(d.refund_due_amount)}</strong>`;
+    }
+
+    tomTat.innerHTML = `
+        <div style="display:flex; justify-content:space-between; gap:0.75rem; align-items:flex-start; flex-wrap:wrap;">
+            <strong>${escapeHtml(meta.title)}</strong>
+            <span class="doi-soat-state ${meta.stateClass}">${escapeHtml(meta.stateLabel)}</span>
+        </div>
+        <div class="doi-soat-detail-summary-grid">
+            <div>Tổng đơn: <strong>${dinhDangTienDoiSoat(d.total_amount)}</strong></div>
+            <div>${chenhLech}</div>
+            <div>Tiền ngân hàng: <strong>${dinhDangTienDoiSoat(d.bank_paid_amount)}</strong></div>
+            <div>Bù tiền mặt: <strong>${dinhDangTienDoiSoat(d.cash_paid_amount)}</strong></div>
+        </div>
+        <p style="margin:0.65rem 0 0; color:var(--text-muted); font-size:0.8rem; line-height:1.5;">${escapeHtml(meta.note)}</p>`;
+
+    const payments = Array.isArray(d.payments) ? d.payments : [];
+    paymentSection.style.display = payments.length ? 'block' : 'none';
+    paymentList.innerHTML = payments.map(payment => {
+        const entryType = String(payment.entry_type || '');
+        const laHoan = entryType === 'REFUND_CASH' || entryType === 'REFUND_TRANSFER';
+        const metaParts = [];
+        if (payment.created_at) metaParts.push(dinhDangNgayGio(payment.created_at));
+        if (payment.bank_txn_id) metaParts.push(`Mã ngân hàng: ${payment.bank_txn_id}`);
+        if (payment.reference) metaParts.push(`Tham chiếu: ${payment.reference}`);
+        if (payment.note) metaParts.push(`Ghi chú: ${payment.note}`);
+        return `
+            <div class="doi-soat-payment-row">
+                <strong>${escapeHtml(nhanLoaiButToan(entryType))}</strong>
+                <strong style="text-align:right; color:${laHoan ? '#B91C1C' : '#166534'};">
+                    ${laHoan ? '− ' : '+ '}${dinhDangTienDoiSoat(payment.amount)}
+                </strong>
+                <div class="doi-soat-payment-meta">${escapeHtml(metaParts.join(' · '))}</div>
+            </div>`;
+    }).join('');
+
+    if (!payments.length && reason === 'LEGACY_REVIEW') {
+        paymentSection.style.display = 'block';
+        paymentList.innerHTML = '<div style="color:var(--text-muted); font-size:0.82rem;">Không có sổ giao dịch cho đơn dữ liệu cũ này.</div>';
+    }
+    box.style.display = 'block';
+}
+
 async function xemChiTietDon(orderId) {
     try {
         const d = await apiCall(`/orders/${orderId}/detail`);
@@ -1263,7 +1751,11 @@ async function xemChiTietDon(orderId) {
 
         const tt = window.moTaTrangThaiDon(d.status);
         const ngay = dinhDangNgayGio(d.created_at);
-        const pttt = d.payment_method === 'cash' ? 'Tiền mặt' : 'Chuyển khoản';
+        const coChuyenKhoan = Number(d.bank_paid_amount || 0) > 0;
+        const coTienMat = Number(d.cash_paid_amount || 0) > 0;
+        const pttt = coChuyenKhoan && coTienMat
+            ? 'Chuyển khoản + tiền mặt'
+            : (coChuyenKhoan ? 'Chuyển khoản' : 'Tiền mặt');
         document.getElementById('odThongTin').innerText =
             `${ngay} • ${pttt} • ${tt.label}`;
 
@@ -1275,6 +1767,7 @@ async function xemChiTietDon(orderId) {
             khachHang.innerText = '';
             khachHang.style.display = 'none';
         }
+        veChiTietDoiSoat(d);
 
         const tbody = document.getElementById('odDanhSach');
         tbody.innerHTML = '';
@@ -1311,78 +1804,16 @@ function dtLuuBat() {
     dtCapNhatHien();
 }
 
-function dtLuuGiong() {
-    localStorage.setItem(DocTien.KHOA.giong, document.getElementById('dtGiong').value);
-}
-
 function dtCapNhatHien() {
     document.getElementById('dtChiTiet').style.display =
         document.getElementById('dtBat').checked ? 'block' : 'none';
 }
 
-function dtNapGiong() {
-    const sel = document.getElementById('dtGiong');
-    if (!sel) return;
-    const tatCa = DocTien.danhSachGiong();
-    const viet = DocTien.giongTiengViet();
-    const dangChon = DocTien.giongDangChon();
-
-    // Giọng tiếng Việt lên đầu; phần còn lại vẫn liệt kê để ai muốn thì đổi.
-    const xepLai = viet.concat(tatCa.filter(v => !viet.includes(v)));
-    sel.innerHTML = xepLai.map(v =>
-        `<option value="${escapeHtml(v.name)}" ${dangChon && v.name === dangChon.name ? 'selected' : ''}>`
-        + `${escapeHtml(v.name)} (${escapeHtml(v.lang)})</option>`
-    ).join('');
-
-    dtCapNhatCanhBao(viet.length, tatCa.length);
-}
-
-function dtCapNhatCanhBao(soGiongViet, soGiongTatCa) {
-    const box = document.getElementById('dtCanhBao');
-    if (!box) return;
-
-    if (soGiongViet > 0) {
-        box.style.display = 'block';
-        box.style.background = '#052e16';
-        box.style.border = '1px solid #15803d';
-        box.style.color = '#DCFCE7';
-        box.innerHTML = '<b>Đã sẵn sàng.</b> Tiền về sẽ được đọc bằng bộ MP3 tiếng Việt có sẵn; '
-            + 'cảnh báo đối soát dùng giọng tiếng Việt của máy.';
-        return;
-    }
-
-    // Tiền về luôn có bộ MP3 tiếng Việt. Giọng máy/server chỉ còn là tầng dự
-    // phòng cho câu cảnh báo đối soát, vì câu đó không ghép từ bộ số tiền.
-    box.style.display = 'block';
-    box.style.background = '#422006';
-    box.style.border = '1px solid #a16207';
-    box.style.color = '#FEF3C7';
-
-    if (DocTien.serverDocDuoc() === true) {
-        box.innerHTML = '<b>Đã sẵn sàng.</b> Tiền về dùng bộ MP3 tiếng Việt có sẵn; '
-            + 'cảnh báo đối soát dùng giọng do máy chủ tạo.';
-    } else if (soGiongTatCa === 0) {
-        box.innerHTML = '<b>Tiền về vẫn được đọc đúng tiếng Việt</b> bằng bộ MP3 có sẵn. '
-            + 'Trình duyệt chưa nạp được giọng dự phòng cho cảnh báo đối soát; thử tải lại trang.';
-    } else {
-        box.innerHTML = '<b>Tiền về vẫn được đọc đúng tiếng Việt</b> bằng bộ MP3 có sẵn. '
-            + 'Riêng cảnh báo đối soát đang phải dùng giọng nước ngoài nên có thể khó nghe.<br><br>'
-            + 'Muốn cảnh báo cũng rõ tiếng Việt trên Windows: <b>Settings → Time &amp; Language → Speech → '
-            + 'Manage voices → Add voices → Vietnamese</b>, cài xong tải lại trang. '
-            + 'Điện thoại Android/iOS thường đã có sẵn.';
-    }
-}
-
-async function dtKhoiTao() {
+function dtKhoiTao() {
     const bat = document.getElementById('dtBat');
     if (!bat || typeof DocTien === 'undefined') return;
     bat.checked = DocTien.dangBat();
     dtCapNhatHien();
-    dtNapGiong();
-    // Danh sách giọng thường nạp bất đồng bộ, lần gọi đầu hay trả về rỗng.
-    if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = dtNapGiong;
-    await DocTien.kiemTraServer();
-    dtNapGiong();     // vẽ lại lời cảnh báo theo kết quả hỏi server
 }
 
 // ===== C1d: phân biệt vai trò SELLER / STAFF trên giao diện =====
@@ -1586,3 +2017,19 @@ async function xemLichSuKhach(id) {
 function dongLichSuKhach() {
     document.getElementById('customerHistoryModal').style.display = 'none';
 }
+
+const refundModalEl = document.getElementById('refundModal');
+if (refundModalEl) {
+    refundModalEl.addEventListener('click', event => {
+        if (event.target === refundModalEl) dongModalHoanTien();
+    });
+}
+
+document.addEventListener('keydown', event => {
+    if (
+        event.key === 'Escape'
+        && document.getElementById('refundModal')?.style.display === 'flex'
+    ) {
+        dongModalHoanTien();
+    }
+});

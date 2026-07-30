@@ -58,6 +58,63 @@ _MIGRATIONS = [
     "ALTER TABLE orders ADD COLUMN paid_amount FLOAT",
     "ALTER TABLE orders ADD COLUMN bank_txn_id VARCHAR(128)",
     "CREATE INDEX IF NOT EXISTS ix_orders_bank_txn_id ON orders(bank_txn_id)",
+    # D4: đối soát cộng dồn, bù tiền mặt và hoàn tiền thừa. Bảng
+    # `order_payments` do create_all() tạo; các ALTER dưới đây dành cho DB cũ.
+    "ALTER TABLE orders ADD COLUMN cash_paid_amount FLOAT NOT NULL DEFAULT 0",
+    "ALTER TABLE orders ADD COLUMN refunded_amount FLOAT NOT NULL DEFAULT 0",
+    "ALTER TABLE orders ADD COLUMN refund_due_amount FLOAT NOT NULL DEFAULT 0",
+    "ALTER TABLE orders ADD COLUMN refund_completed_at DATETIME",
+    "ALTER TABLE orders ADD COLUMN refund_completed_by INTEGER",
+    "ALTER TABLE orders ADD COLUMN refund_method VARCHAR(20)",
+    "ALTER TABLE orders ADD COLUMN refund_note VARCHAR(500)",
+    "ALTER TABLE orders ADD COLUMN refund_reference VARCHAR(128)",
+    "ALTER TABLE orders ADD COLUMN reconciliation_reason VARCHAR(32)",
+    "ALTER TABLE order_payments ADD COLUMN reference VARCHAR(128)",
+    "ALTER TABLE order_payments ADD COLUMN provider VARCHAR(32)",
+    "CREATE INDEX IF NOT EXISTS ix_orders_reconciliation_reason "
+    "ON orders(reconciliation_reason)",
+    "CREATE INDEX IF NOT EXISTS ix_order_payments_order_id "
+    "ON order_payments(order_id)",
+    # CỐ Ý không unique bank_txn_id. Một mã thô chỉ dùng để tra cứu; ngân hàng
+    # retry được chặn bằng khóa idempotency đã chuẩn hóa bên dưới.
+    "CREATE INDEX IF NOT EXISTS ix_order_payments_bank_txn_id "
+    "ON order_payments(bank_txn_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_order_payments_idempotency_key "
+    "ON order_payments(idempotency_key)",
+    # Không đoán UNRECONCILED cũ là thiếu tiền hay tiền về sau khi hủy. Đưa vào
+    # hàng chờ kiểm tra legacy để tuyệt đối không tự PAID khi webhook tiếp theo về.
+    "UPDATE orders SET reconciliation_reason = 'LEGACY_REVIEW' "
+    "WHERE status = 'UNRECONCILED' AND reconciliation_reason IS NULL",
+    # Phân loại phần lớn đơn đối soát cũ từ audit đã có. LATE ưu tiên cao hơn
+    # UNDERPAID vì tuyệt đối không được hồi sinh đơn từng hủy.
+    "UPDATE orders SET reconciliation_reason = 'LATE_PAYMENT', "
+    "refund_due_amount = MAX("
+    "COALESCE(paid_amount, 0) + COALESCE(cash_paid_amount, 0) "
+    "- COALESCE(refunded_amount, 0), 0) "
+    "WHERE status = 'UNRECONCILED' "
+    "AND reconciliation_reason = 'LEGACY_REVIEW' "
+    "AND EXISTS (SELECT 1 FROM system_logs l "
+    "WHERE l.action = 'WEBHOOK_UNRECONCILED' "
+    "AND l.details LIKE 'Order ' || orders.id || ':%')",
+    "UPDATE orders SET reconciliation_reason = 'UNDERPAID', "
+    "refund_due_amount = 0 "
+    "WHERE status = 'UNRECONCILED' "
+    "AND reconciliation_reason = 'LEGACY_REVIEW' "
+    "AND EXISTS (SELECT 1 FROM system_logs l "
+    "WHERE l.action = 'WEBHOOK_THIEU_TIEN' "
+    "AND l.details LIKE 'Order ' || orders.id || ':%')",
+    # Đơn tiền mặt đã PAID từ bản cũ chưa có cash_paid_amount. Backfill để một
+    # khoản ngân hàng đến sau được nhận đúng là tiền dư, không phải tiền đầu tiên.
+    "UPDATE orders SET cash_paid_amount = total_amount "
+    "WHERE status = 'PAID' AND payment_method = 'cash' "
+    "AND COALESCE(cash_paid_amount, 0) = 0 AND paid_amount IS NULL",
+    # Bản cũ đã ghi paid_amount khi khách chuyển thừa nhưng chưa có trạng thái
+    # hoàn tiền. Đưa phần dư còn thấy được vào hàng chờ hoàn.
+    "UPDATE orders SET reconciliation_reason = 'OVERPAID', "
+    "refund_due_amount = paid_amount - total_amount "
+    "WHERE status = 'PAID' AND paid_amount > total_amount "
+    "AND COALESCE(refunded_amount, 0) = 0 "
+    "AND COALESCE(refund_due_amount, 0) = 0",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
@@ -68,6 +125,7 @@ _REQUIRED_INDEXES = [
     "ix_products_shop_barcode",
     "ix_products_shop_code",
     "ix_products_shop_name",
+    "ux_order_payments_idempotency_key",
 ]
 
 _INDEX_EXISTS = (
@@ -126,6 +184,32 @@ WHERE EXISTS (
 """
 
 _COUNT_EMPTY_CODES = "SELECT COUNT(*) FROM products WHERE code IS NULL OR TRIM(code) = ''"
+
+# D4: ledger ra đời sau hai cột legacy trên orders. Mỗi đơn cũ có đủ mã giao
+# dịch được tạo đúng một dòng để retry mã cũ vẫn bị nhận ra kể cả sau khi
+# orders.bank_txn_id đã được cập nhật bởi một giao dịch mới.
+_BACKFILL_LEGACY_ORDER_PAYMENTS = """
+INSERT INTO order_payments (
+    order_id, entry_type, amount, idempotency_key, provider,
+    bank_txn_id, account_no, note, created_at
+)
+SELECT
+    o.id, 'BANK_IN', o.paid_amount, 'legacy-order:' || o.id, 'legacy',
+    o.bank_txn_id, s.bank_account_no,
+    'Dữ liệu ngân hàng trước khi có sổ giao dịch',
+    COALESCE(o.created_at, CURRENT_TIMESTAMP)
+FROM orders o
+LEFT JOIN shops s ON s.id = o.shop_id
+WHERE o.paid_amount > 0
+  AND o.bank_txn_id IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM order_payments p
+      WHERE p.order_id = o.id
+        AND p.entry_type = 'BANK_IN'
+        AND p.bank_txn_id = o.bank_txn_id
+  )
+"""
 
 
 def create_tables() -> None:
@@ -229,6 +313,21 @@ def backfill_order_item_product_id(db: Session) -> Tuple[int, int]:
         return 0, 0
 
 
+def backfill_legacy_order_payments(db: Session) -> int:
+    """Đưa dấu vết ngân hàng legacy vào ledger, chạy lặp lại không sinh trùng."""
+    try:
+        result = db.execute(text(_BACKFILL_LEGACY_ORDER_PAYMENTS))
+        db.commit()
+        inserted = max(result.rowcount or 0, 0)
+        if inserted:
+            print(f"[MIGRATE] order_payments: backfill {inserted} giao dịch legacy")
+        return inserted
+    except SQLAlchemyError as e:
+        db.rollback()
+        print(f"[MIGRATE] Backfill order_payments failed: {e}")
+        return 0
+
+
 def seed_admin(db: Session) -> None:
     """Tự đồng bộ tài khoản admin theo ADMIN_INITIAL_PASSWORD trong .env.
 
@@ -265,7 +364,13 @@ def initialize() -> None:
         # Dọn dữ liệu trùng trước, rồi mới tạo unique index trên đó.
         dedupe_product_codes(db)
         run_migrations(db)
-        verify_required_indexes(db)
+        missing_indexes = verify_required_indexes(db)
+        if "ux_order_payments_idempotency_key" in missing_indexes:
+            raise RuntimeError(
+                "Thiếu unique index chống cộng trùng webhook "
+                "ux_order_payments_idempotency_key; dừng khởi động để bảo vệ số tiền"
+            )
+        backfill_legacy_order_payments(db)
         backfill_order_item_product_id(db)
         seed_admin(db)
     finally:

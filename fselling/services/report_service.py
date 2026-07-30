@@ -7,12 +7,13 @@ from typing import Any, Dict, List, Optional
 
 import openpyxl
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..core.config import log_to_file
 from ..dependencies import require_shop_access
+from . import order_service
 
 TREND_DAYS = 7
 
@@ -63,6 +64,7 @@ def seller_dashboard(
     per_page: int = DEFAULT_PAGE_SIZE,
     tu_ngay: Optional[str] = None,
     den_ngay: Optional[str] = None,
+    reconciliation_only: bool = False,
 ) -> Dict[str, Any]:
     """Danh sách đơn của shop, phân trang và lọc theo khoảng ngày.
 
@@ -78,8 +80,23 @@ def seller_dashboard(
             status_code=400, detail=f"per_page phải từ 1 đến {MAX_PAGE_SIZE}"
         )
 
+    open_reconciliation = or_(
+        models.Order.status == order_service.STATUS_UNRECONCILED,
+        and_(
+            models.Order.refund_due_amount > order_service.MONEY_EPSILON,
+            models.Order.refund_completed_at.is_(None),
+        ),
+    )
+    reconciliation_count = (
+        db.query(models.Order)
+        .filter(models.Order.shop_id == shop_id, open_reconciliation)
+        .count()
+    )
+
     base = db.query(models.Order).filter(models.Order.shop_id == shop_id)
     base = _loc_khoang_ngay(base, tu_ngay, den_ngay)
+    if reconciliation_only:
+        base = base.filter(open_reconciliation)
 
     tong_don = base.count()
     orders = (
@@ -102,15 +119,24 @@ def seller_dashboard(
 
     return {
         "total_revenue": doanh_thu,
-        "orders": [
-            {"id": o.id, "total": o.total_amount, "status": o.status, "date": o.created_at}
-            for o in orders
-        ],
+        "orders": [_dashboard_order(o) for o in orders],
         "page": page,
         "per_page": per_page,
         "total_orders": tong_don,
         "has_more": page * per_page < tong_don,
+        "reconciliation_count": reconciliation_count,
     }
+
+
+def _dashboard_order(order: models.Order) -> Dict[str, Any]:
+    result = {
+        "id": order.id,
+        "total": order.total_amount,
+        "status": order.status,
+        "date": order.created_at,
+    }
+    result.update(order_service.payment_summary(order))
+    return result
 
 
 def admin_dashboard(db: Session) -> List[Dict[str, Any]]:

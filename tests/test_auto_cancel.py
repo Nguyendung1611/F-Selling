@@ -29,14 +29,15 @@ def webhook_secret(monkeypatch):
     return SECRET
 
 
-def _tao_don(client, quantity=3):
+def _tao_don(client, quantity=3, payment_method="transfer"):
     ctx = seller_with_shop(client)  # SP giá 100000, tồn 10
     order = client.post(
         f"/api/orders/{ctx['shop_id']}",
         json={
             "items": [
                 {"product_name": ctx["product"]["name"], "price": 100000, "quantity": quantity}
-            ]
+            ],
+            "payment_method": payment_method,
         },
         headers=auth(ctx["token"]),
     ).json()
@@ -114,7 +115,7 @@ def test_khong_dung_vao_don_chua_qua_han(client):
 
 
 def test_khong_dung_vao_don_da_thanh_toan(client):
-    ctx, order_id = _tao_don(client, quantity=4)
+    ctx, order_id = _tao_don(client, quantity=4, payment_method="cash")
     client.post(f"/api/orders/{order_id}/pay", headers=auth(ctx["token"]))
     _lam_cu_don(order_id, 999)
     ton_sau_ban = _ton_kho(ctx["product"]["id"])

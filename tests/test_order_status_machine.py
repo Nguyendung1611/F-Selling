@@ -1,9 +1,9 @@
 """A1c: máy trạng thái đơn hàng + chuyển trạng thái bằng UPDATE có điều kiện.
 
-    PENDING ------> PAID          (xác nhận thủ công | webhook)
+    PENDING ------> PAID          (tiền mặt | webhook đủ tiền)
     PENDING ------> CANCELLED     (hủy đơn - endpoint sẽ có ở A1d)
     CANCELLED ----> UNRECONCILED  (CHỈ webhook)
-    UNRECONCILED -> PAID          (CHỈ thủ công)
+    UNRECONCILED -> PAID          (webhook cộng dồn | tiền mặt bù thiếu)
 
 Commit này chưa có endpoint hủy đơn, nên test dựng trạng thái CANCELLED
 bằng chính `transition_status()` - đúng cơ chế mà A1d sẽ dùng.
@@ -12,7 +12,7 @@ import os
 import threading
 
 import pytest
-from conftest import auth, seller_with_shop
+from conftest import PAYMENT_SUMMARY_KEYS, auth, seller_with_shop
 
 from fselling import models
 from fselling.core.database import SessionLocal
@@ -36,11 +36,20 @@ def webhook_secret(monkeypatch):
     return SECRET
 
 
-def _tao_don(client):
+def _tao_don(client, payment_method="transfer"):
     ctx = seller_with_shop(client)
     order_id = client.post(
         f"/api/orders/{ctx['shop_id']}",
-        json={"items": [{"product_name": ctx["product"]["name"], "price": 100000, "quantity": 1}]},
+        json={
+            "items": [
+                {
+                    "product_name": ctx["product"]["name"],
+                    "price": 100000,
+                    "quantity": 1,
+                }
+            ],
+            "payment_method": payment_method,
+        },
         headers=auth(ctx["token"]),
     ).json()["order_id"]
     return ctx, order_id
@@ -142,7 +151,7 @@ def test_transition_don_khong_ton_tai_tra_false(client):
 
 # ---------- Xác nhận thủ công ----------
 def test_thu_cong_pending_sang_paid(client):
-    ctx, order_id = _tao_don(client)
+    ctx, order_id = _tao_don(client, payment_method="cash")
     res = client.post(f"/api/orders/{order_id}/pay", headers=auth(ctx["token"]))
     assert res.status_code == 200
     assert res.json() == {"msg": "Paid successfully"}
@@ -150,7 +159,7 @@ def test_thu_cong_pending_sang_paid(client):
 
 
 def test_thu_cong_bam_trung_tren_don_da_paid_tra_200_im_lang(client):
-    ctx, order_id = _tao_don(client)
+    ctx, order_id = _tao_don(client, payment_method="cash")
     client.post(f"/api/orders/{order_id}/pay", headers=auth(ctx["token"]))
 
     res = client.post(f"/api/orders/{order_id}/pay", headers=auth(ctx["token"]))
@@ -162,7 +171,7 @@ def test_thu_cong_bam_trung_tren_don_da_paid_tra_200_im_lang(client):
 
 
 def test_thu_cong_tren_don_da_huy_bi_tu_choi_409(client):
-    ctx, order_id = _tao_don(client)
+    ctx, order_id = _tao_don(client, payment_method="cash")
     _huy_don(order_id)
 
     res = client.post(f"/api/orders/{order_id}/pay", headers=auth(ctx["token"]))
@@ -172,15 +181,15 @@ def test_thu_cong_tren_don_da_huy_bi_tu_choi_409(client):
 
 
 def test_thu_cong_giai_quyet_don_can_doi_soat(client, webhook_secret):
-    """UNRECONCILED -> PAID: seller đã đối soát sao kê và xác nhận."""
+    """Nút /pay chung không được hồi sinh đơn đã hủy khi tiền về muộn."""
     ctx, order_id = _tao_don(client)
     _huy_don(order_id)
     _webhook(client, order_id)
     assert _trang_thai(order_id) == STATUS_UNRECONCILED
 
     res = client.post(f"/api/orders/{order_id}/pay", headers=auth(ctx["token"]))
-    assert res.status_code == 200
-    assert _trang_thai(order_id) == STATUS_PAID
+    assert res.status_code == 409
+    assert _trang_thai(order_id) == STATUS_UNRECONCILED
 
 
 def test_thu_cong_van_kiem_tra_quyen_va_don_khong_ton_tai(client):
@@ -270,7 +279,7 @@ def test_webhook_truoc_huy_sau(client, webhook_secret):
 
 
 def test_thu_cong_truoc_huy_sau(client):
-    ctx, order_id = _tao_don(client)
+    ctx, order_id = _tao_don(client, payment_method="cash")
     client.post(f"/api/orders/{order_id}/pay", headers=auth(ctx["token"]))
 
     session = SessionLocal()
@@ -332,8 +341,12 @@ def test_get_order_hien_thi_trang_thai_moi(client, webhook_secret):
     _webhook(client, order_id)
 
     body = client.get(f"/api/orders/{order_id}", headers=auth(ctx["token"])).json()
-    assert set(body.keys()) == {"id", "shop_id", "status", "total_amount", "payment_method"}
+    assert set(body.keys()) == {
+        "id", "shop_id", "status", "total_amount", "payment_method",
+    } | PAYMENT_SUMMARY_KEYS
     assert body["status"] == STATUS_UNRECONCILED
+    assert body["reconciliation_reason"] == "LATE_PAYMENT"
+    assert body["invoice_issued"] is False
 
 
 def test_doanh_thu_khong_tinh_don_huy_va_can_doi_soat(client, webhook_secret):

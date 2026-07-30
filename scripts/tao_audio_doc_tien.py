@@ -10,6 +10,7 @@ cần cài ``edge-tts`` và không gọi dịch vụ TTS khi có giao dịch.
 from __future__ import annotations
 
 import asyncio
+import argparse
 from pathlib import Path
 
 import edge_tts
@@ -23,6 +24,12 @@ AUDIO_KEYWORDS = {
     "da_nhan.mp3": "Đã nhận",
     "tai_khoan.mp3": "Tài khoản",
     "thanh_cong.mp3": "Thành công",
+    "canh_bao_thieu_tien.mp3": (
+        "Cảnh báo. Số tiền nhận được không đủ. Vui lòng kiểm tra lại."
+    ),
+    "con_thieu.mp3": "Còn thiếu",
+    "chuyen_thua.mp3": "Chuyển thừa",
+    "can_hoan_lai.mp3": "Cần hoàn lại",
 
     # Chữ số
     "0.mp3": "Không",
@@ -53,11 +60,27 @@ AUDIO_KEYWORDS = {
 }
 
 
+def _doc_tham_so() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Sinh bộ MP3 đọc tiền tiếng Việt")
+    parser.add_argument(
+        "--only",
+        choices=sorted(AUDIO_KEYWORDS),
+        help="Chỉ sinh một file (mặc định sinh lại toàn bộ)",
+    )
+    return parser.parse_args()
+
+
 async def main() -> None:
+    args = _doc_tham_so()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    keywords = (
+        {args.only: AUDIO_KEYWORDS[args.only]}
+        if args.only
+        else AUDIO_KEYWORDS
+    )
     # Dung ASCII cho console de chay duoc ca tren PowerShell dang o CP1252.
-    print(f"Dang tao {len(AUDIO_KEYWORDS)} file MP3 bang giong {VOICE}...")
-    for filename, text in AUDIO_KEYWORDS.items():
+    print(f"Dang tao {len(keywords)} file MP3 bang giong {VOICE}...")
+    for filename, text in keywords.items():
         filepath = OUTPUT_DIR / filename
         await edge_tts.Communicate(text, VOICE).save(str(filepath))
         print(f"  Da tao {filename}")

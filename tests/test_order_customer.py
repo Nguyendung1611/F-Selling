@@ -11,8 +11,19 @@ def _tao_khach(client, token, shop_id, name="Khach A", phone="0900001"):
     ).json()["id"]
 
 
-def _ban(client, token, shop_id, product_name, qty=1, customer_id=None):
-    body = {"items": [{"product_name": product_name, "price": 1, "quantity": qty}]}
+def _ban(
+    client,
+    token,
+    shop_id,
+    product_name,
+    qty=1,
+    customer_id=None,
+    payment_method="transfer",
+):
+    body = {
+        "items": [{"product_name": product_name, "price": 1, "quantity": qty}],
+        "payment_method": payment_method,
+    }
     if customer_id is not None:
         body["customer_id"] = customer_id
     return client.post(f"/api/orders/{shop_id}", json=body, headers=auth(token))
@@ -94,7 +105,13 @@ def test_lich_su_mua_cua_khach(client):
 
     # 2 đơn: 1 thanh toán, 1 chưa
     o1 = _ban(
-        client, ctx["token"], ctx["shop_id"], ctx["product"]["name"], qty=2, customer_id=kh_id
+        client,
+        ctx["token"],
+        ctx["shop_id"],
+        ctx["product"]["name"],
+        qty=2,
+        customer_id=kh_id,
+        payment_method="cash",
     ).json()["order_id"]
     client.post(f"/api/orders/{o1}/pay", headers=auth(ctx["token"]))
     _ban(client, ctx["token"], ctx["shop_id"], ctx["product"]["name"], qty=1, customer_id=kh_id)

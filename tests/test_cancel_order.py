@@ -33,7 +33,7 @@ def webhook_secret(monkeypatch):
     return SECRET
 
 
-def _tao_don(client, quantity=3, voucher_code=None):
+def _tao_don(client, quantity=3, voucher_code=None, payment_method="transfer"):
     ctx = seller_with_shop(client)  # sản phẩm giá 100000, tồn 10
     body = {
         "items": [
@@ -42,6 +42,7 @@ def _tao_don(client, quantity=3, voucher_code=None):
     }
     if voucher_code:
         body["voucher_code"] = voucher_code
+    body["payment_method"] = payment_method
     res = client.post(f"/api/orders/{ctx['shop_id']}", json=body, headers=auth(ctx["token"]))
     assert res.status_code == 200, res.text
     return ctx, res.json()
@@ -282,7 +283,7 @@ def test_huy_don_giai_phong_luot_cuoi_de_dung_lai_voucher(client):
 
 # ---------- Trạng thái không cho hủy ----------
 def test_khong_huy_duoc_don_da_thanh_toan(client):
-    ctx, order = _tao_don(client, quantity=3)
+    ctx, order = _tao_don(client, quantity=3, payment_method="cash")
     client.post(f"/api/orders/{order['order_id']}/pay", headers=auth(ctx["token"]))
     ton_sau_ban = _ton_kho(ctx["product"]["id"])
 
@@ -314,7 +315,7 @@ def test_khong_huy_duoc_don_can_doi_soat(client, webhook_secret):
 
 # ---------- Đua giữa hủy và thanh toán ----------
 def test_thanh_toan_truoc_huy_sau_khong_hoan_kho(client):
-    ctx, order = _tao_don(client, quantity=5)
+    ctx, order = _tao_don(client, quantity=5, payment_method="cash")
     client.post(f"/api/orders/{order['order_id']}/pay", headers=auth(ctx["token"]))
 
     assert _huy(client, ctx, order["order_id"]).status_code == 409
@@ -322,7 +323,7 @@ def test_thanh_toan_truoc_huy_sau_khong_hoan_kho(client):
 
 
 def test_huy_truoc_thanh_toan_sau_bi_tu_choi(client):
-    ctx, order = _tao_don(client, quantity=5)
+    ctx, order = _tao_don(client, quantity=5, payment_method="cash")
     _huy(client, ctx, order["order_id"])
 
     res = client.post(f"/api/orders/{order['order_id']}/pay", headers=auth(ctx["token"]))

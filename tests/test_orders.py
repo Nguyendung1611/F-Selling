@@ -1,5 +1,5 @@
 """Đơn hàng: giá lấy từ DB, tồn kho, quyền tạo đơn, xác nhận thanh toán."""
-from conftest import auth, new_seller, seller_with_shop
+from conftest import PAYMENT_SUMMARY_KEYS, auth, new_seller, seller_with_shop
 
 from fselling import models
 from fselling.core.database import SessionLocal
@@ -148,7 +148,7 @@ def test_xac_nhan_thanh_toan_thu_cong(client):
     a = seller_with_shop(client)
     order_id = client.post(
         f"/api/orders/{a['shop_id']}",
-        json=_order_payload(a["product"]["name"], 100000),
+        json=_order_payload(a["product"]["name"], 100000, method="cash"),
         headers=auth(a["token"]),
     ).json()["order_id"]
 
@@ -158,7 +158,11 @@ def test_xac_nhan_thanh_toan_thu_cong(client):
 
     got = client.get(f"/api/orders/{order_id}", headers=auth(a["token"])).json()
     assert got["status"] == "PAID"
-    assert set(got.keys()) == {"id", "shop_id", "status", "total_amount", "payment_method"}
+    assert set(got.keys()) == {
+        "id", "shop_id", "status", "total_amount", "payment_method",
+    } | PAYMENT_SUMMARY_KEYS
+    assert got["cash_paid_amount"] == 100000
+    assert got["invoice_issued"] is True
 
 
 def test_seller_khac_khong_xac_nhan_duoc_thanh_toan(client):
@@ -188,7 +192,7 @@ def test_doanh_thu_chi_tinh_don_da_thanh_toan(client):
 
     order_id = client.post(
         f"/api/orders/{a['shop_id']}",
-        json=_order_payload(name, 100000),
+        json=_order_payload(name, 100000, method="cash"),
         headers=auth(a["token"]),
     ).json()["order_id"]
     client.post(f"/api/orders/{order_id}/pay", headers=auth(a["token"]))

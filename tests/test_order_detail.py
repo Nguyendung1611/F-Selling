@@ -1,5 +1,6 @@
 """Nhóm B: GET /api/orders/{order_id}/detail - xem chi tiết đơn kèm từng dòng hàng."""
 from conftest import (
+    PAYMENT_SUMMARY_KEYS,
     admin_token,
     auth,
     create_category,
@@ -40,7 +41,8 @@ def test_chi_tiet_don_mot_san_pham(client):
         "customer",  # C2c: khách gắn vào đơn (null nếu khách vãng lai)
         "subtotal",
         "items",
-    }
+        "payments",
+    } | PAYMENT_SUMMARY_KEYS
     assert len(body["items"]) == 1
     dong = body["items"][0]
     assert set(dong.keys()) == {"product_id", "product_name", "price", "quantity", "line_total"}

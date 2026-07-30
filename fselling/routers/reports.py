@@ -23,12 +23,14 @@ def get_seller_dashboard(
     ),
     tu_ngay: Optional[str] = Query(None, description="Lọc từ ngày (YYYY-MM-DD)"),
     den_ngay: Optional[str] = Query(None, description="Lọc đến ngày (YYYY-MM-DD)"),
+    reconciliation_only: bool = Query(False, description="Chỉ đơn đang cần đối soát"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
     return report_service.seller_dashboard(
         db, current_user, shop_id, page=page, per_page=per_page,
         tu_ngay=tu_ngay, den_ngay=den_ngay,
+        reconciliation_only=reconciliation_only,
     )
 
 

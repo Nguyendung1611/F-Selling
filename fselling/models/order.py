@@ -1,6 +1,6 @@
 import datetime
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import CheckConstraint, Column, DateTime, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import relationship
 
 from ..core.database import Base
@@ -18,16 +18,29 @@ class Order(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     # Khách hàng gắn vào đơn (tùy chọn). NULL với đơn khách vãng lai. (C2a)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
-    # D1: số tiền THỰC NHẬN theo webhook ngân hàng, và mã giao dịch của ngân
-    # hàng. NULL với đơn tiền mặt hoặc đơn xác nhận thủ công. Giữ lại để đối
-    # soát: biết được khách chuyển dư bao nhiêu, và nhận ra khi cùng một đơn
-    # nhận hai giao dịch khác nhau (khách chuyển nhầm hai lần).
+    # D1: tổng tiền THỰC NHẬN qua webhook ngân hàng và mã giao dịch gần nhất.
+    # `bank_txn_id` cố ý KHÔNG unique: retry webhook là bình thường; chống xử
+    # lý lặp nằm ở `OrderPayment.idempotency_key`.
     paid_amount = Column(Float, nullable=True)
     bank_txn_id = Column(String(128), nullable=True, index=True)
+    # D4: tiền bù mặt được tách khỏi tiền ngân hàng để hóa đơn và đối soát nêu
+    # đúng nguồn. Số đã hoàn là tổng lũy kế; refund_due_amount chỉ là khoản còn
+    # phải hoàn ở thời điểm hiện tại.
+    cash_paid_amount = Column(Float, nullable=False, default=0)
+    refunded_amount = Column(Float, nullable=False, default=0)
+    refund_due_amount = Column(Float, nullable=False, default=0)
+    refund_completed_at = Column(DateTime, nullable=True)
+    refund_completed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    refund_method = Column(String(20), nullable=True)
+    refund_note = Column(String(500), nullable=True)
+    refund_reference = Column(String(128), nullable=True)
+    # UNDERPAID | OVERPAID | LATE_PAYMENT | LEGACY_REVIEW | NULL (không vướng).
+    reconciliation_reason = Column(String(32), nullable=True, index=True)
 
     shop = relationship("Shop", back_populates="orders")
     items = relationship("OrderItem", back_populates="order")
     customer = relationship("Customer")
+    payments = relationship("OrderPayment", back_populates="order")
 
 
 class OrderItem(Base):
@@ -43,3 +56,34 @@ class OrderItem(Base):
     price = Column(Float)
     quantity = Column(Integer)
     order = relationship("Order", back_populates="items")
+
+
+class OrderPayment(Base):
+    """Sổ bất biến của mọi khoản tiền vào và lần ghi nhận hoàn tiền.
+
+    `bank_txn_id` chỉ để tra cứu và cố ý không unique. `idempotency_key` mới là
+    khóa chống ngân hàng gửi lặp; các thao tác thủ công để NULL.
+    """
+
+    __tablename__ = "order_payments"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_order_payments_amount_positive"),
+        Index("ux_order_payments_idempotency_key", "idempotency_key", unique=True),
+        Index("ix_order_payments_order_id", "order_id"),
+        Index("ix_order_payments_bank_txn_id", "bank_txn_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False)
+    entry_type = Column(String(24), nullable=False)  # BANK_IN | CASH_TOPUP | REFUND_*
+    amount = Column(Float, nullable=False)
+    idempotency_key = Column(String(128), nullable=True)
+    provider = Column(String(32), nullable=True)
+    bank_txn_id = Column(String(128), nullable=True)
+    account_no = Column(String(64), nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    note = Column(String(500), nullable=True)
+    reference = Column(String(128), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    order = relationship("Order", back_populates="payments")

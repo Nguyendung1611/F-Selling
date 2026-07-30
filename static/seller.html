@@ -9,6 +9,236 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="/css/seller.css">
     <link rel="stylesheet" href="/css/style.css">
+    <style>
+        .doi-soat-badge {
+            display: none;
+            min-width: 1.35rem;
+            height: 1.35rem;
+            padding: 0 0.35rem;
+            margin-left: 0.25rem;
+            align-items: center;
+            justify-content: center;
+            border-radius: 999px;
+            background: #DC2626;
+            color: #fff;
+            font-size: 0.72rem;
+            line-height: 1;
+            font-weight: 700;
+        }
+
+        .doi-soat-toolbar {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin-bottom: 1.25rem;
+        }
+
+        .doi-soat-toolbar-actions {
+            display: flex;
+            align-items: flex-end;
+            gap: 0.65rem;
+            flex-wrap: wrap;
+        }
+
+        .doi-soat-shop-field {
+            min-width: min(20rem, 100%);
+        }
+
+        .doi-soat-shop-field label {
+            display: block;
+            margin-bottom: 0.35rem;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .doi-soat-shop-field select {
+            width: 100%;
+            min-height: 2.65rem;
+            margin: 0;
+            padding: 0.55rem 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: #fff;
+        }
+
+        .doi-soat-list {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 1rem;
+        }
+
+        .doi-soat-card {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            padding: 1rem;
+            border: 1px solid var(--border-color);
+            border-left-width: 5px;
+            border-radius: 12px;
+            background: #fff;
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
+        }
+
+        .doi-soat-card.underpaid { border-left-color: #F59E0B; }
+        .doi-soat-card.overpaid { border-left-color: #DC2626; }
+        .doi-soat-card.late-payment { border-left-color: #7C3AED; }
+        .doi-soat-card.legacy-review { border-left-color: #64748B; }
+
+        .doi-soat-card-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 0.75rem;
+            margin-bottom: 0.9rem;
+        }
+
+        .doi-soat-card-title {
+            margin: 0 0 0.2rem;
+            color: var(--text-main);
+            font-size: 1rem;
+        }
+
+        .doi-soat-card-time {
+            color: var(--text-muted);
+            font-size: 0.78rem;
+        }
+
+        .doi-soat-state {
+            flex: 0 0 auto;
+            padding: 0.3rem 0.55rem;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .doi-soat-state.waiting { background: #FEF3C7; color: #92400E; }
+        .doi-soat-state.invoice { background: #DCFCE7; color: #166534; }
+        .doi-soat-state.cancelled { background: #F3E8FF; color: #6B21A8; }
+        .doi-soat-state.review { background: #E2E8F0; color: #334155; }
+
+        .doi-soat-money-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.55rem;
+            margin-bottom: 0.85rem;
+        }
+
+        .doi-soat-money {
+            min-width: 0;
+            padding: 0.6rem 0.7rem;
+            border-radius: 8px;
+            background: #F8FAFC;
+        }
+
+        .doi-soat-money span {
+            display: block;
+            margin-bottom: 0.15rem;
+            color: var(--text-muted);
+            font-size: 0.74rem;
+        }
+
+        .doi-soat-money strong {
+            display: block;
+            overflow-wrap: anywhere;
+            color: var(--text-main);
+            font-size: 0.95rem;
+        }
+
+        .doi-soat-money.highlight strong { color: #DC2626; }
+
+        .doi-soat-note {
+            flex: 1;
+            margin: 0 0 0.9rem;
+            color: var(--text-muted);
+            font-size: 0.82rem;
+            line-height: 1.55;
+        }
+
+        .doi-soat-actions {
+            display: flex;
+            gap: 0.55rem;
+            flex-wrap: wrap;
+        }
+
+        .doi-soat-actions button {
+            flex: 1 1 11rem;
+            min-height: 2.55rem;
+            padding: 0.55rem 0.75rem;
+        }
+
+        .doi-soat-empty,
+        .doi-soat-loading {
+            padding: 2.5rem 1rem;
+            border: 1px dashed var(--border-color);
+            border-radius: 12px;
+            color: var(--text-muted);
+            text-align: center;
+        }
+
+        .doi-soat-detail {
+            display: none;
+            margin: 0.9rem 0;
+            padding: 0.85rem;
+            border: 1px solid #FED7AA;
+            border-radius: 10px;
+            background: #FFF7ED;
+        }
+
+        .doi-soat-payment-row {
+            display: grid;
+            grid-template-columns: minmax(7rem, 1fr) minmax(6rem, auto);
+            gap: 0.2rem 0.75rem;
+            padding: 0.55rem 0;
+            border-bottom: 1px dashed #CBD5E1;
+            font-size: 0.82rem;
+        }
+
+        .doi-soat-payment-row:last-child { border-bottom: 0; }
+
+        .doi-soat-payment-meta {
+            grid-column: 1 / -1;
+            color: var(--text-muted);
+            overflow-wrap: anywhere;
+        }
+
+        .doi-soat-detail-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.35rem 0.75rem;
+            margin-top: 0.65rem;
+            font-size: 0.84rem;
+        }
+
+        .doi-soat-modal-card {
+            width: min(92vw, 560px);
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        @media (max-width: 760px) {
+            .doi-soat-list { grid-template-columns: 1fr; }
+        }
+
+        @media (max-width: 480px) {
+            .doi-soat-toolbar,
+            .doi-soat-toolbar-actions {
+                align-items: stretch;
+                flex-direction: column;
+                width: 100%;
+            }
+
+            .doi-soat-shop-field { min-width: 0; width: 100%; }
+            .doi-soat-toolbar-actions > button { width: 100%; }
+            .doi-soat-money-grid { grid-template-columns: 1fr; }
+            .doi-soat-card-head { flex-direction: column; }
+            .doi-soat-actions button { flex-basis: 100%; }
+            .doi-soat-detail-summary-grid { grid-template-columns: 1fr; }
+        }
+    </style>
        
 </head>
 <body>
@@ -25,12 +255,16 @@
         
         <!-- Tabs Header -->
         <div class="tabs-wrapper">
-            <button class="tab-btn active" onclick="switchTab('dashboard')"><i class="ph ph-chart-bar"></i> Thống Kê</button>
-            <button class="tab-btn" onclick="switchTab('warehouse')"><i class="ph ph-package"></i> Kho Hàng</button>
-            <button class="tab-btn" onclick="switchTab('kiemke')"><i class="ph ph-clipboard-text"></i> Kiểm Kê</button>
-            <button class="tab-btn" onclick="switchTab('voucher')"><i class="ph ph-ticket"></i> Khuyến Mãi</button>
-            <button class="tab-btn" onclick="switchTab('customers')"><i class="ph ph-users"></i> Khách Hàng</button>
-            <button class="tab-btn" onclick="switchTab('settings')"><i class="ph ph-sliders"></i> Cài Đặt</button>
+            <button class="tab-btn active" data-main-tab="dashboard" onclick="switchTab('dashboard', this)"><i class="ph ph-chart-bar"></i> Thống Kê</button>
+            <button class="tab-btn" id="tabDoiSoat" data-main-tab="reconciliation" onclick="switchTab('reconciliation', this)">
+                <i class="ph ph-warning-diamond"></i> Cần Đối Soát
+                <span id="doiSoatBadge" class="doi-soat-badge" aria-label="Số đơn cần đối soát">0</span>
+            </button>
+            <button class="tab-btn" data-main-tab="warehouse" onclick="switchTab('warehouse', this)"><i class="ph ph-package"></i> Kho Hàng</button>
+            <button class="tab-btn" data-main-tab="kiemke" onclick="switchTab('kiemke', this)"><i class="ph ph-clipboard-text"></i> Kiểm Kê</button>
+            <button class="tab-btn" data-main-tab="voucher" onclick="switchTab('voucher', this)"><i class="ph ph-ticket"></i> Khuyến Mãi</button>
+            <button class="tab-btn" data-main-tab="customers" onclick="switchTab('customers', this)"><i class="ph ph-users"></i> Khách Hàng</button>
+            <button class="tab-btn" data-main-tab="settings" onclick="switchTab('settings', this)"><i class="ph ph-sliders"></i> Cài Đặt</button>
         </div>
 
         <!-- TAB 1: THỐNG KÊ (DASHBOARD) -->
@@ -128,6 +362,49 @@
                 <h3 style="margin-top: 1rem;">Bạn chưa có cửa hàng nào</h3>
                 <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Vui lòng vào mục Cài đặt để tạo cửa hàng đầu tiên.</p>
                 <button onclick="switchTab('settings')">Đi tới Cài Đặt</button>
+            </div>
+        </div>
+
+        <!-- TAB: CẦN ĐỐI SOÁT -->
+        <div id="reconciliation" class="tab-content glass-card">
+            <div class="doi-soat-toolbar">
+                <div>
+                    <h3 style="margin-bottom: 0.35rem;"><i class="ph ph-warning-diamond"></i> Cần đối soát</h3>
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.88rem; line-height: 1.55;">
+                        Theo dõi đơn chuyển thiếu, tiền về sau khi hủy và khoản chuyển thừa đang chờ hoàn.
+                    </p>
+                </div>
+                <div class="doi-soat-toolbar-actions">
+                    <div class="doi-soat-shop-field">
+                        <label for="doiSoatShopSelect">Cửa hàng</label>
+                        <select id="doiSoatShopSelect" onchange="chonShopDoiSoat(this.value)"></select>
+                    </div>
+                    <button class="btn-outline" id="btnTaiLaiDoiSoat" onclick="loadDoiSoat()" style="min-height: 2.65rem;">
+                        <i class="ph ph-arrows-clockwise"></i> Tải lại
+                    </button>
+                </div>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-bottom: 0.85rem; flex-wrap: wrap;">
+                <strong id="doiSoatCount">0 trường hợp đang chờ</strong>
+                <small style="color: var(--text-muted);">Mọi thao tác đều được lưu người thực hiện và thời gian.</small>
+            </div>
+
+            <div id="doiSoatLoading" class="doi-soat-loading" style="display: none;">
+                <i class="ph ph-spinner-gap"></i> Đang tải danh sách đối soát...
+            </div>
+            <div id="doiSoatEmpty" class="doi-soat-empty" style="display: none;">
+                <i class="ph ph-check-circle" style="display: block; margin-bottom: 0.5rem; color: var(--success); font-size: 2.2rem;"></i>
+                Không có đơn nào đang chờ đối soát.
+            </div>
+            <div id="doiSoatList" class="doi-soat-list"></div>
+
+            <div id="doiSoatPagination" style="display: none; justify-content: space-between; align-items: center; margin-top: 1rem; gap: 0.75rem; flex-wrap: wrap;">
+                <small id="doiSoatThongTinTrang" style="color: var(--text-muted);"></small>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button class="btn-outline" id="doiSoatTrangTruoc" onclick="doiTrangDoiSoat(-1)">← Trước</button>
+                    <button class="btn-outline" id="doiSoatTrangSau" onclick="doiTrangDoiSoat(1)">Sau →</button>
+                </div>
             </div>
         </div>
 
@@ -401,8 +678,8 @@
                     <i class="ph ph-speaker-high" style="color: var(--primary);"></i> Đọc to khi nhận tiền chuyển khoản
                 </h4>
                 <p style="color: var(--text-muted); font-size: 0.88rem; margin: 0 0 1rem; line-height: 1.6;">
-                    Khi ngân hàng báo tiền về, máy sẽ đọc số tiền bằng bộ giọng tiếng Việt có sẵn,
-                    không cần API trả phí. Cài đặt này áp dụng cho <b>máy này</b>.
+                    Nhận đủ, thiếu hoặc thừa tiền đều được cảnh báo bằng giọng tiếng Việt có sẵn,
+                    không dùng giọng tiếng Anh. Cài đặt này áp dụng cho <b>máy này</b>.
                 </p>
 
                 <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; margin-bottom: 1rem;">
@@ -411,14 +688,20 @@
                 </label>
 
                 <div id="dtChiTiet">
-                    <div class="form-group" style="max-width: 460px;">
-                        <label>Giọng cảnh báo đối soát (dự phòng)</label>
-                        <select id="dtGiong" onchange="dtLuuGiong()" style="width: 100%; padding: 0.6rem; border-radius: 8px; border: 1px solid var(--border-color);"></select>
+                    <p style="color: var(--text-muted); font-size: 0.86rem; margin: 0 0 0.8rem;">
+                        Giọng nữ Hoài My: chọn nút bên dưới để nghe thử từng trường hợp.
+                    </p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.65rem;">
+                        <button class="btn-outline" onclick="DocTien.thuDuTien()" style="padding: 0.5rem 1.1rem;">
+                            <i class="ph ph-play"></i> Thử đủ tiền
+                        </button>
+                        <button class="btn-outline" onclick="DocTien.thuThieuTien()" style="padding: 0.5rem 1.1rem;">
+                            <i class="ph ph-warning"></i> Thử thiếu tiền
+                        </button>
+                        <button class="btn-outline" onclick="DocTien.thuThuaTien()" style="padding: 0.5rem 1.1rem;">
+                            <i class="ph ph-warning-diamond"></i> Thử thừa tiền
+                        </button>
                     </div>
-                    <button class="btn-outline" onclick="DocTien.thuGiong()" style="padding: 0.5rem 1.1rem;">
-                        <i class="ph ph-play"></i> Thử đọc tiền
-                    </button>
-                    <div id="dtCanhBao" style="display: none; margin-top: 1rem; padding: 0.8rem 1rem; border-radius: 8px; font-size: 0.87rem; line-height: 1.6;"></div>
                 </div>
             </div>
 
@@ -565,10 +848,17 @@
 
     <!-- Modal xem chi tiết đơn hàng -->
     <div id="orderDetailModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.6); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
-        <div style="background: #ffffff; padding: 2rem; border-radius: 16px; width: 560px; max-width: 92%; border: 1px solid var(--border-color); box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);">
+        <div class="doi-soat-modal-card" style="background: #ffffff; padding: 2rem; border-radius: 16px; width: min(720px, 92vw); border: 1px solid var(--border-color); box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);">
             <h3 style="margin-bottom: 0.25rem;">Chi tiết đơn <span id="odMaDon" class="text-gradient"></span></h3>
             <small id="odThongTin" style="color: var(--text-muted); display: block; margin-bottom: 1rem;"></small>
             <small id="odKhachHang" style="color: var(--text-muted); display: none; margin-bottom: 1rem;"></small>
+            <div id="odDoiSoat" class="doi-soat-detail">
+                <div id="odDoiSoatTomTat"></div>
+                <div id="odThanhToanSection" style="display: none; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #FED7AA;">
+                    <strong style="font-size: 0.85rem;">Lịch sử tiền vào / hoàn tiền</strong>
+                    <div id="odThanhToanList" style="margin-top: 0.35rem;"></div>
+                </div>
+            </div>
             <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
                 <table class="db-table">
                     <thead>
@@ -579,6 +869,49 @@
             </div>
             <div id="odTongKet" style="margin-top: 1rem; text-align: right;"></div>
             <button class="btn-outline" style="width: 100%; margin-top: 1rem;" onclick="dongChiTietDon()">Đóng</button>
+        </div>
+    </div>
+
+    <!-- Modal ghi nhận đã hoàn tiền -->
+    <div id="refundModal" style="display: none; position: fixed; inset: 0; z-index: 10000; background: rgba(15, 23, 42, 0.68); align-items: center; justify-content: center; padding: 1rem; backdrop-filter: blur(4px);">
+        <div class="glass-card doi-soat-modal-card" style="background: #fff; position: relative;">
+            <button class="btn-outline" type="button" onclick="dongModalHoanTien()" aria-label="Đóng" style="position: absolute; top: 0.75rem; right: 0.75rem; width: 2.2rem; height: 2.2rem; padding: 0; border-radius: 999px;">&times;</button>
+            <h3 style="margin-bottom: 0.3rem;">Ghi nhận đã hoàn tiền</h3>
+            <p id="refundOrderLabel" style="margin: 0 0 1rem; color: var(--text-muted);"></p>
+
+            <div style="padding: 0.85rem 1rem; margin-bottom: 1rem; border: 1px solid #FECACA; border-radius: 10px; background: #FEF2F2;">
+                <span style="display: block; color: #991B1B; font-size: 0.8rem;">Số tiền cần hoàn</span>
+                <strong id="refundAmount" style="display: block; margin-top: 0.15rem; color: #B91C1C; font-size: 1.35rem;">0 ₫</strong>
+            </div>
+
+            <p style="margin: 0 0 1rem; color: var(--text-muted); font-size: 0.84rem; line-height: 1.55;">
+                Chỉ bấm ghi nhận sau khi cửa hàng đã thực sự trả tiền cho khách. Thao tác này không tự chuyển tiền qua ngân hàng.
+            </p>
+
+            <div class="form-group">
+                <label for="refundMethod">Phương thức hoàn</label>
+                <select id="refundMethod" onchange="capNhatFormHoanTien()" style="width: 100%;">
+                    <option value="cash">Tiền mặt</option>
+                    <option value="transfer">Chuyển khoản</option>
+                </select>
+            </div>
+
+            <div class="form-group" id="refundReferenceGroup" style="display: none;">
+                <label for="refundReference">Mã giao dịch hoàn</label>
+                <input type="text" id="refundReference" maxlength="128" placeholder="Ví dụ: FT260731123456">
+            </div>
+
+            <div class="form-group">
+                <label for="refundNote">Ghi chú (không bắt buộc)</label>
+                <textarea id="refundNote" maxlength="500" rows="3" placeholder="Ghi chú để người đối soát sau này dễ kiểm tra" style="width: 100%; resize: vertical;"></textarea>
+            </div>
+
+            <div style="display: flex; gap: 0.65rem; margin-top: 1.15rem;">
+                <button class="btn-outline" type="button" onclick="dongModalHoanTien()" style="flex: 1;">Để sau</button>
+                <button id="btnSubmitRefund" type="button" onclick="xacNhanDaHoanTien()" style="flex: 1;">
+                    <i class="ph ph-check-circle"></i> Ghi nhận đã hoàn
+                </button>
+            </div>
         </div>
     </div>
 
@@ -633,7 +966,7 @@
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js"></script>
     <script src="/js/barcode-camera.js"></script>
-    <script src="/js/doc-tien.js?v=20260731-audio"></script>
-    <script src="/js/seller.js?v=20260731-audio"></script>
+    <script src="/js/doc-tien.js?v=20260731-reconciliation"></script>
+    <script src="/js/seller.js?v=20260731-reconciliation"></script>
 </body>
 </html>

@@ -12,7 +12,9 @@ HOM_QUA = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
 TUAN_TRUOC = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
 
 
-def _shop_co_nhieu_don(client, so_don, quantity=1):
+def _shop_co_nhieu_don(
+    client, so_don, quantity=1, payment_method="transfer"
+):
     """Tạo shop + N đơn. Trả về (ctx, danh sách order_id theo thứ tự tạo)."""
     _, token = new_seller(client)
     shop_id = create_shop(client, token)
@@ -24,7 +26,16 @@ def _shop_co_nhieu_don(client, so_don, quantity=1):
     for _ in range(so_don):
         res = client.post(
             f"/api/orders/{shop_id}",
-            json={"items": [{"product_name": "SP phan trang", "price": 1, "quantity": quantity}]},
+            json={
+                "items": [
+                    {
+                        "product_name": "SP phan trang",
+                        "price": 1,
+                        "quantity": quantity,
+                    }
+                ],
+                "payment_method": payment_method,
+            },
             headers=auth(token),
         )
         assert res.status_code == 200, res.text
@@ -62,6 +73,7 @@ def test_dashboard_them_thong_tin_phan_trang(client):
         "per_page",
         "total_orders",
         "has_more",
+        "reconciliation_count",
     }
     assert body["page"] == 1
     assert body["per_page"] == DEFAULT_PAGE_SIZE
@@ -117,7 +129,7 @@ def test_tham_so_phan_trang_khong_hop_le(client):
 
 
 def test_doanh_thu_la_cua_ca_khoang_khong_phai_cua_trang(client):
-    ctx, ids = _shop_co_nhieu_don(client, 4)
+    ctx, ids = _shop_co_nhieu_don(client, 4, payment_method="cash")
     for oid in ids:
         client.post(f"/api/orders/{oid}/pay", headers=auth(ctx["token"]))
 
@@ -192,7 +204,9 @@ def test_stats_khong_loc_giu_nguyen_contract(client):
 
 
 def test_stats_loc_theo_ngay(client):
-    ctx, ids = _shop_co_nhieu_don(client, 3, quantity=2)
+    ctx, ids = _shop_co_nhieu_don(
+        client, 3, quantity=2, payment_method="cash"
+    )
     for oid in ids:
         client.post(f"/api/orders/{oid}/pay", headers=auth(ctx["token"]))
     _doi_ngay_tao(ids[0], 30)

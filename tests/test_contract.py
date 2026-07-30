@@ -74,6 +74,8 @@ ROUTES_BO_SUNG = {
     ("POST", "/api/products/{shop_id}/stocktake"),  # B4: áp dụng kết quả kiểm kê
     ("POST", "/api/tts"),          # D3: sinh giọng đọc khi máy thiếu giọng Việt
     ("GET", "/api/tts/status"),    # D3: frontend hỏi server có đọc hộ được không
+    ("POST", "/api/orders/{order_id}/cash-topup"),  # D4: thu tiền mặt bù phần thiếu
+    ("POST", "/api/orders/{order_id}/refund-complete"),  # D4: ghi nhận đã hoàn tiền
 }
 
 
@@ -189,4 +191,5 @@ def test_dashboard_seller_giu_nguyen_contract(client):
     assert isinstance(body["orders"], list)
     assert set(body.keys()) == {
         "total_revenue", "orders", "page", "per_page", "total_orders", "has_more",
+        "reconciliation_count",
     }

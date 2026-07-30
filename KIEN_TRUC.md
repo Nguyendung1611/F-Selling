@@ -199,8 +199,10 @@ Luật hiện tại:
 |---|---|
 | Tiền RA (`transferType: out`, hoặc số tiền âm) | Từ chối, giữ nguyên trạng thái |
 | Payload không có số tiền | Từ chối, giữ `PENDING` |
-| Nhận < tổng đơn | `UNRECONCILED` + ghi số tiền đã nhận |
-| Nhận >= tổng đơn | `PAID`, phần dư ghi log |
+| Tổng nhận < tổng đơn | `UNRECONCILED/UNDERPAID`, tiếp tục chờ chuyển thêm hoặc bù tiền mặt |
+| Tổng nhận = tổng đơn | Tự động `PAID`, frontend xuất hóa đơn |
+| Tổng nhận > tổng đơn | `PAID/OVERPAID`, xuất hóa đơn ngay và mở khoản chờ hoàn |
+| Tiền về sau khi đơn đã hủy | `UNRECONCILED/LATE_PAYMENT`, không hồi sinh đơn; chờ hoàn |
 | Sai số tài khoản nhận | Chỉ cảnh báo, KHÔNG chặn |
 
 Ba điều dễ làm sai khi sửa tiếp:
@@ -213,8 +215,12 @@ là một số tiền thật và sai. Gộp hai ca này lại là mở lại đ�
 4xx/5xx. Lý do từ chối nằm ở `SystemLog` và khóa `rejected_order_ids`.
 
 **Đừng đặt unique index lên `bank_txn_id`.** Ngân hàng gửi lại cùng một giao
-dịch là bình thường; chống xử lý lặp đã do máy trạng thái đảm nhiệm. Cột này
-chỉ để nhận ra khi một đơn nhận HAI mã giao dịch khác nhau (khách trả hai lần).
+dịch là bình thường. Khi hỗ trợ khách chuyển nhiều lần, máy trạng thái KHÔNG
+còn đủ để chống lặp: mọi khoản tiền vào/tiền mặt/hoàn tiền nằm trong ledger
+`order_payments`, và webhook dùng unique `idempotency_key` riêng. Cả ledger,
+tổng lũy kế, trạng thái và `SystemLog` phải commit trong cùng một transaction;
+không gọi `transition_status()` hay `log_system_action()` ở giữa vì hai hàm đó
+tự commit. `bank_txn_id` vẫn non-unique và chỉ dùng để tra cứu.
 
 ### 9. Đọc tiền: phải đổi số sang CHỮ trước khi đọc
 

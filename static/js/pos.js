@@ -17,6 +17,7 @@ let subtotal = 0;
 let total = 0;
 let paymentMethod = 'transfer';
 let currentOrderId = null;
+let lastPaymentNoticeKey = null;
 
 async function loadShop() {
     try {
@@ -355,18 +356,6 @@ async function checkout() {
     } catch (e) { showToast(e.message); }
 }
 
-async function confirmPayment() {
-    if(!currentOrderId) return;
-    // Giữ lại id trước khi reset xóa mất, để còn tải hóa đơn.
-    const idDon = currentOrderId;
-    try {
-        await apiCall(`/orders/${idDon}/pay`, 'POST');
-        stopPaymentPolling();
-        showToast("Đã xác nhận tiền vào tài khoản!");
-        await hienHoaDon(idDon);
-    } catch (e) { showToast(e.message); }
-}
-
 async function cancelOrder() {
     if(!currentOrderId) return;
     const dongY = await xacNhan(
@@ -388,36 +377,132 @@ async function cancelOrder() {
 
 function startPaymentPolling() {
     stopPaymentPolling();
-    paymentPollingInterval = setInterval(async () => {
-        if(!currentOrderId) return stopPaymentPolling();
-        const idDon = currentOrderId;
-        try {
-            const statusRes = await apiCall(`/orders/${idDon}`);
-            if(statusRes.status === 'PAID') {
-                stopPaymentPolling();
-                // Đọc TRƯỚC khi vẽ hóa đơn: thu ngân đang bận tay, tiếng nói là
-                // thứ tới tai họ trước tiên. Số tiền lấy từ server, không lấy
-                // biến `total` ở máy khách.
-                DocTien.thongBaoDaNhan(idDon, statusRes.total_amount);
+    kiemTraThanhToan();
+    paymentPollingInterval = setInterval(kiemTraThanhToan, 5000);
+}
+
+async function kiemTraThanhToan() {
+    if(!currentOrderId) return stopPaymentPolling();
+    const idDon = currentOrderId;
+    try {
+        const statusRes = await apiCall(`/orders/${idDon}`);
+        if(idDon !== currentOrderId) return;
+
+        if(statusRes.status === 'PAID') {
+            stopPaymentPolling();
+            // Đọc TRƯỚC khi vẽ hóa đơn. Nếu chuyển thừa, vẫn xuất hóa đơn ngay
+            // nhưng lời cảnh báo nêu rõ số cần hoàn.
+            if(statusRes.refund_pending) {
+                DocTien.canhBaoThuaTien(
+                    idDon,
+                    statusRes.received_amount,
+                    statusRes.refund_due_amount
+                );
+                showToast(`Đã thanh toán. Khách chuyển thừa ${dinhDangTien(statusRes.refund_due_amount)} — cần hoàn lại.`);
+            } else {
+                DocTien.thongBaoDaNhan(
+                    idDon,
+                    statusRes.received_amount || statusRes.total_amount
+                );
                 showToast('Thanh toán chuyển khoản thành công!');
-                await hienHoaDon(idDon);
-            } else if(statusRes.status === 'CANCELLED') {
-                // Đơn có thể bị hủy tự động do quá hạn thanh toán
-                stopPaymentPolling();
-                showToast('Đơn đã bị hủy, hàng đã được hoàn về kho.');
-                resetPOS();
-            } else if(statusRes.status === 'UNRECONCILED') {
-                stopPaymentPolling();
-                // Từ D1, trạng thái này còn nghĩa "khách chuyển THIẾU tiền" -
-                // càng phải nói ra, vì nhìn thoáng qua rất dễ tưởng đã thu đủ.
-                DocTien.canhBaoDoiSoat(idDon);
-                showToast('Đơn cần đối soát: số tiền nhận được không khớp, hoặc tiền về sau khi đơn đã hủy. Kiểm tra trước khi giao hàng!');
-                resetPOS();
             }
-        } catch (err) {
-            console.error('Polling lỗi:', err);
+            await hienHoaDon(idDon);
+        } else if(statusRes.status === 'CANCELLED') {
+            stopPaymentPolling();
+            showToast('Đơn đã bị hủy, hàng đã được hoàn về kho.');
+            resetPOS();
+        } else if(statusRes.status === 'UNRECONCILED') {
+            renderPaymentStatus(statusRes);
+            if(statusRes.reconciliation_reason === 'UNDERPAID') {
+                // Không dừng polling và không dọn QR: khách có thể chuyển thêm,
+                // hoặc nhân viên thu đúng phần còn thiếu bằng tiền mặt.
+                const noticeKey = `UNDER:${idDon}:${Math.round(statusRes.received_amount || 0)}`;
+                if(lastPaymentNoticeKey !== noticeKey) {
+                    lastPaymentNoticeKey = noticeKey;
+                    DocTien.canhBaoThieuTien(
+                        idDon,
+                        statusRes.received_amount,
+                        statusRes.remaining_amount
+                    );
+                    showToast(`Chưa đủ tiền: còn thiếu ${dinhDangTien(statusRes.remaining_amount)}. Chưa xuất hóa đơn.`);
+                }
+            } else {
+                stopPaymentPolling();
+                showToast('Khoản tiền này cần đối soát riêng. Không giao hàng và không xuất hóa đơn.');
+            }
         }
-    }, 5000);
+    } catch (err) {
+        console.error('Polling lỗi:', err);
+    }
+}
+
+function dinhDangTien(value) {
+    return `${Math.round(Number(value) || 0).toLocaleString('vi-VN')} ₫`;
+}
+
+function renderPaymentStatus(statusRes) {
+    const box = document.getElementById('paymentStatusBox');
+    const title = document.getElementById('paymentStatusTitle');
+    const cashButton = document.getElementById('btnCashTopup');
+    const cancelButton = document.getElementById('btnCancelOrder');
+    if(!box || !title || !cashButton) return;
+
+    box.style.display = 'block';
+    document.getElementById('paymentReceived').innerText = dinhDangTien(statusRes.received_amount);
+    document.getElementById('paymentRemaining').innerText = dinhDangTien(statusRes.remaining_amount);
+
+    if(statusRes.reconciliation_reason === 'UNDERPAID') {
+        title.innerText = 'Đã nhận thiếu tiền — chưa xuất hóa đơn';
+        cashButton.style.display = 'block';
+        cashButton.innerHTML = `<i class="ph ph-money"></i> Thu bù ${dinhDangTien(statusRes.remaining_amount)} bằng tiền mặt`;
+    } else if(statusRes.reconciliation_reason === 'LATE_PAYMENT') {
+        title.innerText = `Tiền về sau khi đơn đã hủy — cần hoàn ${dinhDangTien(statusRes.refund_due_amount)}`;
+        cashButton.style.display = 'none';
+    } else {
+        title.innerText = 'Đơn cần kiểm tra đối soát';
+        cashButton.style.display = 'none';
+    }
+
+    // Khi tiền đã vào thì backend cũng không cho hủy để tránh hoàn kho sai.
+    if(cancelButton) {
+        cancelButton.disabled = Number(statusRes.received_amount || 0) > 0;
+        cancelButton.style.opacity = cancelButton.disabled ? '0.45' : '1';
+    }
+}
+
+async function buTienMatPhanThieu() {
+    if(!currentOrderId) return;
+    const idDon = currentOrderId;
+    try {
+        const statusRes = await apiCall(`/orders/${idDon}`);
+        if(
+            statusRes.status !== 'UNRECONCILED'
+            || statusRes.reconciliation_reason !== 'UNDERPAID'
+        ) {
+            return showToast('Đơn không còn ở trạng thái thiếu tiền. Đang tải lại...');
+        }
+        const remaining = Number(statusRes.remaining_amount || 0);
+        const dongY = await xacNhan(
+            `Thu bù ${dinhDangTien(remaining)} bằng tiền mặt?`,
+            `Đơn #${idDon} đã nhận ${dinhDangTien(statusRes.received_amount)} qua ngân hàng.\n\nSau khi xác nhận, hóa đơn sẽ được xuất ngay.`
+        );
+        if(!dongY) return;
+        const result = await apiCall(
+            `/orders/${idDon}/cash-topup`,
+            'POST',
+            { amount: remaining, note: 'Thu bù tại quầy POS' }
+        );
+        if(result.status === 'PAID') {
+            stopPaymentPolling();
+            showToast('Đã thu đủ phần thiếu bằng tiền mặt.');
+            await hienHoaDon(idDon);
+        } else {
+            renderPaymentStatus(result);
+        }
+    } catch (e) {
+        showToast(e.message);
+        kiemTraThanhToan();
+    }
 }
 
 function stopPaymentPolling() {
@@ -452,7 +537,11 @@ async function hienHoaDon(orderId) {
 
 function veHoaDon(d) {
     const nhanVien = localStorage.getItem('username') || '—';
-    const pttt = d.payment_method === 'cash' ? 'Tiền mặt' : 'Chuyển khoản';
+    const coChuyenKhoan = Number(d.bank_paid_amount || 0) > 0;
+    const coTienMat = Number(d.cash_paid_amount || 0) > 0;
+    const pttt = coChuyenKhoan && coTienMat
+        ? 'Chuyển khoản + tiền mặt'
+        : (coChuyenKhoan ? 'Chuyển khoản' : 'Tiền mặt');
 
     const dongHang = (d.items || []).map(i => `
         <tr>
@@ -467,6 +556,25 @@ function veHoaDon(d) {
         tongKet += `<div style="display:flex; justify-content:space-between; color:#B45309;"><span>Giảm giá${ma}</span><span>- ${d.discount_amount.toLocaleString()} ₫</span></div>`;
     }
     tongKet += `<div style="display:flex; justify-content:space-between; font-size:1.15rem; font-weight:700; margin-top:0.4rem; padding-top:0.4rem; border-top:2px solid #0F172A;"><span>TỔNG CỘNG</span><span>${(d.total_amount || 0).toLocaleString()} ₫</span></div>`;
+    if (coChuyenKhoan && coTienMat) {
+        tongKet += `<div style="display:flex; justify-content:space-between; margin-top:0.35rem;"><span>Qua ngân hàng</span><span>${dinhDangTien(d.bank_paid_amount)}</span></div>`;
+        tongKet += `<div style="display:flex; justify-content:space-between;"><span>Bù tiền mặt</span><span>${dinhDangTien(d.cash_paid_amount)}</span></div>`;
+    }
+    if (d.refund_pending) {
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#B91C1C; font-weight:700; margin-top:0.35rem;"><span>Thực nhận</span><span>${dinhDangTien(d.received_amount)}</span></div>`;
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#B91C1C; font-weight:700;"><span>CẦN HOÀN KHÁCH</span><span>${dinhDangTien(d.refund_due_amount)}</span></div>`;
+    }
+
+    const warning = document.getElementById('hoaDonCanhBao');
+    if (warning) {
+        if (d.refund_pending) {
+            warning.style.display = 'block';
+            warning.innerText = `ĐÃ XUẤT HÓA ĐƠN — CẦN HOÀN KHÁCH ${dinhDangTien(d.refund_due_amount)}`;
+        } else {
+            warning.style.display = 'none';
+            warning.innerText = '';
+        }
+    }
 
     document.getElementById('hoaDonNoiDung').innerHTML = `
         <div style="text-align:center; border-bottom:1px dashed #94A3B8; padding-bottom:0.6rem; margin-bottom:0.6rem;">
@@ -499,7 +607,17 @@ function resetPOS() {
     document.getElementById('voucherInput').value = '';
     document.getElementById('voucherMsg').innerText = '';
     document.getElementById('qrSection').style.display = 'none';
+    const paymentStatusBox = document.getElementById('paymentStatusBox');
+    const cashTopupButton = document.getElementById('btnCashTopup');
+    const cancelButton = document.getElementById('btnCancelOrder');
+    if(paymentStatusBox) paymentStatusBox.style.display = 'none';
+    if(cashTopupButton) cashTopupButton.style.display = 'none';
+    if(cancelButton) {
+        cancelButton.disabled = false;
+        cancelButton.style.opacity = '1';
+    }
     currentOrderId = null;
+    lastPaymentNoticeKey = null;
     boChonKhach();  // trả về khách vãng lai cho đơn tiếp theo
     calcCart();
     loadProducts(); // refresh stock

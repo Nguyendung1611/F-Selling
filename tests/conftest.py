@@ -40,6 +40,27 @@ from fselling.services import auth_service, email_service  # noqa: E402
 SELLER_PASSWORD = "Seller@2026"
 ADMIN_PASSWORD = os.environ["ADMIN_INITIAL_PASSWORD"]
 
+# Các khóa đối soát được thêm an toàn vào GET order/detail/dashboard.
+# Gom một chỗ để các test contract không lệch nhau khi backend mở rộng summary.
+PAYMENT_SUMMARY_KEYS = {
+    "bank_paid_amount",
+    "cash_paid_amount",
+    "received_amount",
+    "remaining_amount",
+    "overpaid_amount",
+    "refunded_amount",
+    "refund_due_amount",
+    "refund_pending",
+    "refund_completed_at",
+    "refund_completed_by",
+    "refund_method",
+    "refund_note",
+    "refund_reference",
+    "reconciliation_reason",
+    "reconciliation_pending",
+    "invoice_issued",
+}
+
 sent_emails: List[Dict[str, str]] = []
 
 

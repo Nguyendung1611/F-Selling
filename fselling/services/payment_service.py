@@ -1,6 +1,8 @@
 """Thanh toán: sinh link VietQR và phân tích payload webhook ngân hàng."""
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -29,6 +31,8 @@ class GiaoDich:
     direction: Optional[str] = None
     txn_id: Optional[str] = None
     account_no: Optional[str] = None
+    provider: Optional[str] = None
+    payload_fingerprint: Optional[str] = None
 
 
 def build_qr_url(shop: models.Shop, total: float, order_id: int) -> str:
@@ -131,7 +135,9 @@ def _tai_khoan(item: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _giao_dich_tu_item(item: Dict[str, Any], mo_ta: str) -> List[GiaoDich]:
+def _giao_dich_tu_item(
+    item: Dict[str, Any], mo_ta: str, provider: str
+) -> List[GiaoDich]:
     """Dựng GiaoDich cho một mục giao dịch, kèm mọi mã đơn tìm được trong mô tả."""
     amount = _so_tien(
         item.get("transferAmount"), item.get("amount"), item.get("value"), item.get("money")
@@ -141,6 +147,18 @@ def _giao_dich_tu_item(item: Dict[str, Any], mo_ta: str) -> List[GiaoDich]:
         "direction": _chieu_tien(item, amount),
         "txn_id": _txn_id(item),
         "account_no": _tai_khoan(item),
+        "provider": provider,
+        # Retry không có mã giao dịch vẫn phải nhận ra được. Hash toàn bộ mục
+        # giao dịch (không dùng vị trí trong mảng vì provider có thể đổi thứ tự).
+        "payload_fingerprint": hashlib.sha256(
+            json.dumps(
+                item,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest(),
     }
     return [GiaoDich(order_id=oid, **chung) for oid in _match_order_code(mo_ta)]
 
@@ -160,35 +178,40 @@ def extract_transactions(request_data: Dict[str, Any]) -> List[GiaoDich]:
         ket_qua: List[GiaoDich] = []
         for item in data:
             if isinstance(item, dict):
-                ket_qua.extend(_giao_dich_tu_item(item, item.get("description", "")))
+                ket_qua.extend(
+                    _giao_dich_tu_item(item, item.get("description", ""), "casso")
+                )
         return ket_qua
 
     if isinstance(data, dict) and "orderCode" in data:
-        gd = _giao_dich_tu_item(data, data.get("description", ""))
+        gd = _giao_dich_tu_item(data, data.get("description", ""), "payos")
         try:
             oid = int(data["orderCode"])
         except (ValueError, TypeError):
             return gd
         # orderCode là nguồn đáng tin nhất của payOS; mô tả chỉ để bổ sung.
         if not any(g.order_id == oid for g in gd):
-            mau = _giao_dich_tu_item(data, f"ORDER{oid}")
+            mau = _giao_dich_tu_item(data, f"ORDER{oid}", "payos")
             gd = mau + gd
         return gd
 
     if "content" in request_data or "transferAmount" in request_data:
         mo_ta = request_data.get("content", "") or request_data.get("description", "")
-        return _giao_dich_tu_item(request_data, mo_ta)
+        return _giao_dich_tu_item(request_data, mo_ta, "sepay")
 
     if "order_id" in request_data:
         try:
             oid = int(request_data["order_id"])
         except (ValueError, TypeError):
             return []
-        return _giao_dich_tu_item(request_data, f"ORDER{oid}")
+        return _giao_dich_tu_item(request_data, f"ORDER{oid}", "generic")
 
     # Fallback: quét toàn bộ payload tìm ORDERxxx. Không có số tiền nào đáng
     # tin ở đây nên để None - tầng trên sẽ từ chối.
-    return [GiaoDich(order_id=oid) for oid in _match_order_code(str(request_data))]
+    return [
+        GiaoDich(order_id=oid, provider="fallback")
+        for oid in _match_order_code(str(request_data))
+    ]
 
 
 def get_webhook_secret() -> str:

@@ -1,33 +1,49 @@
 """Nghiệp vụ đơn hàng: tạo đơn (giá từ DB), tra cứu, xác nhận thanh toán, webhook."""
 from __future__ import annotations
 
+import hashlib
+import math
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy import bindparam, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..dependencies import has_shop_operator_access, require_shop_access
-from ..schemas.order import OrderCreate
+from ..schemas.order import CashTopup, OrderCreate, RefundComplete
 from . import inventory_service, payment_service, voucher_service
 from .log_service import log_system_action
 
 
 # --- Máy trạng thái đơn hàng ---
-# PENDING ------> PAID          (xác nhận thủ công | webhook)
+# PENDING ------> PAID          (tiền mặt | webhook đủ tiền)
 # PENDING ------> CANCELLED     (hủy đơn - A1d)
 # CANCELLED ----> UNRECONCILED  (CHỈ webhook: tiền về sau khi đơn đã hủy)
-# UNRECONCILED -> PAID          (CHỈ thủ công: seller đã đối soát xong)
+# UNRECONCILED -> PAID          (webhook cộng dồn đủ | bù tiền mặt phần thiếu)
 # PAID là trạng thái cuối. Mọi đường khác đều bị từ chối.
 STATUS_PENDING = "PENDING"
 STATUS_PAID = "PAID"
 STATUS_CANCELLED = "CANCELLED"
 STATUS_UNRECONCILED = "UNRECONCILED"
 
-MANUAL_PAY_FROM: Tuple[str, ...] = (STATUS_PENDING, STATUS_UNRECONCILED)
+MANUAL_PAY_FROM: Tuple[str, ...] = (STATUS_PENDING,)
 WEBHOOK_PAY_FROM: Tuple[str, ...] = (STATUS_PENDING,)
 CANCEL_FROM: Tuple[str, ...] = (STATUS_PENDING,)
+
+RECON_UNDERPAID = "UNDERPAID"
+RECON_OVERPAID = "OVERPAID"
+RECON_LATE_PAYMENT = "LATE_PAYMENT"
+RECON_LEGACY_REVIEW = "LEGACY_REVIEW"
+
+ENTRY_BANK = "BANK_IN"
+ENTRY_CASH = "CASH_TOPUP"
+ENTRY_REFUND_CASH = "REFUND_CASH"
+ENTRY_REFUND_TRANSFER = "REFUND_TRANSFER"
+
+MONEY_EPSILON = 0.001
 
 _UPDATE_STATUS = (
     text(
@@ -35,6 +51,72 @@ _UPDATE_STATUS = (
         "WHERE id = :order_id AND status IN :from_states"
     ).bindparams(bindparam("from_states", expanding=True))
 )
+
+
+def _so_tien(value: Any) -> float:
+    """Giá trị tiền an toàn cho dữ liệu cũ có thể NULL."""
+    return float(value or 0)
+
+
+def payment_summary(order: models.Order) -> Dict[str, Any]:
+    """Một nguồn dữ liệu thống nhất cho polling POS, hóa đơn và dashboard."""
+    bank = _so_tien(order.paid_amount)
+    cash = _so_tien(order.cash_paid_amount)
+    received = bank + cash
+    total = _so_tien(order.total_amount)
+    late = order.reconciliation_reason == RECON_LATE_PAYMENT
+    remaining = 0 if late else max(total - received, 0)
+    overpaid = received if late else max(received - total, 0)
+    refund_due = max(_so_tien(order.refund_due_amount), 0)
+    refund_pending = refund_due > MONEY_EPSILON and order.refund_completed_at is None
+    return {
+        "bank_paid_amount": bank,
+        "cash_paid_amount": cash,
+        "received_amount": received,
+        "remaining_amount": remaining,
+        "overpaid_amount": overpaid,
+        "refunded_amount": _so_tien(order.refunded_amount),
+        "refund_due_amount": refund_due,
+        "refund_pending": refund_pending,
+        "refund_completed_at": order.refund_completed_at,
+        "refund_completed_by": order.refund_completed_by,
+        "refund_method": order.refund_method,
+        "refund_note": order.refund_note,
+        "refund_reference": order.refund_reference,
+        "reconciliation_reason": order.reconciliation_reason,
+        "reconciliation_pending": (
+            order.status == STATUS_UNRECONCILED or refund_pending
+        ),
+        "invoice_issued": order.status == STATUS_PAID,
+    }
+
+
+def _them_nhat_ky(
+    db: Session, user_id: Optional[int], action: str, details: str
+) -> None:
+    """Thêm audit vào transaction hiện tại, KHÔNG tự commit."""
+    db.add(
+        models.SystemLog(
+            user_id=user_id,
+            action=action,
+            details=details,
+        )
+    )
+
+
+def _serialize_payment(payment: models.OrderPayment) -> Dict[str, Any]:
+    return {
+        "id": payment.id,
+        "entry_type": payment.entry_type,
+        "amount": payment.amount,
+        "provider": payment.provider,
+        "bank_txn_id": payment.bank_txn_id,
+        "account_no": payment.account_no,
+        "created_by_user_id": payment.created_by_user_id,
+        "note": payment.note,
+        "reference": payment.reference,
+        "created_at": payment.created_at,
+    }
 
 
 def read_status(db: Session, order_id: int) -> Optional[str]:
@@ -121,6 +203,8 @@ def create_order(
         voucher_code=order.voucher_code,
         payment_method=order.payment_method,
         customer_id=customer_id,
+        # Đơn được giảm về 0đ không có giao dịch ngân hàng dương để chờ.
+        status=STATUS_PAID if total <= MONEY_EPSILON else STATUS_PENDING,
     )
     db.add(new_order)
     db.flush()  # lấy new_order.id mà chưa commit, cùng một transaction
@@ -164,50 +248,385 @@ def get_order(db: Session, current_user: models.User, order_id: int) -> Dict[str
         raise HTTPException(status_code=404, detail="Không tìm thấy cửa hàng của đơn hàng")
     if not has_shop_operator_access(shop, current_user):
         raise HTTPException(status_code=403, detail="Không có quyền truy cập đơn hàng này")
-    return {
+    result = {
         "id": order.id,
         "shop_id": order.shop_id,
         "status": order.status,
         "total_amount": order.total_amount,
         "payment_method": order.payment_method,
     }
+    result.update(payment_summary(order))
+    return result
 
 
 def pay_order(db: Session, current_user: models.User, order_id: int) -> Dict[str, str]:
-    """Xác nhận thủ công tại POS (đã nhận tiền mặt / đã thấy tiền về).
+    """Thu tiền mặt cho đơn PENDING.
 
-    Cho phép PENDING -> PAID và UNRECONCILED -> PAID (seller đã đối soát xong).
-    Đơn đã PAID: trả 200 im lặng (bấm trùng ở POS là chuyện thường).
-    Đơn đã CANCELLED: từ chối 409 - kho đã được hoàn, không được hồi sinh.
+    Đơn chuyển khoản phải do webhook xác nhận; không còn đường bấm tay biến
+    UNDERPAID/LATE_PAYMENT thành PAID.
     """
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     require_shop_access(db, order.shop_id, current_user)
 
+    if order.payment_method != "cash":
+        raise HTTPException(
+            status_code=409,
+            detail="Đơn chuyển khoản phải chờ ngân hàng xác nhận tự động",
+        )
+
     if order.status == STATUS_PAID:
         return {"msg": "Paid successfully"}
 
-    # Giữ lại trước khi commit vì commit sẽ expire ORM object.
-    total_amount = order.total_amount
+    total_amount = _so_tien(order.total_amount)
 
-    if not transition_status(db, order_id, MANUAL_PAY_FROM, STATUS_PAID):
+    if not apply_transition(db, order_id, MANUAL_PAY_FROM, STATUS_PAID):
+        db.rollback()
         current = read_status(db, order_id)
         if current == STATUS_PAID:
-            # Đường khác vừa thanh toán xong ngay trước ta -> coi như thành công.
             return {"msg": "Paid successfully"}
         raise HTTPException(
             status_code=409,
             detail=f"Không thể xác nhận thanh toán cho đơn ở trạng thái {current}",
         )
 
-    log_system_action(
+    db.execute(
+        text(
+            "UPDATE orders SET cash_paid_amount = :amount, "
+            "reconciliation_reason = NULL, refund_due_amount = 0 "
+            "WHERE id = :order_id"
+        ),
+        {"amount": total_amount, "order_id": order_id},
+    )
+    db.add(
+        models.OrderPayment(
+            order_id=order_id,
+            entry_type=ENTRY_CASH,
+            amount=total_amount,
+            created_by_user_id=current_user.id,
+            note="Thu tiền mặt khi thanh toán đơn",
+        )
+    )
+    _them_nhat_ky(
         db,
         current_user.id,
         "PAY_ORDER",
-        f"Thanh toán thành công đơn #{order_id} - Tổng tiền: {total_amount:,.0f}đ",
+        f"Thanh toán tiền mặt đơn #{order_id} - Tổng tiền: {total_amount:,.0f}đ",
     )
+    db.commit()
     return {"msg": "Paid successfully"}
+
+
+def cash_topup(
+    db: Session,
+    current_user: models.User,
+    order_id: int,
+    request: CashTopup,
+) -> Dict[str, Any]:
+    """Ghi nhận tiền mặt bù cho đúng đơn đang thiếu.
+
+    UPDATE có điều kiện bảo đảm webhook và hai cú bấm thu bù không thể cùng
+    thắng dựa trên một số dư cũ. Nếu bỏ amount, thu đúng toàn bộ phần còn thiếu.
+    """
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
+    require_shop_access(db, order.shop_id, current_user)
+
+    if (
+        order.status != STATUS_UNRECONCILED
+        or order.reconciliation_reason != RECON_UNDERPAID
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Chỉ được thu bù tiền mặt cho đơn chuyển thiếu đang chờ đối soát",
+        )
+
+    received = _so_tien(order.paid_amount) + _so_tien(order.cash_paid_amount)
+    remaining = max(_so_tien(order.total_amount) - received, 0)
+    if remaining <= MONEY_EPSILON:
+        raise HTTPException(status_code=409, detail="Đơn không còn thiếu tiền")
+    if request.amount is not None:
+        requested_amount = float(request.amount)
+        if (
+            not math.isfinite(requested_amount)
+            or abs(requested_amount - remaining) > MONEY_EPSILON
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Tiền mặt phải bù đúng toàn bộ phần còn thiếu là "
+                    f"{remaining:,.0f}đ"
+                ),
+            )
+    amount = remaining
+    if not math.isfinite(amount) or amount <= MONEY_EPSILON:
+        raise HTTPException(
+            status_code=400, detail="Số tiền bù phải lớn hơn 0"
+        )
+
+    result = db.execute(
+        text(
+            """
+            UPDATE orders
+            SET cash_paid_amount = COALESCE(cash_paid_amount, 0) + :amount,
+                status = CASE
+                    WHEN COALESCE(paid_amount, 0)
+                       + COALESCE(cash_paid_amount, 0) + :amount
+                         >= total_amount - :epsilon
+                    THEN :paid ELSE :unreconciled END,
+                reconciliation_reason = CASE
+                    WHEN COALESCE(paid_amount, 0)
+                       + COALESCE(cash_paid_amount, 0) + :amount
+                         >= total_amount - :epsilon
+                    THEN NULL ELSE :underpaid END
+            WHERE id = :order_id
+              AND status = :unreconciled
+              AND reconciliation_reason = :underpaid
+              AND COALESCE(paid_amount, 0)
+                + COALESCE(cash_paid_amount, 0) + :amount
+                  <= total_amount + :epsilon
+            """
+        ),
+        {
+            "amount": amount,
+            "epsilon": MONEY_EPSILON,
+            "paid": STATUS_PAID,
+            "unreconciled": STATUS_UNRECONCILED,
+            "underpaid": RECON_UNDERPAID,
+            "order_id": order_id,
+        },
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Số tiền của đơn vừa thay đổi; vui lòng tải lại trước khi thu bù",
+        )
+
+    note = (request.note or "").strip()[:500] or None
+    db.add(
+        models.OrderPayment(
+            order_id=order_id,
+            entry_type=ENTRY_CASH,
+            amount=amount,
+            created_by_user_id=current_user.id,
+            note=note or "Thu bù phần thiếu bằng tiền mặt",
+        )
+    )
+    _them_nhat_ky(
+        db,
+        current_user.id,
+        "CASH_TOPUP",
+        f"Order {order_id}: thu bù tiền mặt {amount:,.0f}đ"
+        + (f" - {note}" if note else ""),
+    )
+    db.commit()
+    db.refresh(order)
+    response = {
+        "msg": (
+            "Đã thu đủ và hoàn tất đơn hàng"
+            if order.status == STATUS_PAID
+            else "Đã ghi nhận khoản tiền mặt bù thiếu"
+        ),
+        "id": order.id,
+        "status": order.status,
+        "total_amount": order.total_amount,
+    }
+    response.update(payment_summary(order))
+    return response
+
+
+def complete_refund(
+    db: Session,
+    current_user: models.User,
+    order_id: int,
+    request: RefundComplete,
+) -> Dict[str, Any]:
+    """Ghi nhận đã hoàn toàn bộ khoản đang chờ, không tự chuyển tiền."""
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
+    require_shop_access(db, order.shop_id, current_user)
+
+    operation_id = request.operation_id.strip()
+    if len(operation_id) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Mã thao tác hoàn tiền không hợp lệ",
+        )
+    operation_key = (
+        "refund:"
+        + hashlib.sha256(operation_id.encode("utf-8")).hexdigest()
+    )
+    previous_operation = (
+        db.query(models.OrderPayment)
+        .filter(models.OrderPayment.idempotency_key == operation_key)
+        .first()
+    )
+    if previous_operation:
+        if (
+            previous_operation.order_id == order_id
+            and previous_operation.entry_type
+            in (ENTRY_REFUND_CASH, ENTRY_REFUND_TRANSFER)
+        ):
+            response = {
+                "msg": "Lần hoàn tiền này đã được ghi nhận trước đó",
+                "id": order.id,
+                "status": order.status,
+                "total_amount": order.total_amount,
+            }
+            response.update(payment_summary(order))
+            return response
+        raise HTTPException(
+            status_code=409,
+            detail="Mã thao tác hoàn tiền đã được dùng cho một giao dịch khác",
+        )
+
+    due = max(_so_tien(order.refund_due_amount), 0)
+    if due <= MONEY_EPSILON:
+        if order.refund_completed_at is not None:
+            # Bấm lặp: trả cùng kết quả nhưng tuyệt đối không ghi thêm lần hoàn.
+            response = {
+                "msg": "Khoản hoàn tiền này đã được ghi nhận trước đó",
+                "id": order.id,
+                "status": order.status,
+                "total_amount": order.total_amount,
+            }
+            response.update(payment_summary(order))
+            return response
+        raise HTTPException(status_code=409, detail="Đơn hàng không có khoản tiền cần hoàn")
+
+    if order.reconciliation_reason not in (RECON_OVERPAID, RECON_LATE_PAYMENT):
+        raise HTTPException(
+            status_code=409,
+            detail="Trạng thái đối soát của đơn không cho phép ghi nhận hoàn tiền",
+        )
+
+    completed_at = datetime.utcnow()
+    target_status = (
+        STATUS_CANCELLED
+        if order.reconciliation_reason == RECON_LATE_PAYMENT
+        else STATUS_PAID
+    )
+    note = (request.note or "").strip()[:500] or None
+    reference = (request.reference or "").strip()[:128] or None
+    refund_payment = models.OrderPayment(
+        order_id=order_id,
+        entry_type=(
+            ENTRY_REFUND_CASH
+            if request.method == "cash"
+            else ENTRY_REFUND_TRANSFER
+        ),
+        amount=due,
+        idempotency_key=operation_key,
+        created_by_user_id=current_user.id,
+        note=note,
+        reference=reference,
+    )
+    db.add(refund_payment)
+    try:
+        # Unique operation key chặn cả retry đồng thời lẫn retry tới muộn sau
+        # khi một chu kỳ hoàn mới đã mở.
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        previous_operation = (
+            db.query(models.OrderPayment)
+            .filter(models.OrderPayment.idempotency_key == operation_key)
+            .first()
+        )
+        fresh = db.query(models.Order).filter(models.Order.id == order_id).first()
+        if (
+            previous_operation
+            and fresh
+            and previous_operation.order_id == order_id
+            and previous_operation.entry_type
+            in (ENTRY_REFUND_CASH, ENTRY_REFUND_TRANSFER)
+        ):
+            response = {
+                "msg": "Lần hoàn tiền này đã được ghi nhận trước đó",
+                "id": fresh.id,
+                "status": fresh.status,
+                "total_amount": fresh.total_amount,
+            }
+            response.update(payment_summary(fresh))
+            return response
+        raise HTTPException(
+            status_code=409,
+            detail="Mã thao tác hoàn tiền đã được dùng cho một giao dịch khác",
+        )
+
+    result = db.execute(
+        text(
+            """
+            UPDATE orders
+            SET refunded_amount = COALESCE(refunded_amount, 0) + :due,
+                refund_due_amount = 0,
+                refund_completed_at = :completed_at,
+                refund_completed_by = :user_id,
+                refund_method = :method,
+                refund_note = :note,
+                refund_reference = :reference,
+                status = :target_status
+            WHERE id = :order_id
+              AND refund_due_amount > :epsilon
+              AND ABS(refund_due_amount - :due) <= :epsilon
+              AND refund_completed_at IS NULL
+              AND reconciliation_reason IN (:overpaid, :late_payment)
+            """
+        ),
+        {
+            "due": due,
+            "completed_at": completed_at,
+            "user_id": current_user.id,
+            "method": request.method,
+            "note": note,
+            "reference": reference,
+            "target_status": target_status,
+            "order_id": order_id,
+            "epsilon": MONEY_EPSILON,
+            "overpaid": RECON_OVERPAID,
+            "late_payment": RECON_LATE_PAYMENT,
+        },
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        fresh = db.query(models.Order).filter(models.Order.id == order_id).first()
+        if fresh and fresh.refund_completed_at is not None:
+            response = {
+                "msg": "Khoản hoàn tiền này đã được ghi nhận trước đó",
+                "id": fresh.id,
+                "status": fresh.status,
+                "total_amount": fresh.total_amount,
+            }
+            response.update(payment_summary(fresh))
+            return response
+        raise HTTPException(
+            status_code=409,
+            detail="Khoản cần hoàn vừa thay đổi; vui lòng tải lại trước khi xác nhận",
+        )
+
+    detail = (
+        f"Order {order_id}: đã hoàn {due:,.0f}đ bằng "
+        f"{'tiền mặt' if request.method == 'cash' else 'chuyển khoản'}"
+    )
+    if reference:
+        detail += f" - mã tham chiếu {reference}"
+    if note:
+        detail += f" - {note}"
+    _them_nhat_ky(db, current_user.id, "REFUND_COMPLETE", detail)
+    db.commit()
+    db.refresh(order)
+    response = {
+        "msg": "Đã ghi nhận hoàn tiền thành công",
+        "id": order.id,
+        "status": order.status,
+        "total_amount": order.total_amount,
+    }
+    response.update(payment_summary(order))
+    return response
 
 
 def get_order_detail(db: Session, current_user: models.User, order_id: int) -> Dict[str, Any]:
@@ -237,7 +656,7 @@ def get_order_detail(db: Session, current_user: models.User, order_id: int) -> D
         if kh:
             customer = {"id": kh.id, "name": kh.name, "phone": kh.phone}
 
-    return {
+    result = {
         "id": order.id,
         "shop_id": order.shop_id,
         "shop_name": shop.name if shop else None,
@@ -259,7 +678,18 @@ def get_order_detail(db: Session, current_user: models.User, order_id: int) -> D
             }
             for i in items
         ],
+        "payments": [
+            _serialize_payment(p)
+            for p in (
+                db.query(models.OrderPayment)
+                .filter(models.OrderPayment.order_id == order_id)
+                .order_by(models.OrderPayment.created_at, models.OrderPayment.id)
+                .all()
+            )
+        ],
     }
+    result.update(payment_summary(order))
+    return result
 
 
 def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[str, Any]:
@@ -386,153 +816,344 @@ def _ket_qua_huy(
 
 
 def apply_webhook_payment(db: Session, request_data: Dict[str, Any]) -> Dict[str, List[int]]:
-    """Xử lý biến động số dư từ ngân hàng.
+    """Cộng dồn mọi giao dịch ngân hàng hợp lệ, idempotent theo từng giao dịch.
 
-    - PENDING -> PAID.
-    - PAID: bỏ qua (webhook gửi lặp), vẫn báo thành công.
-    - CANCELLED/UNRECONCILED: tiền về cho đơn đã hủy -> đánh dấu UNRECONCILED
-      để người đối soát xử lý, KHÔNG tự động PAID.
-
-    Không bao giờ raise lỗi cho các tình huống trạng thái: ngân hàng sẽ retry
-    vô hạn nếu nhận 4xx/5xx. Bất thường được đẩy vào SystemLog.
+    Mỗi ledger row, tổng tiền, trạng thái và audit được commit cùng một
+    transaction. Gửi lại cùng giao dịch chỉ trả lại trạng thái hiện tại; không
+    cộng tiền, không ghi log và không làm frontend phát tiếng lần nữa.
     """
-    giao_dich = payment_service.extract_transactions(request_data)
-    if not giao_dich:
+    transactions = payment_service.extract_transactions(request_data)
+    if not transactions:
         raise HTTPException(
             status_code=400,
             detail="Không tìm thấy mã đơn hàng ORDERxxx trong thông tin thanh toán",
         )
 
-    paid: List[int] = []
-    unreconciled: List[int] = []
-    rejected: List[int] = []
+    paid: set[int] = set()
+    unreconciled: set[int] = set()
+    rejected: set[int] = set()
     found_any = False
 
-    # Gộp theo đơn, giữ giao dịch đầu tiên cho mỗi đơn (một payload hiếm khi
-    # chứa hai giao dịch cho cùng một đơn; nếu có thì xử lý cái đầu là đủ).
-    theo_don: Dict[int, Any] = {}
-    for gd in giao_dich:
-        theo_don.setdefault(gd.order_id, gd)
-
-    for oid in sorted(theo_don):
-        gd = theo_don[oid]
-        order = db.query(models.Order).filter(models.Order.id == oid).first()
+    # Không gộp theo order_id: một payload Casso có thể chứa 40k + 60k cho cùng
+    # đơn, và cả hai khoản đều phải được ghi nhận.
+    for gd in transactions:
+        order = db.query(models.Order).filter(models.Order.id == gd.order_id).first()
         if order is None:
             continue
         found_any = True
 
-        # --- Các lý do từ chối, kiểm TRƯỚC khi đụng vào trạng thái ---
         if gd.direction == "out":
-            _ghi_tu_choi(db, oid, "giao dịch là tiền RA, không phải tiền vào")
-            rejected.append(oid)
+            _ghi_tu_choi(
+                db, gd.order_id, "giao dịch là tiền RA, không phải tiền vào"
+            )
+            rejected.add(gd.order_id)
             continue
-
         if gd.amount is None:
             _ghi_tu_choi(
-                db, oid, "payload không có số tiền nên không xác nhận được đã thu đủ"
-            )
-            rejected.append(oid)
-            continue
-
-        can_thu = order.total_amount or 0
-        if gd.amount < can_thu:
-            # Tiền đã vào tài khoản shop rồi nên KHÔNG được im lặng bỏ qua.
-            transition_status(db, oid, (STATUS_PENDING,), STATUS_UNRECONCILED)
-            _ghi_nhan_tien(db, oid, gd)
-            log_system_action(
                 db,
-                None,
-                "WEBHOOK_THIEU_TIEN",
-                f"Order {oid}: nhận {gd.amount:,.0f}đ nhưng cần {can_thu:,.0f}đ "
-                f"(thiếu {can_thu - gd.amount:,.0f}đ) - cần đối soát",
+                gd.order_id,
+                "payload không có số tiền nên không xác nhận được đã thu đủ",
             )
-            unreconciled.append(oid)
+            rejected.add(gd.order_id)
+            continue
+        amount = float(gd.amount)
+        if not math.isfinite(amount) or amount <= 0:
+            _ghi_tu_choi(
+                db,
+                gd.order_id,
+                "số tiền giao dịch phải lớn hơn 0 (khác với payload thiếu số tiền)",
+            )
+            rejected.add(gd.order_id)
             continue
 
-        _canh_bao_sai_tai_khoan(db, oid, order, gd)
-
-        # --- Đủ tiền: chuyển PAID ---
-        if transition_status(db, oid, WEBHOOK_PAY_FROM, STATUS_PAID):
-            _ghi_nhan_tien(db, oid, gd)
-            chi_tiet = f"Order {oid} marked PAID via webhook (nhận {gd.amount:,.0f}đ)"
-            if gd.amount > can_thu:
-                chi_tiet += f", khách chuyển DƯ {gd.amount - can_thu:,.0f}đ - cần trả lại"
-            log_system_action(db, None, "WEBHOOK_PAYMENT", chi_tiet)
-            paid.append(oid)
-            continue
-
-        current = read_status(db, oid)
-        if current == STATUS_PAID:
-            _canh_bao_tra_trung(db, oid, order, gd)
-            paid.append(oid)  # webhook gửi lặp
-        elif current == STATUS_CANCELLED:
-            if transition_status(db, oid, (STATUS_CANCELLED,), STATUS_UNRECONCILED):
-                _ghi_nhan_tien(db, oid, gd)
-                log_system_action(
-                    db,
-                    None,
-                    "WEBHOOK_UNRECONCILED",
-                    f"Order {oid}: tiền về sau khi đơn đã hủy - cần đối soát thủ công",
-                )
-            unreconciled.append(oid)
-        elif current == STATUS_UNRECONCILED:
-            unreconciled.append(oid)
+        result = _apply_bank_transaction(db, order, gd, amount)
+        if result == "paid":
+            paid.add(gd.order_id)
+            unreconciled.discard(gd.order_id)
+        elif result == "unreconciled":
+            if gd.order_id not in paid:
+                unreconciled.add(gd.order_id)
+        else:
+            rejected.add(gd.order_id)
 
     if not found_any:
         raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng tương ứng")
-    return {"paid": paid, "unreconciled": unreconciled, "rejected": rejected}
+    return {
+        "paid": sorted(paid),
+        "unreconciled": sorted(unreconciled),
+        "rejected": sorted(rejected),
+    }
+
+
+def _bank_idempotency_key(gd: Any, fallback_account: Optional[str] = None) -> str:
+    """Khóa retry riêng; không biến bank_txn_id thành ràng buộc unique."""
+    provider = str(gd.provider or "unknown").strip().lower()
+    account = "".join(
+        c
+        for c in str(gd.account_no or fallback_account or "unknown").strip().upper()
+        if c.isalnum()
+    )
+    account = account.lstrip("0") or "0"
+    if gd.txn_id and str(gd.txn_id).strip():
+        raw = f"txn|{provider}|{account}|{str(gd.txn_id).strip()}"
+    else:
+        # fingerprint là hash canonical của đúng mục giao dịch từ provider.
+        raw = (
+            f"payload|{provider}|{account}|"
+            + str(gd.payload_fingerprint or "")
+        )
+    return "bank:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _classify_existing(order: models.Order) -> str:
+    if order.status == STATUS_PAID:
+        return "paid"
+    if order.status in (STATUS_UNRECONCILED, STATUS_CANCELLED):
+        return "unreconciled"
+    return "rejected"
+
+
+def _same_payment(existing: models.OrderPayment, order_id: int, gd: Any, amount: float) -> bool:
+    if existing.order_id != order_id:
+        return False
+    if abs(_so_tien(existing.amount) - amount) > MONEY_EPSILON:
+        return False
+    if existing.bank_txn_id and gd.txn_id:
+        return existing.bank_txn_id == str(gd.txn_id)
+    return True
+
+
+def _duplicate_or_collision(
+    db: Session,
+    order: models.Order,
+    gd: Any,
+    amount: float,
+    existing: models.OrderPayment,
+) -> str:
+    if _same_payment(existing, order.id, gd, amount):
+        return _classify_existing(order)
+    _them_nhat_ky(
+        db,
+        None,
+        "WEBHOOK_XUNG_DOT_IDEMPOTENCY",
+        f"Order {order.id}: khóa giao dịch đã tồn tại nhưng payload mới không khớp; "
+        "đã từ chối để tránh cộng sai tiền",
+    )
+    db.commit()
+    return "rejected"
+
+
+def _apply_bank_transaction(
+    db: Session, order: models.Order, gd: Any, amount: float
+) -> str:
+    """Ghi một giao dịch vào ledger rồi suy ra trạng thái từ tổng lũy kế."""
+    order_id = order.id
+    configured_account = (
+        db.query(models.Shop.bank_account_no)
+        .filter(models.Shop.id == order.shop_id)
+        .scalar()
+    )
+    key = _bank_idempotency_key(gd, configured_account)
+    # Cùng mã thô trên CÙNG đơn vẫn là retry kể cả provider lúc retry làm rơi
+    # mất account/provider. Cột này non-unique ở DB; đây chỉ là lớp tương thích.
+    if gd.txn_id:
+        existing_raw = (
+            db.query(models.OrderPayment)
+            .filter(
+                models.OrderPayment.order_id == order_id,
+                models.OrderPayment.bank_txn_id == str(gd.txn_id),
+                models.OrderPayment.entry_type == ENTRY_BANK,
+            )
+            .order_by(models.OrderPayment.id)
+            .first()
+        )
+        if existing_raw:
+            return _duplicate_or_collision(db, order, gd, amount, existing_raw)
+
+    existing = (
+        db.query(models.OrderPayment)
+        .filter(models.OrderPayment.idempotency_key == key)
+        .first()
+    )
+    if existing:
+        return _duplicate_or_collision(db, order, gd, amount, existing)
+
+    # Tương thích dữ liệu trước khi có ledger: retry đúng mã giao dịch đã lưu
+    # trên orders không được biến thành một khoản tiền mới.
+    if (
+        gd.txn_id
+        and order.bank_txn_id
+        and str(gd.txn_id) == order.bank_txn_id
+        and order.paid_amount is not None
+        and order.status != STATUS_PENDING
+    ):
+        return _classify_existing(order)
+
+    payment = models.OrderPayment(
+        order_id=order_id,
+        entry_type=ENTRY_BANK,
+        amount=amount,
+        idempotency_key=key,
+        provider=str(gd.provider) if gd.provider else None,
+        bank_txn_id=str(gd.txn_id) if gd.txn_id else None,
+        account_no=str(gd.account_no) if gd.account_no else None,
+    )
+    db.add(payment)
+    try:
+        db.flush()
+    except IntegrityError:
+        # Hai webhook giống nhau có thể cùng vượt qua query phía trên; unique
+        # index là hàng rào cuối. Rollback rồi phân loại như một retry.
+        db.rollback()
+        fresh_order = (
+            db.query(models.Order).filter(models.Order.id == order_id).first()
+        )
+        existing = (
+            db.query(models.OrderPayment)
+            .filter(models.OrderPayment.idempotency_key == key)
+            .first()
+        )
+        if fresh_order is not None and existing is not None:
+            return _duplicate_or_collision(
+                db, fresh_order, gd, amount, existing
+            )
+        raise
+
+    # INSERT ledger đã lấy write lock của SQLite. Phải đọc lại trạng thái SAU
+    # thời điểm này: cancel có thể đã thắng giữa SELECT đầu hàm và INSERT.
+    db.expire(order)
+    db.refresh(order)
+    previous_status = order.status
+    previous_reason = order.reconciliation_reason
+    previous_txn = order.bank_txn_id
+
+    # Cộng bằng SQL để hai giao dịch khác nhau không ghi đè tổng của nhau.
+    db.execute(
+        text(
+            """
+            UPDATE orders
+            SET paid_amount = COALESCE(paid_amount, 0) + :amount,
+                bank_txn_id = CASE
+                    WHEN :txn IS NULL THEN bank_txn_id ELSE :txn END
+            WHERE id = :order_id
+            """
+        ),
+        {
+            "amount": amount,
+            "txn": str(gd.txn_id) if gd.txn_id else None,
+            "order_id": order_id,
+        },
+    )
+    db.expire(order)
+    db.refresh(order)
+
+    received = _so_tien(order.paid_amount) + _so_tien(order.cash_paid_amount)
+    total = _so_tien(order.total_amount)
+    refunded = _so_tien(order.refunded_amount)
+
+    if previous_status == STATUS_CANCELLED or previous_reason == RECON_LATE_PAYMENT:
+        order.status = STATUS_UNRECONCILED
+        order.reconciliation_reason = RECON_LATE_PAYMENT
+        order.refund_due_amount = max(received - refunded, 0)
+        _reset_refund_completion(order)
+        _them_nhat_ky(
+            db,
+            None,
+            "WEBHOOK_UNRECONCILED",
+            f"Order {order_id}: nhận thêm {amount:,.0f}đ sau khi đơn đã hủy; "
+            f"tổng cần hoàn {order.refund_due_amount:,.0f}đ",
+        )
+        result = "unreconciled"
+    elif previous_reason == RECON_LEGACY_REVIEW:
+        # Không thể biết UNRECONCILED cũ do thiếu tiền hay do đơn từng hủy.
+        # Ghi tiền nhưng tuyệt đối không tự hồi sinh.
+        order.status = STATUS_UNRECONCILED
+        order.reconciliation_reason = RECON_LEGACY_REVIEW
+        _them_nhat_ky(
+            db,
+            None,
+            "WEBHOOK_UNRECONCILED",
+            f"Order {order_id}: nhận thêm {amount:,.0f}đ nhưng đơn đối soát cũ "
+            "không đủ dữ liệu để tự kết luận",
+        )
+        result = "unreconciled"
+    elif received < total - MONEY_EPSILON:
+        order.status = STATUS_UNRECONCILED
+        order.reconciliation_reason = RECON_UNDERPAID
+        order.refund_due_amount = 0
+        remaining = total - received
+        _them_nhat_ky(
+            db,
+            None,
+            "WEBHOOK_THIEU_TIEN",
+            f"Order {order_id}: vừa nhận {amount:,.0f}đ, tổng đã nhận "
+            f"{received:,.0f}đ nhưng cần {total:,.0f}đ "
+            f"(thiếu {remaining:,.0f}đ) - cần đối soát",
+        )
+        result = "unreconciled"
+    else:
+        order.status = STATUS_PAID
+        excess_due = max(received - total - refunded, 0)
+        order.refund_due_amount = excess_due
+        if excess_due > MONEY_EPSILON:
+            order.reconciliation_reason = RECON_OVERPAID
+            _reset_refund_completion(order)
+        else:
+            order.reconciliation_reason = None
+
+        if previous_status == STATUS_PAID:
+            _them_nhat_ky(
+                db,
+                None,
+                "WEBHOOK_TRA_TRUNG",
+                f"Order {order_id} đã thanh toán"
+                + (f" bằng giao dịch {previous_txn}" if previous_txn else "")
+                + f", nay nhận thêm giao dịch {gd.txn_id or '(không mã)'} "
+                f"({amount:,.0f}đ) - cần hoàn {excess_due:,.0f}đ",
+            )
+        else:
+            detail = (
+                f"Order {order_id} marked PAID via webhook "
+                f"(tổng nhận {received:,.0f}đ)"
+            )
+            if excess_due > MONEY_EPSILON:
+                detail += f", khách chuyển DƯ {excess_due:,.0f}đ - cần trả lại"
+            _them_nhat_ky(db, None, "WEBHOOK_PAYMENT", detail)
+        result = "paid"
+
+    _add_account_warning(db, order, gd)
+    db.commit()
+    return result
+
+
+def _reset_refund_completion(order: models.Order) -> None:
+    """Một khoản dư mới mở chu kỳ hoàn mới; lịch sử cũ vẫn còn trong ledger."""
+    order.refund_completed_at = None
+    order.refund_completed_by = None
+    order.refund_method = None
+    order.refund_note = None
+    order.refund_reference = None
 
 
 def _ghi_tu_choi(db: Session, order_id: int, ly_do: str) -> None:
     log_system_action(db, None, "WEBHOOK_TU_CHOI", f"Order {order_id}: {ly_do}")
 
 
-def _ghi_nhan_tien(db: Session, order_id: int, gd: Any) -> None:
-    """Lưu số tiền thực nhận và mã giao dịch ngân hàng lên đơn."""
-    db.execute(
-        text(
-            "UPDATE orders SET paid_amount = :amount, bank_txn_id = :txn "
-            "WHERE id = :order_id"
-        ),
-        {"amount": gd.amount, "txn": gd.txn_id, "order_id": order_id},
-    )
-    db.commit()
-
-
-def _canh_bao_sai_tai_khoan(db: Session, order_id: int, order: Any, gd: Any) -> None:
-    """Chỉ CẢNH BÁO khi số tài khoản nhận không khớp, không chặn.
-
-    Mỗi nhà cung cấp định dạng số tài khoản một kiểu (có/không số 0 đầu, kèm
-    mã ngân hàng), chặn theo trường này rất dễ từ chối nhầm giao dịch thật.
-    """
+def _add_account_warning(
+    db: Session, order: models.Order, gd: Any
+) -> None:
+    """Sai tài khoản chỉ cảnh báo trong cùng transaction, không chặn tiền."""
     if not gd.account_no:
         return
     shop = db.query(models.Shop).filter(models.Shop.id == order.shop_id).first()
-    cua_shop = (shop.bank_account_no or "") if shop else ""
-    if not cua_shop:
+    shop_account = (shop.bank_account_no or "") if shop else ""
+    if not shop_account:
         return
-    if gd.account_no.lstrip("0") != cua_shop.lstrip("0"):
-        log_system_action(
+    if str(gd.account_no).lstrip("0") != shop_account.lstrip("0"):
+        _them_nhat_ky(
             db,
             None,
             "WEBHOOK_KHAC_TAI_KHOAN",
-            f"Order {order_id}: tiền vào tài khoản {gd.account_no} nhưng shop khai "
-            f"{cua_shop} - kiểm tra lại cấu hình",
-        )
-
-
-def _canh_bao_tra_trung(db: Session, order_id: int, order: Any, gd: Any) -> None:
-    """Đơn đã PAID mà nhận mã giao dịch KHÁC = khách chuyển tiền hai lần.
-
-    Máy trạng thái chặn không cho xử lý lại, nhưng shop đã nhận dư tiền thật -
-    phải để lại dấu vết, nếu không không ai biết mà trả lại.
-    """
-    cu = order.bank_txn_id
-    if gd.txn_id and cu and gd.txn_id != cu:
-        log_system_action(
-            db,
-            None,
-            "WEBHOOK_TRA_TRUNG",
-            f"Order {order_id} đã thanh toán bằng giao dịch {cu}, nay nhận thêm "
-            f"giao dịch {gd.txn_id} ({gd.amount:,.0f}đ) - cần trả lại khách",
+            f"Order {order.id}: tiền vào tài khoản {gd.account_no} nhưng shop khai "
+            f"{shop_account} - kiểm tra lại cấu hình",
         )

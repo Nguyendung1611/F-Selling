@@ -55,7 +55,12 @@ def test_staff_huy_don_va_xac_nhan_thanh_toan_duoc(client):
     _, staff_token = new_staff(client, ctx)
     order_id = client.post(
         f"/api/orders/{ctx['shop_id']}",
-        json={"items": [{"product_name": ctx["product"]["name"], "price": 1, "quantity": 1}]},
+        json={
+            "items": [
+                {"product_name": ctx["product"]["name"], "price": 1, "quantity": 1}
+            ],
+            "payment_method": "cash",
+        },
         headers=auth(staff_token),
     ).json()["order_id"]
 

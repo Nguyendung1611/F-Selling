@@ -98,6 +98,9 @@
     function khiNhanPhim(e) {
         // Ctrl/Alt/Meta = phím tắt của người dùng, máy quét không gửi các phím này.
         if (e.ctrlKey || e.altKey || e.metaKey) return datLai();
+        // Một số trình duyệt/công cụ hỗ trợ có thể phát sự kiện bàn phím tổng hợp
+        // không kèm `key`. Bỏ qua sự kiện đó thay vì làm gián đoạn trang POS.
+        if (typeof e.key !== 'string') return datLai();
 
         const bayGio = Date.now();
         const cachNhau = bayGio - mocThoiGian;

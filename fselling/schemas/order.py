@@ -1,6 +1,6 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class OrderItemCreate(BaseModel):
@@ -34,3 +34,28 @@ class PaymentWebhook(BaseModel):
     status: Optional[str] = "PAID"
     transaction_id: Optional[str] = None
     amount: Optional[float] = None
+
+
+class CashTopup(BaseModel):
+    """Khoản tiền mặt bù cho đơn chuyển thiếu.
+
+    Server luôn thu đúng toàn bộ số còn thiếu. `amount` được giữ để client hiện
+    tại gửi con số đang thấy, nhưng phải khớp phần thiếu tại lúc xử lý.
+    """
+
+    amount: Optional[float] = None
+    note: Optional[str] = None
+
+
+class RefundComplete(BaseModel):
+    """Ghi nhận shop đã hoàn đúng toàn bộ khoản đang chờ.
+
+    Không nhận số tiền từ client: server khóa theo `refund_due_amount`.
+    """
+
+    method: Literal["cash", "transfer"]
+    note: Optional[str] = None
+    reference: Optional[str] = None
+    # Một id cho đúng MỘT lần bấm hoàn. Retry mạng dùng lại id này nên không thể
+    # vô tình xác nhận hộ một khoản dư mới xuất hiện sau đó.
+    operation_id: str = Field(min_length=8, max_length=128)

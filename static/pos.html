@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -125,12 +125,26 @@
                     <img id="qrImage" src="" alt="QR">
                     <h2 style="color: var(--success); margin: 0.5rem 0;" id="qrTotalTxt"></h2>
                 </div>
-                <button class="btn-success" style="width: 100%; margin-top: 1rem; padding: 0.75rem;" onclick="confirmPayment()"><i class="ph ph-hand-coins"></i> Xác nhận Đã Nhận Tiền</button>
-                <button class="btn-outline" style="width: 100%; margin-top: 0.5rem; padding: 0.75rem;" onclick="cancelOrder()"><i class="ph ph-x-circle"></i> Hủy đơn &amp; Hoàn kho</button>
+                <div id="paymentStatusBox" style="display:none; margin-top:0.8rem; padding:0.8rem; border-radius:10px; border:1px solid #F59E0B; background:#451A03;">
+                    <div id="paymentStatusTitle" style="font-weight:700; color:#FDE68A; margin-bottom:0.55rem;"></div>
+                    <div id="paymentStatusAmounts" style="display:grid; grid-template-columns:1fr 1fr; gap:0.5rem; font-size:0.86rem;">
+                        <div style="background:#0F172A; border-radius:7px; padding:0.55rem;">
+                            <div style="color:#94A3B8;">Đã nhận</div>
+                            <strong id="paymentReceived" style="color:#86EFAC;"></strong>
+                        </div>
+                        <div style="background:#0F172A; border-radius:7px; padding:0.55rem;">
+                            <div style="color:#94A3B8;">Còn thiếu</div>
+                            <strong id="paymentRemaining" style="color:#FCA5A5;"></strong>
+                        </div>
+                    </div>
+                    <button id="btnCashTopup" style="display:none; width:100%; margin-top:0.7rem; padding:0.7rem;" onclick="buTienMatPhanThieu()"><i class="ph ph-money"></i> Thu bù bằng tiền mặt</button>
+                </div>
+                <button id="btnCancelOrder" class="btn-outline" style="width: 100%; margin-top: 0.5rem; padding: 0.75rem;" onclick="cancelOrder()"><i class="ph ph-x-circle"></i> Hủy đơn &amp; Hoàn kho</button>
             </div>
 
             <!-- Hóa đơn hiện sau khi thanh toán xong -->
             <div id="hoaDonSection" style="display: none; background:#F8FAFC; color:#0F172A; border-radius:10px; padding:1rem; margin-top:1rem;">
+                <div id="hoaDonCanhBao" style="display:none; margin-bottom:0.75rem; padding:0.75rem; border:2px solid #DC2626; background:#FEF2F2; color:#991B1B; border-radius:8px; font-weight:700;"></div>
                 <div id="hoaDonNoiDung"></div>
                 <button class="btn-outline" style="width:100%; margin-top:1rem; padding:0.7rem;" onclick="dongHoaDon()"><i class="ph ph-plus-circle"></i> Đơn mới</button>
             </div>
@@ -158,7 +172,7 @@
     <!-- barcode.js phải nạp trước pos.js: pos.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js"></script>
     <script src="/js/barcode-camera.js"></script>
-    <script src="/js/doc-tien.js?v=20260731-audio"></script>
-    <script src="/js/pos.js?v=20260731-audio"></script>
+    <script src="/js/doc-tien.js?v=20260731-reconciliation"></script>
+    <script src="/js/pos.js?v=20260731-reconciliation"></script>
 </body>
 </html>
