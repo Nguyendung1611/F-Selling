@@ -394,8 +394,35 @@
 
         <!-- TAB 4: SETTINGS -->
         <div id="settings" class="tab-content glass-card">
-            
-            <div style="display: flex; justify-content: space-between; margin-bottom: 1.5rem; align-items: center;">
+
+            <!-- Đọc tiền: nhân viên đứng quầy cũng chỉnh được (xem applyRoleUI). -->
+            <div id="khoiDocTien" style="border: 1px solid var(--border-color); border-radius: 10px; padding: 1.25rem; margin-bottom: 2rem;">
+                <h4 style="font-size: 1.1rem; font-weight: 700; margin: 0 0 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="ph ph-speaker-high" style="color: var(--primary);"></i> Đọc to khi nhận tiền chuyển khoản
+                </h4>
+                <p style="color: var(--text-muted); font-size: 0.88rem; margin: 0 0 1rem; line-height: 1.6;">
+                    Khi ngân hàng báo tiền về, máy sẽ đọc số tiền và số đơn để người bán không phải nhìn màn hình.
+                    Cài đặt này áp dụng cho <b>máy này</b>.
+                </p>
+
+                <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; margin-bottom: 1rem;">
+                    <input type="checkbox" id="dtBat" onchange="dtLuuBat()" style="width: 18px; height: 18px; margin: 0;">
+                    <span style="font-weight: 600;">Bật đọc to</span>
+                </label>
+
+                <div id="dtChiTiet">
+                    <div class="form-group" style="max-width: 460px;">
+                        <label>Giọng đọc</label>
+                        <select id="dtGiong" onchange="dtLuuGiong()" style="width: 100%; padding: 0.6rem; border-radius: 8px; border: 1px solid var(--border-color);"></select>
+                    </div>
+                    <button class="btn-outline" onclick="DocTien.thuGiong()" style="padding: 0.5rem 1.1rem;">
+                        <i class="ph ph-play"></i> Thử giọng
+                    </button>
+                    <div id="dtCanhBao" style="display: none; margin-top: 1rem; padding: 0.8rem 1rem; border-radius: 8px; font-size: 0.87rem; line-height: 1.6;"></div>
+                </div>
+            </div>
+
+            <div id="khoiCauHinhShop" style="display: flex; justify-content: space-between; margin-bottom: 1.5rem; align-items: center;">
                 <h4 style="font-size: 1.25rem; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 0.5rem;"><i class="ph ph-sliders" style="color: var(--primary);"></i> Cấu hình Cửa hàng</h4>
                 <button onclick="openCreateShopForm()"><i class="ph ph-plus"></i> Tạo cửa hàng mới</button>
             </div>
@@ -606,6 +633,7 @@
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js"></script>
     <script src="/js/barcode-camera.js"></script>
+    <script src="/js/doc-tien.js"></script>
     <script src="/js/seller.js"></script>
 </body>
 </html>

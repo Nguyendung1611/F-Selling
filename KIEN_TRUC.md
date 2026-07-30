@@ -232,6 +232,29 @@ Hai chỗ dễ viết sai trong hàm đổi số:
 Chỉ đọc ở nhánh polling của chuyển khoản — đó là ca thu ngân không nhìn màn
 hình. Tiền mặt thì người bán vừa cầm tiền nên đọc thành ồn.
 
+**Hai tầng phát tiếng.** `DocTien.noi()` ưu tiên giọng tiếng Việt cài sẵn trên
+thiết bị (nhanh, miễn phí, không cần mạng — điện thoại thường có). Máy không có
+giọng Việt thì gọi `POST /api/tts` để server sinh. Chrome trên Windows luôn rơi
+vào tầng hai: bộ giọng "Google …" kèm theo Chrome **không có tiếng Việt**, phải
+cài gói của Windows mới có.
+
+Trang web KHÔNG thể tự cài giọng cho máy người dùng — `SpeechSynthesis` chỉ
+liệt kê giọng mà hệ điều hành đã có. Đó là lý do phải có tầng server.
+
+Cấu hình server (để trống = tắt, frontend tự lùi về giọng thiết bị):
+
+```
+TTS_PROVIDER=google|azure
+TTS_API_KEY=...
+TTS_AZURE_REGION=southeastasia      # chỉ Azure mới cần
+TTS_VOICE=                          # để trống = giọng mặc định của nhà cung cấp
+```
+
+Ba điều bắt buộc ở endpoint này: **key chỉ nằm ở backend** (đặt trong frontend
+là ai mở F12 cũng xài chùa hết hạn mức), **phải đăng nhập mới gọi được** (để mở
+thì thành dịch vụ đọc chữ miễn phí cho cả internet), và **cache theo nội dung
+câu** vì cửa hàng bán quanh vài mức giá quen nên cùng một câu lặp rất nhiều.
+
 ### 10. Kiểm kê: ba nguyên tắc không được phá
 
 `apply_stocktake()` đặt tồn kho bằng số đếm thực tế. Ba điều bắt buộc giữ:

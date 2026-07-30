@@ -1304,15 +1304,93 @@ function dongChiTietDon() {
 }
 
 
+// ===== Cài đặt Đọc tiền (nằm ở tab Cài Đặt, không ở POS) =====
+
+function dtLuuBat() {
+    DocTien.datBat(document.getElementById('dtBat').checked);
+    dtCapNhatHien();
+}
+
+function dtLuuGiong() {
+    localStorage.setItem(DocTien.KHOA.giong, document.getElementById('dtGiong').value);
+}
+
+function dtCapNhatHien() {
+    document.getElementById('dtChiTiet').style.display =
+        document.getElementById('dtBat').checked ? 'block' : 'none';
+}
+
+function dtNapGiong() {
+    const sel = document.getElementById('dtGiong');
+    if (!sel) return;
+    const tatCa = DocTien.danhSachGiong();
+    const viet = DocTien.giongTiengViet();
+    const dangChon = DocTien.giongDangChon();
+
+    // Giọng tiếng Việt lên đầu; phần còn lại vẫn liệt kê để ai muốn thì đổi.
+    const xepLai = viet.concat(tatCa.filter(v => !viet.includes(v)));
+    sel.innerHTML = xepLai.map(v =>
+        `<option value="${escapeHtml(v.name)}" ${dangChon && v.name === dangChon.name ? 'selected' : ''}>`
+        + `${escapeHtml(v.name)} (${escapeHtml(v.lang)})</option>`
+    ).join('');
+
+    dtCapNhatCanhBao(viet.length, tatCa.length);
+}
+
+function dtCapNhatCanhBao(soGiongViet, soGiongTatCa) {
+    const box = document.getElementById('dtCanhBao');
+    if (!box) return;
+
+    if (soGiongViet > 0) {
+        box.style.display = 'block';
+        box.style.background = '#052e16';
+        box.style.border = '1px solid #15803d';
+        box.style.color = '#DCFCE7';
+        box.innerHTML = '<b>Máy này có giọng tiếng Việt.</b> Đọc ngay tại máy, không cần mạng.';
+        return;
+    }
+
+    // Không có giọng Việt: server có thể đọc hộ, nếu đã cấu hình.
+    box.style.display = 'block';
+    box.style.background = '#422006';
+    box.style.border = '1px solid #a16207';
+    box.style.color = '#FEF3C7';
+
+    if (DocTien.serverDocDuoc() === true) {
+        box.innerHTML = '<b>Máy này chưa có giọng tiếng Việt</b> — đang dùng giọng do máy chủ tạo. '
+            + 'Vẫn đọc đúng tiếng Việt, chỉ cần có mạng.';
+    } else if (soGiongTatCa === 0) {
+        box.innerHTML = 'Trình duyệt chưa nạp được giọng nào. Thử tải lại trang.';
+    } else {
+        box.innerHTML = '<b>Máy này chưa có giọng tiếng Việt</b> và máy chủ cũng chưa cấu hình giọng đọc, '
+            + 'nên máy sẽ đọc bằng giọng nước ngoài — nghe rất khó.<br><br>'
+            + 'Cách sửa nhanh trên Windows: <b>Settings → Time &amp; Language → Speech → '
+            + 'Manage voices → Add voices → Vietnamese</b>, cài xong tải lại trang. '
+            + 'Điện thoại Android/iOS thường đã có sẵn.';
+    }
+}
+
+async function dtKhoiTao() {
+    const bat = document.getElementById('dtBat');
+    if (!bat || typeof DocTien === 'undefined') return;
+    bat.checked = DocTien.dangBat();
+    dtCapNhatHien();
+    dtNapGiong();
+    // Danh sách giọng thường nạp bất đồng bộ, lần gọi đầu hay trả về rỗng.
+    if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = dtNapGiong;
+    await DocTien.kiemTraServer();
+    dtNapGiong();     // vẽ lại lời cảnh báo theo kết quả hỏi server
+}
+
 // ===== C1d: phân biệt vai trò SELLER / STAFF trên giao diện =====
 function applyRoleUI() {
     if (MY_ROLE !== 'STAFF') return;
-    // Nhân viên không quản lý cửa hàng: ẩn tab Cài Đặt và mọi lối vào nó.
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        const oc = btn.getAttribute('onclick') || '';
-        if (oc.includes("switchTab('settings')")) btn.style.display = 'none';
+    // Nhân viên KHÔNG quản lý cửa hàng, nhưng vẫn phải chỉnh được phần Đọc tiền:
+    // họ mới là người đứng quầy POS và nghe cái loa đó. Nên giữ tab Cài Đặt,
+    // chỉ giấu phần cấu hình cửa hàng bên dưới.
+    document.querySelectorAll('#settings > *').forEach(el => {
+        if (el.id !== 'khoiDocTien') el.style.display = 'none';
     });
-    // Nếu POS shop selector có nút tạo shop... không áp dụng ở đây.
 }
 
 // ===== C1d: quản lý nhân viên (chỉ chủ shop) =====
@@ -1377,6 +1455,7 @@ function xoaNhanVien(id, username) {
 
 // Chạy sau khi DOM và allShops sẵn sàng. init() sẽ gọi renderStaffShopOptions.
 applyRoleUI();
+dtKhoiTao();
 
 
 // ===== C2d: quản lý khách hàng (CRM) =====

@@ -27,6 +27,7 @@ from .routers import (
     reports,
     shops,
     staff,
+    tts,
     vouchers,
     webhooks,
 )
@@ -97,6 +98,7 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
     application.include_router(vouchers.router)
     application.include_router(reports.router)
     application.include_router(admin.router)
+    application.include_router(tts.router)
     application.include_router(pages.router)
 
     # Phục vụ ảnh upload từ UPLOAD_DIR (volume) — phải mount trước mount "/"

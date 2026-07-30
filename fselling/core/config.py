@@ -43,6 +43,20 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 STATIC_DIR: str = "static"  # giữ nguyên đường dẫn tương đối như code cũ
 LOG_FILE: str = os.getenv("LOG_FILE") or os.path.join(BASE_DIR, "request_log.txt")
 
+# --- Đọc tiền bằng giọng nói ---
+# Chỉ dùng khi máy người bán KHÔNG có sẵn giọng tiếng Việt. Chưa cấu hình thì
+# endpoint /api/tts trả 503 và frontend tự lùi về giọng của thiết bị.
+TTS_PROVIDER: str = (os.getenv("TTS_PROVIDER") or "").strip().lower()
+TTS_API_KEY: str = os.getenv("TTS_API_KEY") or ""
+TTS_AZURE_REGION: str = os.getenv("TTS_AZURE_REGION") or ""
+TTS_VOICE: str = os.getenv("TTS_VOICE") or ""      # để trống = dùng giọng mặc định của nhà cung cấp
+TTS_MAX_CHARS: int = 300                            # câu thông báo dài nhất cũng chỉ ~80 ký tự
+
+# Đặt cạnh UPLOAD_DIR để tự nằm trên cùng ổ đĩa bền khi deploy (Fly mount /data).
+TTS_CACHE_DIR: str = os.getenv("TTS_CACHE_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(UPLOAD_DIR)), "tts_cache"
+)
+
 # --- JWT ---
 # JWT secret: lấy từ biến môi trường. Nếu chưa cấu hình, sinh key ngẫu nhiên an toàn
 # cho phiên chạy hiện tại (token sẽ mất hiệu lực sau khi restart - đây là hành vi an toàn,

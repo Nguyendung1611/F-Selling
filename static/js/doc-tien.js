@@ -13,10 +13,11 @@
 
     const KHOA = {
         bat: 'docTien.bat',
-        giong: 'docTien.giong',
-        tocDo: 'docTien.tocDo',
-        amLuong: 'docTien.amLuong'
+        giong: 'docTien.giong'
     };
+
+    // Server có sinh được giọng Việt không. null = chưa hỏi.
+    let serverDocDuoc = null;
 
     // Đơn đã đọc rồi thì thôi. Polling có thể bắt được cùng một trạng thái hai
     // lần nếu người dùng tải lại trang, không để nó đọc lại lần nữa.
@@ -84,11 +85,6 @@
         localStorage.setItem(KHOA.bat, bat ? '1' : '0');
     }
 
-    function soDoc(khoa, macDinh) {
-        const v = parseFloat(localStorage.getItem(khoa));
-        return isNaN(v) ? macDinh : v;
-    }
-
     function danhSachGiong() {
         if (!global.speechSynthesis) return [];
         return global.speechSynthesis.getVoices() || [];
@@ -110,15 +106,14 @@
 
     // ----- Đọc -----
 
-    function noi(cauChu) {
+    /** Đọc bằng giọng cài sẵn trên thiết bị. */
+    function noiBangThietBi(cauChu) {
         if (!global.speechSynthesis || !global.SpeechSynthesisUtterance) return false;
         try {
             const u = new global.SpeechSynthesisUtterance(cauChu);
             u.lang = 'vi-VN';
             const giong = giongDangChon();
             if (giong) u.voice = giong;
-            u.rate = soDoc(KHOA.tocDo, 1);
-            u.volume = soDoc(KHOA.amLuong, 1);
             // Hủy câu đang đọc dở: bán liên tục thì câu mới quan trọng hơn câu cũ.
             global.speechSynthesis.cancel();
             global.speechSynthesis.speak(u);
@@ -127,6 +122,66 @@
             console.error('Lỗi đọc tiền:', e);
             return false;
         }
+    }
+
+    let tiengDangPhat = null;
+
+    /** Nhờ server sinh giọng Việt rồi phát. Trả về Promise<boolean>. */
+    async function noiBangServer(cauChu) {
+        try {
+            const res = await fetch('/api/tts', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + getToken()
+                },
+                body: JSON.stringify({ text: cauChu })
+            });
+            if (!res.ok) {
+                serverDocDuoc = false;   // hỏng thì thôi, khỏi thử lại từng lượt
+                return false;
+            }
+            const url = URL.createObjectURL(await res.blob());
+            if (tiengDangPhat) { try { tiengDangPhat.pause(); } catch (e) {} }
+            tiengDangPhat = new Audio(url);
+            tiengDangPhat.onended = () => URL.revokeObjectURL(url);
+            await tiengDangPhat.play();
+            return true;
+        } catch (e) {
+            console.error('Lỗi gọi giọng đọc từ server:', e);
+            return false;
+        }
+    }
+
+    /**
+     * Đọc một câu. Hai tầng:
+     *   1. Thiết bị có giọng tiếng Việt -> đọc ngay tại máy. Nhanh, miễn phí,
+     *      không cần mạng.
+     *   2. Không có -> nhờ server sinh. Chrome trên Windows rơi vào đây vì bộ
+     *      giọng kèm theo Chrome không có tiếng Việt.
+     * Cả hai đều không được thì đọc bằng giọng nước ngoài còn hơn im lặng -
+     * người bán vẫn nghe thấy CÓ tiếng và biết mà nhìn màn hình.
+     */
+    function noi(cauChu) {
+        if (giongTiengViet().length) return noiBangThietBi(cauChu);
+        if (serverDocDuoc !== false) {
+            noiBangServer(cauChu).then(ok => { if (!ok) noiBangThietBi(cauChu); });
+            return true;
+        }
+        return noiBangThietBi(cauChu);
+    }
+
+    /** Hỏi server một lần xem có sinh được giọng không, để giao diện báo đúng. */
+    async function kiemTraServer() {
+        try {
+            const res = await fetch('/api/tts/status', {
+                headers: { 'Authorization': 'Bearer ' + getToken() }
+            });
+            serverDocDuoc = res.ok ? (await res.json()).enabled === true : false;
+        } catch (e) {
+            serverDocDuoc = false;
+        }
+        return serverDocDuoc;
     }
 
     function cauDaNhan(soTien, orderId) {
@@ -167,6 +222,8 @@
         danhSachGiong: danhSachGiong,
         giongTiengViet: giongTiengViet,
         giongDangChon: giongDangChon,
+        kiemTraServer: kiemTraServer,
+        serverDocDuoc: () => serverDocDuoc,
         KHOA: KHOA
     };
 })(window);

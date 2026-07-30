@@ -561,64 +561,8 @@ async function taoKhachPOS() {
     } catch (e) { showToast(e.message); }
 }
 
-// ===== Cài đặt đọc tiền =====
+// Cài đặt đọc tiền nằm ở tab Cài Đặt của trang Người bán, không ở đây: màn POS
+// phải gọn cho người đứng quầy, mà cấu hình thì chỉ đặt một lần rồi thôi.
 
-function dtLuuBat() {
-    DocTien.datBat(document.getElementById('dtBat').checked);
-    dtCapNhatHien();
-}
-
-function dtLuuGiong() {
-    localStorage.setItem(DocTien.KHOA.giong, document.getElementById('dtGiong').value);
-}
-
-function dtLuuTocDo() {
-    localStorage.setItem(DocTien.KHOA.tocDo, document.getElementById('dtTocDo').value);
-}
-
-function dtCapNhatHien() {
-    document.getElementById('dtChiTiet').style.display =
-        document.getElementById('dtBat').checked ? 'block' : 'none';
-}
-
-function dtNapGiong() {
-    const sel = document.getElementById('dtGiong');
-    if (!sel) return;
-    const tatCa = DocTien.danhSachGiong();
-    const viet = DocTien.giongTiengViet();
-    const dangChon = DocTien.giongDangChon();
-
-    // Đưa giọng tiếng Việt lên đầu, phần còn lại vẫn liệt kê để ai muốn thử.
-    const xepLai = viet.concat(tatCa.filter(v => !viet.includes(v)));
-    sel.innerHTML = xepLai.map(v =>
-        `<option value="${escapeHtml(v.name)}" ${dangChon && v.name === dangChon.name ? 'selected' : ''}>`
-        + `${escapeHtml(v.name)} (${escapeHtml(v.lang)})</option>`
-    ).join('');
-
-    const canhBao = document.getElementById('dtCanhBao');
-    if (!tatCa.length) {
-        canhBao.style.display = 'block';
-        canhBao.innerText = 'Trình duyệt này chưa nạp được giọng đọc nào. Thử tải lại trang.';
-    } else if (!viet.length) {
-        canhBao.style.display = 'block';
-        canhBao.innerText = 'Thiết bị chưa có giọng tiếng Việt — máy sẽ đọc bằng giọng nước ngoài nên nghe rất khó. '
-            + 'Cài thêm gói giọng tiếng Việt trong cài đặt hệ thống.';
-    } else {
-        canhBao.style.display = 'none';
-    }
-}
-
-function dtKhoiTao() {
-    const bat = document.getElementById('dtBat');
-    if (!bat) return;
-    bat.checked = DocTien.dangBat();
-    document.getElementById('dtTocDo').value = localStorage.getItem(DocTien.KHOA.tocDo) || 1;
-    dtCapNhatHien();
-    dtNapGiong();
-    // Danh sách giọng thường nạp bất đồng bộ, lần gọi đầu hay trả về rỗng.
-    if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = dtNapGiong;
-}
-
-dtKhoiTao();
 loadShop();
 loadProducts();
