@@ -1346,25 +1346,28 @@ function dtCapNhatCanhBao(soGiongViet, soGiongTatCa) {
         box.style.background = '#052e16';
         box.style.border = '1px solid #15803d';
         box.style.color = '#DCFCE7';
-        box.innerHTML = '<b>Máy này có giọng tiếng Việt.</b> Đọc ngay tại máy, không cần mạng.';
+        box.innerHTML = '<b>Đã sẵn sàng.</b> Tiền về sẽ được đọc bằng bộ MP3 tiếng Việt có sẵn; '
+            + 'cảnh báo đối soát dùng giọng tiếng Việt của máy.';
         return;
     }
 
-    // Không có giọng Việt: server có thể đọc hộ, nếu đã cấu hình.
+    // Tiền về luôn có bộ MP3 tiếng Việt. Giọng máy/server chỉ còn là tầng dự
+    // phòng cho câu cảnh báo đối soát, vì câu đó không ghép từ bộ số tiền.
     box.style.display = 'block';
     box.style.background = '#422006';
     box.style.border = '1px solid #a16207';
     box.style.color = '#FEF3C7';
 
     if (DocTien.serverDocDuoc() === true) {
-        box.innerHTML = '<b>Máy này chưa có giọng tiếng Việt</b> — đang dùng giọng do máy chủ tạo. '
-            + 'Vẫn đọc đúng tiếng Việt, chỉ cần có mạng.';
+        box.innerHTML = '<b>Đã sẵn sàng.</b> Tiền về dùng bộ MP3 tiếng Việt có sẵn; '
+            + 'cảnh báo đối soát dùng giọng do máy chủ tạo.';
     } else if (soGiongTatCa === 0) {
-        box.innerHTML = 'Trình duyệt chưa nạp được giọng nào. Thử tải lại trang.';
+        box.innerHTML = '<b>Tiền về vẫn được đọc đúng tiếng Việt</b> bằng bộ MP3 có sẵn. '
+            + 'Trình duyệt chưa nạp được giọng dự phòng cho cảnh báo đối soát; thử tải lại trang.';
     } else {
-        box.innerHTML = '<b>Máy này chưa có giọng tiếng Việt</b> và máy chủ cũng chưa cấu hình giọng đọc, '
-            + 'nên máy sẽ đọc bằng giọng nước ngoài — nghe rất khó.<br><br>'
-            + 'Cách sửa nhanh trên Windows: <b>Settings → Time &amp; Language → Speech → '
+        box.innerHTML = '<b>Tiền về vẫn được đọc đúng tiếng Việt</b> bằng bộ MP3 có sẵn. '
+            + 'Riêng cảnh báo đối soát đang phải dùng giọng nước ngoài nên có thể khó nghe.<br><br>'
+            + 'Muốn cảnh báo cũng rõ tiếng Việt trên Windows: <b>Settings → Time &amp; Language → Speech → '
             + 'Manage voices → Add voices → Vietnamese</b>, cài xong tải lại trang. '
             + 'Điện thoại Android/iOS thường đã có sẵn.';
     }

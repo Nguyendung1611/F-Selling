@@ -27,6 +27,28 @@
 
     const CHU_SO = ['không', 'một', 'hai', 'ba', 'bốn', 'năm', 'sáu', 'bảy', 'tám', 'chín'];
     const NHOM = ['', ' nghìn', ' triệu', ' tỷ'];
+    const TEP_TU = {
+        'không': '0.mp3',
+        'một': '1.mp3',
+        'hai': '2.mp3',
+        'ba': '3.mp3',
+        'bốn': '4.mp3',
+        'năm': '5.mp3',
+        'sáu': '6.mp3',
+        'bảy': '7.mp3',
+        'tám': '8.mp3',
+        'chín': '9.mp3',
+        'mười': 'muoi_10.mp3',
+        'mươi': 'muoi_tens.mp3',
+        'lăm': 'lam.mp3',
+        'mốt': 'mot_mot.mp3',
+        'tư': 'tu.mp3',
+        'lẻ': 'le.mp3',
+        'trăm': 'tram.mp3',
+        'nghìn': 'nghin.mp3',
+        'triệu': 'trieu.mp3',
+        'tỷ': 'ty.mp3'
+    };
 
     /** Đọc một nhóm dưới 1000. `duTram` = phải đọc cả hàng trăm dù bằng 0. */
     function docBaChuSo(n, duTram) {
@@ -125,6 +147,95 @@
     }
 
     let tiengDangPhat = null;
+    let phienPhatFile = 0;
+    const boNhoFile = new Map();
+
+    /**
+     * Danh sách MP3 để đọc "Đã nhận <số tiền> đồng".
+     *
+     * Bộ file được sinh trước nên máy POS không cần giọng Việt của hệ điều
+     * hành và server cũng không cần API key TTS cho thông báo quan trọng này.
+     */
+    function tepDocSoTien(soTien) {
+        const giaTri = Number(soTien);
+        if (!Number.isFinite(giaTri) || giaTri < 0) return [];
+        const tep = ['/audio/da_nhan.mp3'];
+        for (const tu of docSo(giaTri).split(' ')) {
+            if (!TEP_TU[tu]) return [];
+            tep.push('/audio/' + TEP_TU[tu]);
+        }
+        tep.push('/audio/dong.mp3');
+        return tep;
+    }
+
+    /** Nạp một file vào RAM; cùng một từ chỉ tải đúng một lần trong phiên. */
+    async function taiTep(url) {
+        if (!boNhoFile.has(url)) {
+            boNhoFile.set(url, fetch(url).then(async res => {
+                if (!res.ok) throw new Error(`Không tải được ${url}`);
+                return res.blob();
+            }).catch(err => {
+                boNhoFile.delete(url);   // lần sau cho phép thử tải lại
+                throw err;
+            }));
+        }
+        return boNhoFile.get(url);
+    }
+
+    /** Phát lần lượt các từ đã nạp. Lời gọi mới sẽ dừng câu cũ. */
+    async function phatChuoiTep(tep) {
+        if (!tep.length) return false;
+        const phien = ++phienPhatFile;
+        if (tiengDangPhat) {
+            try { tiengDangPhat.pause(); } catch (e) {}
+        }
+
+        try {
+            // Nạp song song trước khi nói để giữa các từ không phải chờ mạng.
+            const blobs = await Promise.all(tep.map(taiTep));
+            for (const blob of blobs) {
+                if (phien !== phienPhatFile) return true;
+                const url = URL.createObjectURL(blob);
+                const audio = new Audio(url);
+                tiengDangPhat = audio;
+                const daPhat = await new Promise(resolve => {
+                    let xong = false;
+                    const ketThuc = ok => {
+                        if (xong) return;
+                        xong = true;
+                        URL.revokeObjectURL(url);
+                        resolve(ok);
+                    };
+                    audio.onended = () => ketThuc(true);
+                    audio.onerror = () => ketThuc(false);
+                    const batDau = audio.play();
+                    if (batDau && typeof batDau.catch === 'function') {
+                        batDau.catch(() => ketThuc(false));
+                    }
+                });
+                if (!daPhat) return false;
+            }
+            if (phien === phienPhatFile) tiengDangPhat = null;
+            return true;
+        } catch (e) {
+            console.error('Lỗi phát bộ MP3 đọc tiền:', e);
+            return false;
+        }
+    }
+
+    /** Tải trước đúng các từ của đơn đang chờ để tiền về là đọc ngay. */
+    function chuanBiSoTien(soTien) {
+        const tep = tepDocSoTien(soTien);
+        return Promise.all(tep.map(taiTep)).then(() => true).catch(() => false);
+    }
+
+    /** Ưu tiên bộ MP3 có sẵn; hỏng file mới lùi về TTS cũ. */
+    function noiSoTien(soTien, cauDuPhong) {
+        phatChuoiTep(tepDocSoTien(soTien)).then(ok => {
+            if (!ok) noi(cauDuPhong);
+        });
+        return true;
+    }
 
     /** Nhờ server sinh giọng Việt rồi phát. Trả về Promise<boolean>. */
     async function noiBangServer(cauChu) {
@@ -194,7 +305,7 @@
         const khoa = 'PAID:' + orderId;
         if (daDoc.has(khoa)) return false;
         daDoc.add(khoa);
-        return noi(cauDaNhan(soTien, orderId));
+        return noiSoTien(soTien, cauDaNhan(soTien, orderId));
     }
 
     /** Gọi khi đơn rơi vào trạng thái cần đối soát (thường là khách chuyển thiếu). */
@@ -207,13 +318,15 @@
     }
 
     function thuGiong() {
-        return noi(cauDaNhan(150000, 42));
+        return noiSoTien(150000, cauDaNhan(150000, 42));
     }
 
     global.DocTien = {
         docSo: docSo,
+        tepDocSoTien: tepDocSoTien,
         cauDaNhan: cauDaNhan,
         noi: noi,
+        chuanBiSoTien: chuanBiSoTien,
         thongBaoDaNhan: thongBaoDaNhan,
         canhBaoDoiSoat: canhBaoDoiSoat,
         thuGiong: thuGiong,

@@ -401,8 +401,8 @@
                     <i class="ph ph-speaker-high" style="color: var(--primary);"></i> Đọc to khi nhận tiền chuyển khoản
                 </h4>
                 <p style="color: var(--text-muted); font-size: 0.88rem; margin: 0 0 1rem; line-height: 1.6;">
-                    Khi ngân hàng báo tiền về, máy sẽ đọc số tiền và số đơn để người bán không phải nhìn màn hình.
-                    Cài đặt này áp dụng cho <b>máy này</b>.
+                    Khi ngân hàng báo tiền về, máy sẽ đọc số tiền bằng bộ giọng tiếng Việt có sẵn,
+                    không cần API trả phí. Cài đặt này áp dụng cho <b>máy này</b>.
                 </p>
 
                 <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; margin-bottom: 1rem;">
@@ -412,11 +412,11 @@
 
                 <div id="dtChiTiet">
                     <div class="form-group" style="max-width: 460px;">
-                        <label>Giọng đọc</label>
+                        <label>Giọng cảnh báo đối soát (dự phòng)</label>
                         <select id="dtGiong" onchange="dtLuuGiong()" style="width: 100%; padding: 0.6rem; border-radius: 8px; border: 1px solid var(--border-color);"></select>
                     </div>
                     <button class="btn-outline" onclick="DocTien.thuGiong()" style="padding: 0.5rem 1.1rem;">
-                        <i class="ph ph-play"></i> Thử giọng
+                        <i class="ph ph-play"></i> Thử đọc tiền
                     </button>
                     <div id="dtCanhBao" style="display: none; margin-top: 1rem; padding: 0.8rem 1rem; border-radius: 8px; font-size: 0.87rem; line-height: 1.6;"></div>
                 </div>
@@ -633,7 +633,7 @@
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js"></script>
     <script src="/js/barcode-camera.js"></script>
-    <script src="/js/doc-tien.js"></script>
-    <script src="/js/seller.js"></script>
+    <script src="/js/doc-tien.js?v=20260731-audio"></script>
+    <script src="/js/seller.js?v=20260731-audio"></script>
 </body>
 </html>

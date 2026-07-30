@@ -341,6 +341,9 @@ async function checkout() {
             document.getElementById('qrTotalTxt').innerText = res.total.toLocaleString() + ' ₫';
             document.getElementById('qrSection').style.display = 'block';
             showToast("Tạo đơn thành công! Khách vui lòng quét mã.");
+            // Nạp trước đúng các từ của số tiền này. Khi webhook về chỉ còn
+            // phát ngay, không chen khoảng chờ tải file giữa câu.
+            DocTien.chuanBiSoTien(res.total);
             startPaymentPolling();
         } else {
             // Tiền mặt -> auto pay for simplicity or just show success
