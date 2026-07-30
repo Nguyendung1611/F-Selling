@@ -7,6 +7,9 @@ from fselling.routers import webhooks
 
 SECRET = "webhook-secret-test"
 
+# `seller_with_shop` tạo sản phẩm giá 100000, `_tao_don` mua đúng 1 cái.
+TONG_TIEN = 100000
+
 
 @pytest.fixture
 def webhook_secret(monkeypatch):
@@ -62,7 +65,7 @@ def test_secret_dung_cap_nhat_don_sang_paid(client, webhook_secret):
     ctx, order_id = _tao_don(client)
     res = client.post(
         "/api/orders/webhook",
-        json={"order_id": order_id},
+        json={"order_id": order_id, "amount": TONG_TIEN},
         headers={"X-Webhook-Secret": SECRET},
     )
     assert res.status_code == 200
@@ -75,7 +78,7 @@ def test_chap_nhan_secret_qua_header_authorization(client, webhook_secret):
     for header in (f"Bearer {SECRET}", f"Apikey {SECRET}"):
         res = client.post(
             "/api/orders/webhook",
-            json={"order_id": order_id},
+            json={"order_id": order_id, "amount": TONG_TIEN},
             headers={"Authorization": header},
         )
         assert res.status_code == 200
@@ -87,7 +90,7 @@ def test_webhook_gui_lap_khong_xu_ly_lai(client, webhook_secret):
 
     ctx, order_id = _tao_don(client)
     headers = {"X-Webhook-Secret": SECRET}
-    payload = {"order_id": order_id}
+    payload = {"order_id": order_id, "amount": TONG_TIEN, "id": "TXN-LAP-1"}
 
     for _ in range(3):
         res = client.post("/api/orders/webhook", json=payload, headers=headers)
@@ -147,7 +150,7 @@ def test_dinh_dang_casso_danh_sach_giao_dich(client, webhook_secret):
     ctx, order_id = _tao_don(client)
     res = client.post(
         "/api/orders/webhook",
-        json={"data": [{"description": f"CK ORDER{order_id} noi dung"}]},
+        json={"data": [{"description": f"CK ORDER{order_id} noi dung", "amount": TONG_TIEN}]},
         headers={"X-Webhook-Secret": SECRET},
     )
     assert res.status_code == 200
@@ -158,7 +161,7 @@ def test_dinh_dang_payos_ordercode(client, webhook_secret):
     ctx, order_id = _tao_don(client)
     res = client.post(
         "/api/orders/webhook",
-        json={"data": {"orderCode": order_id, "description": ""}},
+        json={"data": {"orderCode": order_id, "description": "", "amount": TONG_TIEN}},
         headers={"X-Webhook-Secret": SECRET},
     )
     assert res.status_code == 200

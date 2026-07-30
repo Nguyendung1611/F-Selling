@@ -396,8 +396,8 @@ def apply_webhook_payment(db: Session, request_data: Dict[str, Any]) -> Dict[str
     Không bao giờ raise lỗi cho các tình huống trạng thái: ngân hàng sẽ retry
     vô hạn nếu nhận 4xx/5xx. Bất thường được đẩy vào SystemLog.
     """
-    order_ids = payment_service.extract_order_ids(request_data)
-    if not order_ids:
+    giao_dich = payment_service.extract_transactions(request_data)
+    if not giao_dich:
         raise HTTPException(
             status_code=400,
             detail="Không tìm thấy mã đơn hàng ORDERxxx trong thông tin thanh toán",
@@ -405,23 +405,69 @@ def apply_webhook_payment(db: Session, request_data: Dict[str, Any]) -> Dict[str
 
     paid: List[int] = []
     unreconciled: List[int] = []
+    rejected: List[int] = []
     found_any = False
 
-    for oid in sorted(set(order_ids)):
-        if read_status(db, oid) is None:
+    # Gộp theo đơn, giữ giao dịch đầu tiên cho mỗi đơn (một payload hiếm khi
+    # chứa hai giao dịch cho cùng một đơn; nếu có thì xử lý cái đầu là đủ).
+    theo_don: Dict[int, Any] = {}
+    for gd in giao_dich:
+        theo_don.setdefault(gd.order_id, gd)
+
+    for oid in sorted(theo_don):
+        gd = theo_don[oid]
+        order = db.query(models.Order).filter(models.Order.id == oid).first()
+        if order is None:
             continue
         found_any = True
 
+        # --- Các lý do từ chối, kiểm TRƯỚC khi đụng vào trạng thái ---
+        if gd.direction == "out":
+            _ghi_tu_choi(db, oid, "giao dịch là tiền RA, không phải tiền vào")
+            rejected.append(oid)
+            continue
+
+        if gd.amount is None:
+            _ghi_tu_choi(
+                db, oid, "payload không có số tiền nên không xác nhận được đã thu đủ"
+            )
+            rejected.append(oid)
+            continue
+
+        can_thu = order.total_amount or 0
+        if gd.amount < can_thu:
+            # Tiền đã vào tài khoản shop rồi nên KHÔNG được im lặng bỏ qua.
+            transition_status(db, oid, (STATUS_PENDING,), STATUS_UNRECONCILED)
+            _ghi_nhan_tien(db, oid, gd)
+            log_system_action(
+                db,
+                None,
+                "WEBHOOK_THIEU_TIEN",
+                f"Order {oid}: nhận {gd.amount:,.0f}đ nhưng cần {can_thu:,.0f}đ "
+                f"(thiếu {can_thu - gd.amount:,.0f}đ) - cần đối soát",
+            )
+            unreconciled.append(oid)
+            continue
+
+        _canh_bao_sai_tai_khoan(db, oid, order, gd)
+
+        # --- Đủ tiền: chuyển PAID ---
         if transition_status(db, oid, WEBHOOK_PAY_FROM, STATUS_PAID):
-            log_system_action(db, None, "WEBHOOK_PAYMENT", f"Order {oid} marked PAID via webhook")
+            _ghi_nhan_tien(db, oid, gd)
+            chi_tiet = f"Order {oid} marked PAID via webhook (nhận {gd.amount:,.0f}đ)"
+            if gd.amount > can_thu:
+                chi_tiet += f", khách chuyển DƯ {gd.amount - can_thu:,.0f}đ - cần trả lại"
+            log_system_action(db, None, "WEBHOOK_PAYMENT", chi_tiet)
             paid.append(oid)
             continue
 
         current = read_status(db, oid)
         if current == STATUS_PAID:
+            _canh_bao_tra_trung(db, oid, order, gd)
             paid.append(oid)  # webhook gửi lặp
         elif current == STATUS_CANCELLED:
             if transition_status(db, oid, (STATUS_CANCELLED,), STATUS_UNRECONCILED):
+                _ghi_nhan_tien(db, oid, gd)
                 log_system_action(
                     db,
                     None,
@@ -434,4 +480,59 @@ def apply_webhook_payment(db: Session, request_data: Dict[str, Any]) -> Dict[str
 
     if not found_any:
         raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng tương ứng")
-    return {"paid": paid, "unreconciled": unreconciled}
+    return {"paid": paid, "unreconciled": unreconciled, "rejected": rejected}
+
+
+def _ghi_tu_choi(db: Session, order_id: int, ly_do: str) -> None:
+    log_system_action(db, None, "WEBHOOK_TU_CHOI", f"Order {order_id}: {ly_do}")
+
+
+def _ghi_nhan_tien(db: Session, order_id: int, gd: Any) -> None:
+    """Lưu số tiền thực nhận và mã giao dịch ngân hàng lên đơn."""
+    db.execute(
+        text(
+            "UPDATE orders SET paid_amount = :amount, bank_txn_id = :txn "
+            "WHERE id = :order_id"
+        ),
+        {"amount": gd.amount, "txn": gd.txn_id, "order_id": order_id},
+    )
+    db.commit()
+
+
+def _canh_bao_sai_tai_khoan(db: Session, order_id: int, order: Any, gd: Any) -> None:
+    """Chỉ CẢNH BÁO khi số tài khoản nhận không khớp, không chặn.
+
+    Mỗi nhà cung cấp định dạng số tài khoản một kiểu (có/không số 0 đầu, kèm
+    mã ngân hàng), chặn theo trường này rất dễ từ chối nhầm giao dịch thật.
+    """
+    if not gd.account_no:
+        return
+    shop = db.query(models.Shop).filter(models.Shop.id == order.shop_id).first()
+    cua_shop = (shop.bank_account_no or "") if shop else ""
+    if not cua_shop:
+        return
+    if gd.account_no.lstrip("0") != cua_shop.lstrip("0"):
+        log_system_action(
+            db,
+            None,
+            "WEBHOOK_KHAC_TAI_KHOAN",
+            f"Order {order_id}: tiền vào tài khoản {gd.account_no} nhưng shop khai "
+            f"{cua_shop} - kiểm tra lại cấu hình",
+        )
+
+
+def _canh_bao_tra_trung(db: Session, order_id: int, order: Any, gd: Any) -> None:
+    """Đơn đã PAID mà nhận mã giao dịch KHÁC = khách chuyển tiền hai lần.
+
+    Máy trạng thái chặn không cho xử lý lại, nhưng shop đã nhận dư tiền thật -
+    phải để lại dấu vết, nếu không không ai biết mà trả lại.
+    """
+    cu = order.bank_txn_id
+    if gd.txn_id and cu and gd.txn_id != cu:
+        log_system_action(
+            db,
+            None,
+            "WEBHOOK_TRA_TRUNG",
+            f"Order {order_id} đã thanh toán bằng giao dịch {cu}, nay nhận thêm "
+            f"giao dịch {gd.txn_id} ({gd.amount:,.0f}đ) - cần trả lại khách",
+        )

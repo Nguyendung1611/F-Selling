@@ -142,7 +142,7 @@ def test_khong_dung_vao_don_can_doi_soat(client, webhook_secret):
     client.post(f"/api/orders/{order_id}/cancel", headers=auth(ctx["token"]))
     client.post(
         "/api/orders/webhook",
-        json={"order_id": order_id},
+        json={"order_id": order_id, "amount": 300000},   # 3 x 100000
         headers={"X-Webhook-Secret": SECRET},
     )
     assert _trang_thai(order_id) == STATUS_UNRECONCILED

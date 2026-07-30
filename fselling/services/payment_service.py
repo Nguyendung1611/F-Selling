@@ -2,11 +2,33 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 from .. import models
 
 ORDER_CODE_RE = re.compile(r"ORDER(\d+)", re.IGNORECASE)
+
+
+@dataclass
+class GiaoDich:
+    """Một giao dịch rút ra từ payload webhook.
+
+    `amount` là None khi payload KHÔNG hề chứa số tiền - khác hẳn với số tiền
+    bằng 0. Phân biệt được hai ca này mới từ chối đúng chỗ: không đọc được số
+    tiền thì không có cơ sở nào để xác nhận đã thu đủ.
+
+    `direction` là 'in' (tiền vào), 'out' (tiền ra) hoặc None khi không rõ.
+    Giao dịch tiền RA vẫn có thể mang nội dung 'ORDER42' - ví dụ chính shop
+    hoàn tiền cho khách - nên phải loại ra, nếu không đơn vừa hoàn lại bị đánh
+    dấu là đã thanh toán.
+    """
+
+    order_id: int
+    amount: Optional[float] = None
+    direction: Optional[str] = None
+    txn_id: Optional[str] = None
+    account_no: Optional[str] = None
 
 
 def build_qr_url(shop: models.Shop, total: float, order_id: int) -> str:
@@ -57,6 +79,116 @@ def extract_order_ids(request_data: Dict[str, Any]) -> List[int]:
         order_ids.extend(_match_order_code(str(request_data)))
 
     return order_ids
+
+
+def _so_tien(*ung_vien: Any) -> Optional[float]:
+    """Lấy số tiền đầu tiên đọc được. None khi không trường nào có giá trị.
+
+    Chuỗi rỗng và None đều coi như không có. Số 0 thì GIỮ - đó là một số tiền
+    thật (và là số tiền sai), không phải "thiếu dữ liệu".
+    """
+    for v in ung_vien:
+        if v is None or v == "":
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _chieu_tien(item: Dict[str, Any], amount: Optional[float]) -> Optional[str]:
+    """Xác định tiền vào hay tiền ra.
+
+    SePay nói thẳng bằng `transferType`. Casso không có trường đó nhưng dùng
+    dấu của `amount`: âm là tiền ra. payOS chỉ gửi giao dịch tiền vào.
+    """
+    raw = item.get("transferType") or item.get("type") or item.get("direction")
+    if isinstance(raw, str):
+        r = raw.strip().lower()
+        if r in ("in", "credit", "receive", "money_in"):
+            return "in"
+        if r in ("out", "debit", "send", "money_out"):
+            return "out"
+    if amount is not None and amount < 0:
+        return "out"
+    return None
+
+
+def _txn_id(item: Dict[str, Any]) -> Optional[str]:
+    for k in ("id", "tid", "referenceCode", "reference", "transactionId", "transaction_id"):
+        v = item.get(k)
+        if v not in (None, ""):
+            return str(v)
+    return None
+
+
+def _tai_khoan(item: Dict[str, Any]) -> Optional[str]:
+    for k in ("accountNumber", "account_number", "subAccId", "bankSubAccId", "accountNo"):
+        v = item.get(k)
+        if v not in (None, ""):
+            return str(v)
+    return None
+
+
+def _giao_dich_tu_item(item: Dict[str, Any], mo_ta: str) -> List[GiaoDich]:
+    """Dựng GiaoDich cho một mục giao dịch, kèm mọi mã đơn tìm được trong mô tả."""
+    amount = _so_tien(
+        item.get("transferAmount"), item.get("amount"), item.get("value"), item.get("money")
+    )
+    chung = {
+        "amount": abs(amount) if amount is not None else None,
+        "direction": _chieu_tien(item, amount),
+        "txn_id": _txn_id(item),
+        "account_no": _tai_khoan(item),
+    }
+    return [GiaoDich(order_id=oid, **chung) for oid in _match_order_code(mo_ta)]
+
+
+def extract_transactions(request_data: Dict[str, Any]) -> List[GiaoDich]:
+    """Rút danh sách giao dịch kèm số tiền từ payload webhook.
+
+    Hỗ trợ cùng các định dạng mà `extract_order_ids` hỗ trợ, nhưng giữ lại số
+    tiền, chiều tiền và mã giao dịch để tầng trên còn đối chiếu.
+    """
+    if not isinstance(request_data, dict):
+        return []
+
+    data = request_data.get("data")
+
+    if isinstance(data, list):
+        ket_qua: List[GiaoDich] = []
+        for item in data:
+            if isinstance(item, dict):
+                ket_qua.extend(_giao_dich_tu_item(item, item.get("description", "")))
+        return ket_qua
+
+    if isinstance(data, dict) and "orderCode" in data:
+        gd = _giao_dich_tu_item(data, data.get("description", ""))
+        try:
+            oid = int(data["orderCode"])
+        except (ValueError, TypeError):
+            return gd
+        # orderCode là nguồn đáng tin nhất của payOS; mô tả chỉ để bổ sung.
+        if not any(g.order_id == oid for g in gd):
+            mau = _giao_dich_tu_item(data, f"ORDER{oid}")
+            gd = mau + gd
+        return gd
+
+    if "content" in request_data or "transferAmount" in request_data:
+        mo_ta = request_data.get("content", "") or request_data.get("description", "")
+        return _giao_dich_tu_item(request_data, mo_ta)
+
+    if "order_id" in request_data:
+        try:
+            oid = int(request_data["order_id"])
+        except (ValueError, TypeError):
+            return []
+        return _giao_dich_tu_item(request_data, f"ORDER{oid}")
+
+    # Fallback: quét toàn bộ payload tìm ORDERxxx. Không có số tiền nào đáng
+    # tin ở đây nên để None - tầng trên sẽ từ chối.
+    return [GiaoDich(order_id=oid) for oid in _match_order_code(str(request_data))]
 
 
 def get_webhook_secret() -> str:

@@ -18,6 +18,12 @@ class Order(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     # Khách hàng gắn vào đơn (tùy chọn). NULL với đơn khách vãng lai. (C2a)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
+    # D1: số tiền THỰC NHẬN theo webhook ngân hàng, và mã giao dịch của ngân
+    # hàng. NULL với đơn tiền mặt hoặc đơn xác nhận thủ công. Giữ lại để đối
+    # soát: biết được khách chuyển dư bao nhiêu, và nhận ra khi cùng một đơn
+    # nhận hai giao dịch khác nhau (khách chuyển nhầm hai lần).
+    paid_amount = Column(Float, nullable=True)
+    bank_txn_id = Column(String(128), nullable=True, index=True)
 
     shop = relationship("Shop", back_populates="orders")
     items = relationship("OrderItem", back_populates="order")

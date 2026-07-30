@@ -52,6 +52,12 @@ _MIGRATIONS = [
     # sửa - vẫn hơn hẳn tình trạng hiện nay là không có ràng buộc nào cả.
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_products_shop_name "
     "ON products(shop_id, name)",
+    # D1: lưu vết tiền thực nhận từ webhook ngân hàng. CỐ Ý không unique trên
+    # bank_txn_id: ngân hàng gửi lại cùng một giao dịch là chuyện bình thường,
+    # và việc chống xử lý lặp đã do máy trạng thái đảm nhiệm.
+    "ALTER TABLE orders ADD COLUMN paid_amount FLOAT",
+    "ALTER TABLE orders ADD COLUMN bank_txn_id VARCHAR(128)",
+    "CREATE INDEX IF NOT EXISTS ix_orders_bank_txn_id ON orders(bank_txn_id)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt

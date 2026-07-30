@@ -54,15 +54,22 @@ async def order_webhook(
     result = order_service.apply_webhook_payment(db, request_data)
     paid = result["paid"]
     unreconciled = result["unreconciled"]
+    rejected = result.get("rejected", [])
 
     msg = f"Cập nhật thành công đơn hàng: {paid}"
     if unreconciled:
-        msg += f" | Cần đối soát thủ công (tiền về sau khi đơn đã hủy): {unreconciled}"
+        msg += f" | Cần đối soát thủ công: {unreconciled}"
+    if rejected:
+        msg += f" | Từ chối (tiền ra hoặc thiếu số tiền): {rejected}"
 
+    # CỐ Ý trả 200 cho cả giao dịch bị từ chối: ngân hàng sẽ retry vô hạn nếu
+    # nhận 4xx/5xx. Lý do từ chối nằm trong SystemLog và trong `msg`.
+    #
     # `order_ids` giữ nguyên ý nghĩa cũ (các đơn đã PAID) để không phá contract;
-    # `unreconciled_order_ids` là khóa bổ sung, thêm khóa là thay đổi an toàn.
+    # hai khóa còn lại là bổ sung, thêm khóa là thay đổi an toàn.
     return {
         "msg": msg,
         "order_ids": paid,
         "unreconciled_order_ids": unreconciled,
+        "rejected_order_ids": rejected,
     }

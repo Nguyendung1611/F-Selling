@@ -81,10 +81,28 @@ def _dem_log(action, order_id):
         session.close()
 
 
+def _tong_tien(order_id):
+    session = SessionLocal()
+    try:
+        o = session.query(models.Order).filter(models.Order.id == order_id).first()
+        return (o.total_amount if o else 0) or 0
+    finally:
+        session.close()
+
+
 def _webhook(client, order_id, secret=SECRET):
+    """Webhook với ĐÚNG số tiền của đơn.
+
+    Từ D1, payload thiếu số tiền không còn được đánh dấu PAID nữa. Mã giao dịch
+    cố định theo đơn để gửi lặp không bị hiểu nhầm là khách trả hai lần.
+    """
     return client.post(
         "/api/orders/webhook",
-        json={"order_id": order_id},
+        json={
+            "order_id": order_id,
+            "amount": _tong_tien(order_id),
+            "id": f"TXN-{order_id}",
+        },
         headers={"X-Webhook-Secret": secret},
     )
 

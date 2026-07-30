@@ -300,7 +300,7 @@ def test_khong_huy_duoc_don_can_doi_soat(client, webhook_secret):
     _huy(client, ctx, order_id)
     client.post(
         "/api/orders/webhook",
-        json={"order_id": order_id},
+        json={"order_id": order_id, "amount": 300000},   # 3 x 100000
         headers={"X-Webhook-Secret": SECRET},
     )
     assert _trang_thai(order_id) == STATUS_UNRECONCILED

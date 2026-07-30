@@ -165,7 +165,7 @@ trùng. Riêng `name` cố ý KHÔNG có bước dồn tự động: tên là d�
 đặt, tự đổi thành "... (2)" là quyết định không nên thay họ - DB nào còn tên
 trùng thì `verify_required_indexes()` sẽ nêu index bị thiếu để tự sửa.
 
-### 7. Kiểm trùng ở service không thay được ràng buộc ở DB
+### 6. Kiểm trùng ở service không thay được ràng buộc ở DB
 
 Giữa lúc service kiểm trùng và lúc ghi vẫn có khe cho hai request cùng lọt.
 Unique index chặn được nhưng ném `IntegrityError` → 500. `_ghi_bat_trung()`
@@ -177,7 +177,7 @@ dịch những ràng buộc có tên trong `_RANG_BUOC_DUY_NHAT` thành 400. M�
 Cách nhận biết dựa vào chuỗi thông báo của SQLite; đổi database khác là phải
 sửa lại bảng khóa đó.
 
-### 8. Quét bằng camera: hai cái bẫy đã mất công tìm ra
+### 7. Quét bằng camera: hai cái bẫy đã mất công tìm ra
 
 **Không tự gọi `video.play()` rồi mới đưa cho ZXing.** Hàm
 `decodeFromVideoElementContinuously` chờ sự kiện `canplay`; nếu video đã chạy
@@ -189,6 +189,32 @@ ZXing tự gắn stream và tự phát.
 Camera đọc lại cùng một mã ở mọi khung hình. Nếu chỉ chờ hết một khoảng rồi
 nhận lại thì để yên máy vài giây là món hàng bị cộng thêm mấy lần - tính thừa
 tiền mà không ai để ý. Xem `NGUONG_ROI_KHUNG_MS` trong `barcode-camera.js`.
+
+### 8. Webhook thanh toán: phải đối chiếu SỐ TIỀN, không chỉ mã đơn
+
+`apply_webhook_payment` không được chỉ rút `ORDERxxx` rồi đánh dấu `PAID`.
+Luật hiện tại:
+
+| Tình huống | Kết quả |
+|---|---|
+| Tiền RA (`transferType: out`, hoặc số tiền âm) | Từ chối, giữ nguyên trạng thái |
+| Payload không có số tiền | Từ chối, giữ `PENDING` |
+| Nhận < tổng đơn | `UNRECONCILED` + ghi số tiền đã nhận |
+| Nhận >= tổng đơn | `PAID`, phần dư ghi log |
+| Sai số tài khoản nhận | Chỉ cảnh báo, KHÔNG chặn |
+
+Ba điều dễ làm sai khi sửa tiếp:
+
+**Phải phân biệt "số tiền = 0" với "không có số tiền".** `GiaoDich.amount is None`
+nghĩa là payload không chứa số tiền nên không có cơ sở xác nhận; `amount == 0`
+là một số tiền thật và sai. Gộp hai ca này lại là mở lại đúng lỗ hổng cũ.
+
+**Giao dịch bị từ chối vẫn trả HTTP 200.** Ngân hàng retry vô hạn khi nhận
+4xx/5xx. Lý do từ chối nằm ở `SystemLog` và khóa `rejected_order_ids`.
+
+**Đừng đặt unique index lên `bank_txn_id`.** Ngân hàng gửi lại cùng một giao
+dịch là bình thường; chống xử lý lặp đã do máy trạng thái đảm nhiệm. Cột này
+chỉ để nhận ra khi một đơn nhận HAI mã giao dịch khác nhau (khách trả hai lần).
 
 ### 9. Kiểm kê: ba nguyên tắc không được phá
 
@@ -214,7 +240,7 @@ lọc kèm `shop_id` kể cả khi tra theo id - thiếu điều kiện đó th�
 được hàng của shop khác. Giỏ hàng ở POS cũng gộp dòng theo `product_id`, không
 theo tên.
 
-### 6. Không dùng `.subquery()` cho `in_()` trong SQLAlchemy 2.0
+### 11. Không dùng `.subquery()` cho `in_()` trong SQLAlchemy 2.0
 
 Truyền thẳng `Query` vào `in_()` (SQLAlchemy tự coerce thành scalar subquery);
 gọi `.subquery()` sẽ sinh `SAWarning` về coercion.
