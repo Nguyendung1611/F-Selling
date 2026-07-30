@@ -153,6 +153,21 @@
         </div>
     </div>
 
+    <!-- Hộp xác nhận dựng trong trang.
+         KHÔNG dùng confirm() của trình duyệt: khi người dùng lỡ tick "chặn hộp
+         thoại của trang này", confirm() lặng lẽ trả về false và nút Hoàn tất
+         đơn hàng chết câm - không đơn, không QR, không cả thông báo lỗi. -->
+    <div id="xacNhanModal" style="display:none; position:fixed; inset:0; z-index:10001; background:rgba(15,23,42,0.75); align-items:center; justify-content:center;">
+        <div style="width:min(92vw,430px); background:#0F172A; border:1px solid #334155; border-radius:12px; overflow:hidden;">
+            <div id="xnTieuDe" style="padding:0.9rem 1rem; font-weight:700; color:#F8FAFC; border-bottom:1px solid #334155;"></div>
+            <div id="xnNoiDung" style="padding:1rem; color:#CBD5E1; font-size:0.9rem; line-height:1.6; white-space:pre-wrap; max-height:50vh; overflow-y:auto;"></div>
+            <div style="display:flex; gap:0.6rem; padding:0.9rem 1rem; border-top:1px solid #334155;">
+                <button class="btn-outline" id="xnHuy" style="flex:1; padding:0.75rem;">Hủy</button>
+                <button id="xnDongY" style="flex:1; padding:0.75rem;">Xác nhận</button>
+            </div>
+        </div>
+    </div>
+
     <div id="toast"></div>
 
     <script src="/js/api.js"></script>

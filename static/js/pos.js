@@ -271,6 +271,41 @@ function setMethod(m) {
     if(m === 'cash') document.getElementById('qrSection').style.display = 'none';
 }
 
+/**
+ * Hộp xác nhận dựng trong trang, trả về Promise<boolean>.
+ *
+ * Thay cho `confirm()` của trình duyệt. Chrome cho phép người dùng tick "chặn
+ * hộp thoại của trang này" sau vài lần hiện liên tiếp; từ lúc đó `confirm()`
+ * trả về false ngay lập tức mà không hiện gì. Với nút Hoàn tất đơn hàng thì
+ * hậu quả là bấm mãi không ra đơn, không ra QR, không cả báo lỗi.
+ */
+function xacNhan(tieuDe, noiDung) {
+    return new Promise(resolve => {
+        const modal = document.getElementById('xacNhanModal');
+        const nutOk = document.getElementById('xnDongY');
+        const nutHuy = document.getElementById('xnHuy');
+        document.getElementById('xnTieuDe').innerText = tieuDe;
+        document.getElementById('xnNoiDung').innerText = noiDung;
+        modal.style.display = 'flex';
+
+        const dong = (ketQua) => {
+            modal.style.display = 'none';
+            nutOk.onclick = null;
+            nutHuy.onclick = null;
+            modal.onclick = null;
+            document.removeEventListener('keydown', khiNhanPhim);
+            resolve(ketQua);
+        };
+        const khiNhanPhim = (e) => { if (e.key === 'Escape') dong(false); };
+
+        nutOk.onclick = () => dong(true);
+        nutHuy.onclick = () => dong(false);
+        modal.onclick = (e) => { if (e.target === modal) dong(false); };
+        document.addEventListener('keydown', khiNhanPhim);
+        nutOk.focus();
+    });
+}
+
 let paymentPollingInterval = null;
 
 async function checkout() {
@@ -283,12 +318,11 @@ async function checkout() {
     const soMon = cart.reduce((n, i) => n + i.quantity, 0);
     const tenPTTT = paymentMethod === 'cash' ? 'Tiền mặt' : 'Chuyển khoản (VietQR)';
     const dongTomTat = cart.map(i => `  ${i.product_name}  ${i.price.toLocaleString()} × ${i.quantity}`).join('\n');
-    if (!confirm(
-        `Chốt đơn ${cart.length} mặt hàng (${soMon} món)?\n\n`
-        + `${dongTomTat}\n\n`
-        + `TỔNG CẦN THU: ${total.toLocaleString()} đ\n`
-        + `Thanh toán: ${tenPTTT}`
-    )) return;
+    const dongY = await xacNhan(
+        `Chốt đơn ${cart.length} mặt hàng (${soMon} món)?`,
+        `${dongTomTat}\n\nTỔNG CẦN THU: ${total.toLocaleString()} đ\nThanh toán: ${tenPTTT}`
+    );
+    if (!dongY) return;
 
     try {
         const body = {
@@ -332,7 +366,11 @@ async function confirmPayment() {
 
 async function cancelOrder() {
     if(!currentOrderId) return;
-    if(!confirm(`Hủy đơn #${currentOrderId}? Hàng trong đơn sẽ được trả lại kho.`)) return;
+    const dongY = await xacNhan(
+        `Hủy đơn #${currentOrderId}?`,
+        'Hàng trong đơn sẽ được trả lại kho.'
+    );
+    if (!dongY) return;
     try {
         const res = await apiCall(`/orders/${currentOrderId}/cancel`, 'POST');
         stopPaymentPolling();
