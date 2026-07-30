@@ -89,13 +89,25 @@ Muốn thử nghiệm thì chạy DB riêng, đừng đụng `fselling_v4.db`:
 $env:DB_PATH="C:\duong\dan\tam\thu.db"
 ```
 
-## Hai việc đang treo
+## Quyết định đã chốt — đừng tự ý làm khác
 
-- `DEPLOY_FLY.md` **đang chứa secret thật** và đã nằm trong lịch sử Git công
-  khai. `ADMIN_INITIAL_PASSWORD` trong đó trùng với `.env` đang dùng. Phải **đổi
-  mật khẩu**, sửa file không xóa được nó khỏi lịch sử.
-- GitHub Actions **không chạy** (tài khoản bị khóa thanh toán), nên CI không bắt
-  lỗi giúp. Bộ test ở máy là lưới an toàn duy nhất.
+**Secret trong `DEPLOY_FLY.md` cứ để nguyên.** File đó chứa `SECRET_KEY`,
+`PAYMENT_WEBHOOK_SECRET` và `ADMIN_INITIAL_PASSWORD` thật, đã nằm trong lịch sử
+Git công khai. Chủ dự án **biết và chấp nhận** vì đang trong giai đoạn phát
+triển, chưa có dữ liệu khách hàng thật.
+
+Đừng "tiện tay" đổi mật khẩu, xóa file hay viết lại lịch sử Git — sẽ làm hỏng
+môi trường đang chạy mà không ai yêu cầu.
+
+Nhưng **trước khi đưa vào dùng thật với dữ liệu khách hàng** thì phải đổi toàn
+bộ ba giá trị trên. Sửa file không xóa được chúng khỏi lịch sử, nên bắt buộc
+phải đổi giá trị chứ không phải sửa file.
+
+## Việc đang treo
+
+GitHub Actions **không chạy** (tài khoản bị khóa thanh toán) nên CI không bắt
+lỗi giúp. Bộ test chạy ở máy là lưới an toàn duy nhất — càng phải dùng
+`test-commit.ps1` cho mọi lần commit.
 
 ## Tài liệu
 
