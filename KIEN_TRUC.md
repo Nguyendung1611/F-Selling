@@ -216,7 +216,23 @@ là một số tiền thật và sai. Gộp hai ca này lại là mở lại đ�
 dịch là bình thường; chống xử lý lặp đã do máy trạng thái đảm nhiệm. Cột này
 chỉ để nhận ra khi một đơn nhận HAI mã giao dịch khác nhau (khách trả hai lần).
 
-### 9. Kiểm kê: ba nguyên tắc không được phá
+### 9. Đọc tiền: phải đổi số sang CHỮ trước khi đọc
+
+`DocTien.docSo()` đổi `150000` thành `"một trăm năm mươi nghìn"`. Đừng đưa thẳng
+chuỗi đã định dạng `"150.000"` cho bộ đọc: nhiều engine đọc dấu chấm ngăn cách
+nghìn thành `"một trăm năm mươi chấm không không không"`, hoặc đọc rời từng số.
+
+Hai chỗ dễ viết sai trong hàm đổi số:
+
+- Nhóm không phải cao nhất **phải** đọc cả `"không trăm"`. Thiếu nó thì
+  `1.005.000` thành `"một triệu năm nghìn"` — sai hẳn con số.
+- Tiếng Việt đổi vần theo hàng chục: `mười lăm` (không phải "mười năm"),
+  `hai mươi mốt`, `hai mươi tư`, `hai mươi lăm`.
+
+Chỉ đọc ở nhánh polling của chuyển khoản — đó là ca thu ngân không nhìn màn
+hình. Tiền mặt thì người bán vừa cầm tiền nên đọc thành ồn.
+
+### 10. Kiểm kê: ba nguyên tắc không được phá
 
 `apply_stocktake()` đặt tồn kho bằng số đếm thực tế. Ba điều bắt buộc giữ:
 
@@ -232,7 +248,7 @@ Máy quét USB bắt phím ở tầm `document` nên `xuLyQuetSeller()` phải t
 biệt: tab Kiểm Kê đang mở thì mã vào phiếu đếm, ngược lại mới đi đường
 nhập/xuất kho.
 
-### 10. Đơn hàng định danh sản phẩm bằng `product_id`
+### 11. Đơn hàng định danh sản phẩm bằng `product_id`
 
 `OrderItemCreate` nhận cả `product_id` và `product_name`; `product_id` được ưu
 tiên, `product_name` chỉ dùng khi thiếu id (client cũ). `resolve_items` **luôn**
@@ -240,7 +256,7 @@ lọc kèm `shop_id` kể cả khi tra theo id - thiếu điều kiện đó th�
 được hàng của shop khác. Giỏ hàng ở POS cũng gộp dòng theo `product_id`, không
 theo tên.
 
-### 11. Không dùng `.subquery()` cho `in_()` trong SQLAlchemy 2.0
+### 12. Không dùng `.subquery()` cho `in_()` trong SQLAlchemy 2.0
 
 Truyền thẳng `Query` vào `in_()` (SQLAlchemy tự coerce thành scalar subquery);
 gọi `.subquery()` sẽ sinh `SAWarning` về coercion.

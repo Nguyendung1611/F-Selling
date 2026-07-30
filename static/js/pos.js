@@ -354,6 +354,10 @@ function startPaymentPolling() {
             const statusRes = await apiCall(`/orders/${idDon}`);
             if(statusRes.status === 'PAID') {
                 stopPaymentPolling();
+                // Đọc TRƯỚC khi vẽ hóa đơn: thu ngân đang bận tay, tiếng nói là
+                // thứ tới tai họ trước tiên. Số tiền lấy từ server, không lấy
+                // biến `total` ở máy khách.
+                DocTien.thongBaoDaNhan(idDon, statusRes.total_amount);
                 showToast('Thanh toán chuyển khoản thành công!');
                 await hienHoaDon(idDon);
             } else if(statusRes.status === 'CANCELLED') {
@@ -363,7 +367,10 @@ function startPaymentPolling() {
                 resetPOS();
             } else if(statusRes.status === 'UNRECONCILED') {
                 stopPaymentPolling();
-                showToast('Tiền về sau khi đơn đã hủy. Vui lòng đối soát trước khi giao hàng!');
+                // Từ D1, trạng thái này còn nghĩa "khách chuyển THIẾU tiền" -
+                // càng phải nói ra, vì nhìn thoáng qua rất dễ tưởng đã thu đủ.
+                DocTien.canhBaoDoiSoat(idDon);
+                showToast('Đơn cần đối soát: số tiền nhận được không khớp, hoặc tiền về sau khi đơn đã hủy. Kiểm tra trước khi giao hàng!');
                 resetPOS();
             }
         } catch (err) {
@@ -516,5 +523,64 @@ async function taoKhachPOS() {
     } catch (e) { showToast(e.message); }
 }
 
+// ===== Cài đặt đọc tiền =====
+
+function dtLuuBat() {
+    DocTien.datBat(document.getElementById('dtBat').checked);
+    dtCapNhatHien();
+}
+
+function dtLuuGiong() {
+    localStorage.setItem(DocTien.KHOA.giong, document.getElementById('dtGiong').value);
+}
+
+function dtLuuTocDo() {
+    localStorage.setItem(DocTien.KHOA.tocDo, document.getElementById('dtTocDo').value);
+}
+
+function dtCapNhatHien() {
+    document.getElementById('dtChiTiet').style.display =
+        document.getElementById('dtBat').checked ? 'block' : 'none';
+}
+
+function dtNapGiong() {
+    const sel = document.getElementById('dtGiong');
+    if (!sel) return;
+    const tatCa = DocTien.danhSachGiong();
+    const viet = DocTien.giongTiengViet();
+    const dangChon = DocTien.giongDangChon();
+
+    // Đưa giọng tiếng Việt lên đầu, phần còn lại vẫn liệt kê để ai muốn thử.
+    const xepLai = viet.concat(tatCa.filter(v => !viet.includes(v)));
+    sel.innerHTML = xepLai.map(v =>
+        `<option value="${escapeHtml(v.name)}" ${dangChon && v.name === dangChon.name ? 'selected' : ''}>`
+        + `${escapeHtml(v.name)} (${escapeHtml(v.lang)})</option>`
+    ).join('');
+
+    const canhBao = document.getElementById('dtCanhBao');
+    if (!tatCa.length) {
+        canhBao.style.display = 'block';
+        canhBao.innerText = 'Trình duyệt này chưa nạp được giọng đọc nào. Thử tải lại trang.';
+    } else if (!viet.length) {
+        canhBao.style.display = 'block';
+        canhBao.innerText = 'Thiết bị chưa có giọng tiếng Việt — máy sẽ đọc bằng giọng nước ngoài nên nghe rất khó. '
+            + 'Cài thêm gói giọng tiếng Việt trong cài đặt hệ thống.';
+    } else {
+        canhBao.style.display = 'none';
+    }
+}
+
+function dtKhoiTao() {
+    const bat = document.getElementById('dtBat');
+    if (!bat) return;
+    bat.checked = DocTien.dangBat();
+    document.getElementById('dtTocDo').value = localStorage.getItem(DocTien.KHOA.tocDo) || 1;
+    dtCapNhatHien();
+    dtNapGiong();
+    // Danh sách giọng thường nạp bất đồng bộ, lần gọi đầu hay trả về rỗng.
+    if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = dtNapGiong;
+}
+
+dtKhoiTao();
 loadShop();
 loadProducts();

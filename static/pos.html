@@ -80,6 +80,23 @@
         <!-- CỘT 3: THANH TOÁN -->
         <div class="pos-col" style="background: #0B1120; overflow-y: auto; padding-right: 0.5rem;">
             <h3 style="font-size: 1.1rem; margin-bottom: 1rem; color: white;"><i class="ph ph-receipt"></i> Thanh Toán</h3>
+
+            <!-- Đọc to khi tiền chuyển khoản về -->
+            <div style="background:#0F172A; border-radius:8px; padding:0.7rem 0.8rem; margin-bottom:1rem; font-size:0.85rem;">
+                <label style="display:flex; align-items:center; gap:0.5rem; color:#E2E8F0; cursor:pointer; margin:0;">
+                    <input type="checkbox" id="dtBat" onchange="dtLuuBat()" style="width:16px; height:16px; margin:0;">
+                    <i class="ph ph-speaker-high"></i> Đọc to khi nhận tiền chuyển khoản
+                </label>
+                <div id="dtChiTiet" style="margin-top:0.6rem;">
+                    <select id="dtGiong" onchange="dtLuuGiong()" style="width:100%; padding:0.35rem; border-radius:6px; border:1px solid #334155; background:#1E293B; color:white; font-size:0.8rem; margin-bottom:0.4rem;"></select>
+                    <div style="display:flex; gap:0.5rem; align-items:center; color:#94A3B8; font-size:0.78rem;">
+                        <span style="white-space:nowrap;">Tốc độ</span>
+                        <input type="range" id="dtTocDo" min="0.5" max="1.5" step="0.1" onchange="dtLuuTocDo()" style="flex:1;">
+                        <button class="btn-outline" onclick="DocTien.thuGiong()" style="padding:0.25rem 0.6rem; font-size:0.78rem; white-space:nowrap;">Thử giọng</button>
+                    </div>
+                    <div id="dtCanhBao" style="display:none; color:#FBBF24; font-size:0.78rem; margin-top:0.4rem; line-height:1.4;"></div>
+                </div>
+            </div>
             
             <div class="checkout-box">
                 <div class="summary-row"><span>Tạm tính:</span><span id="txtSubtotal">0 ₫</span></div>
@@ -142,6 +159,7 @@
     <!-- barcode.js phải nạp trước pos.js: pos.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js"></script>
     <script src="/js/barcode-camera.js"></script>
+    <script src="/js/doc-tien.js"></script>
     <script src="/js/pos.js"></script>
 </body>
 </html>
