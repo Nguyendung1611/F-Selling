@@ -19,7 +19,14 @@ from ..core.config import (
     MAX_IMAGE_SIZE,
     UPLOAD_DIR,
 )
-from ..dependencies import has_shop_operator_access, require_shop_access
+from ..dependencies import (
+    PERMISSION_INVENTORY,
+    PERMISSION_SALE,
+    has_shop_operator_access,
+    require_any_staff_permission,
+    require_shop_access,
+    require_staff_permission,
+)
 from ..schemas.catalog import CategoryUpdate
 from .log_service import log_system_action
 
@@ -189,13 +196,18 @@ def is_valid_image(data: bytes) -> bool:
 
 
 def _require_shop_operator_403(
-    db: Session, shop_id: int, current_user: models.User
+    db: Session,
+    shop_id: int,
+    current_user: models.User,
+    permission: Optional[str] = PERMISSION_INVENTORY,
 ) -> models.Shop:
     """Cho phép chủ shop / ADMIN / nhân viên của shop thao tác. Nếu không -> 403.
     (Giữ 403 'Not your shop' như hành vi cũ của các endpoint tạo SP/danh mục.)"""
     shop = db.query(models.Shop).filter(models.Shop.id == shop_id).first()
     if not shop or not has_shop_operator_access(shop, current_user):
         raise HTTPException(status_code=403, detail="Not your shop")
+    if permission is not None:
+        require_staff_permission(current_user, permission)
     return shop
 
 
@@ -234,6 +246,7 @@ def update_category(
         raise HTTPException(
             status_code=403, detail="Không có quyền chỉnh sửa danh mục của cửa hàng này"
         )
+    require_staff_permission(current_user, PERMISSION_INVENTORY)
 
     name_stripped = cat.name.strip() if cat.name else ""
     if not name_stripped:
@@ -257,6 +270,11 @@ def list_categories(
     db: Session, current_user: models.User, shop_id: int
 ) -> List[models.Category]:
     require_shop_access(db, shop_id, current_user)
+    # POS cần đọc danh mục; kho cũng cần. Chỉ các thao tác ghi mới bắt buộc
+    # quyền INVENTORY.
+    require_any_staff_permission(
+        current_user, PERMISSION_SALE, PERMISSION_INVENTORY
+    )
     return db.query(models.Category).filter(models.Category.shop_id == shop_id).all()
 
 
@@ -300,7 +318,10 @@ def lookup_by_barcode(
     không tìm thấy: danh sách có thể đã cũ (nhân viên khác vừa thêm sản phẩm),
     lúc đó câu trả lời "không tìm thấy" phải do server quyết định.
     """
-    _require_shop_operator_403(db, shop_id, current_user)
+    _require_shop_operator_403(db, shop_id, current_user, permission=None)
+    require_any_staff_permission(
+        current_user, PERMISSION_SALE, PERMISSION_INVENTORY
+    )
     prod = find_by_barcode(db, shop_id, barcode)
     if not prod:
         raise HTTPException(
@@ -441,6 +462,7 @@ def update_product(
     if not prod:
         raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
     require_shop_access(db, prod.shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_INVENTORY)
 
     name_stripped = name.strip() if name else ""
     if not name_stripped:
@@ -627,6 +649,7 @@ def adjust_stock(
     if not prod:
         raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
     require_shop_access(db, prod.shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_INVENTORY)
 
     if delta == 0:
         raise HTTPException(status_code=400, detail="Số lượng thay đổi phải khác 0")
@@ -659,6 +682,7 @@ def toggle_product_status(
     if not prod:
         raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
     require_shop_access(db, prod.shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_INVENTORY)
     prod.is_active = not prod.is_active
     db.commit()
     log_system_action(
@@ -675,6 +699,7 @@ def delete_product(db: Session, current_user: models.User, product_id: int) -> D
     if not prod:
         raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
     require_shop_access(db, prod.shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_INVENTORY)
     name, code = prod.name, prod.code
     db.delete(prod)
     db.commit()

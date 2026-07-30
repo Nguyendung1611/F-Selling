@@ -8,6 +8,9 @@ from ..core.database import Base
 
 class Order(Base):
     __tablename__ = "orders"
+    __table_args__ = (
+        Index("ux_orders_operation_id", "operation_id", unique=True),
+    )
     id = Column(Integer, primary_key=True, index=True)
     shop_id = Column(Integer, ForeignKey("shops.id"))
     total_amount = Column(Float)
@@ -16,6 +19,18 @@ class Order(Base):
     payment_method = Column(String, default="transfer")  # 'transfer' or 'cash'
     status = Column(String, default="PENDING")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    # Mã do web client giữ lại khi retry tạo đơn. Unique ở DB để lỗi mạng hoặc
+    # double-click không thể trừ kho/tăng voucher hai lần.
+    operation_id = Column(String(128), nullable=True)
+    operation_fingerprint = Column(String(64), nullable=True)
+    # Người tạo và ca bán hàng là dấu vết server-side. Nullable để giữ được
+    # đơn legacy; service tạo đơn mới sẽ luôn gắn từ current_user/ca đang mở.
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    shift_id = Column(Integer, ForeignKey("cash_shifts.id"), nullable=True, index=True)
+    # Tiền khách đưa và tiền thối là ảnh chụp của lần thu tiền mặt. Số thực giữ
+    # lại cho đơn vẫn nằm ở cash_paid_amount/OrderPayment.
+    cash_tendered_amount = Column(Float, nullable=True)
+    cash_change_amount = Column(Float, nullable=True)
     # Khách hàng gắn vào đơn (tùy chọn). NULL với đơn khách vãng lai. (C2a)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
     # D1: tổng tiền THỰC NHẬN qua webhook ngân hàng và mã giao dịch gần nhất.
@@ -41,6 +56,8 @@ class Order(Base):
     items = relationship("OrderItem", back_populates="order")
     customer = relationship("Customer")
     payments = relationship("OrderPayment", back_populates="order")
+    created_by = relationship("User", foreign_keys=[created_by_user_id])
+    shift = relationship("CashShift", back_populates="orders")
 
 
 class OrderItem(Base):
@@ -82,8 +99,12 @@ class OrderPayment(Base):
     bank_txn_id = Column(String(128), nullable=True)
     account_no = Column(String(64), nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # Ca thực sự nhận/chi khoản tiền này. Có thể khác ca tạo đơn (ví dụ thu bù
+    # hoặc hoàn tiền vào ngày sau), và nullable cho dữ liệu legacy/ngân hàng.
+    shift_id = Column(Integer, ForeignKey("cash_shifts.id"), nullable=True, index=True)
     note = Column(String(500), nullable=True)
     reference = Column(String(128), nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     order = relationship("Order", back_populates="payments")
+    shift = relationship("CashShift", back_populates="order_payments")

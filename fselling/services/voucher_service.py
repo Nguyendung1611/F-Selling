@@ -9,7 +9,12 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..dependencies import has_shop_operator_access, require_shop_access
+from ..dependencies import (
+    PERMISSION_VOUCHER,
+    has_shop_operator_access,
+    require_shop_access,
+    require_staff_permission,
+)
 from ..schemas.catalog import VoucherCreate
 from .log_service import log_system_action
 
@@ -58,6 +63,7 @@ def create_voucher(
     db: Session, current_user: models.User, shop_id: int, v: VoucherCreate
 ) -> models.Voucher:
     require_shop_access(db, shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_VOUCHER)
     code_stripped = _validate(v)
 
     existing = (
@@ -105,6 +111,7 @@ def update_voucher(
         raise HTTPException(
             status_code=403, detail="Không có quyền chỉnh sửa voucher của cửa hàng này"
         )
+    require_staff_permission(current_user, PERMISSION_VOUCHER)
 
     code_stripped = _validate(v)
     existing = (
@@ -143,6 +150,7 @@ def delete_voucher(db: Session, current_user: models.User, voucher_id: int) -> D
     if not db_v:
         raise HTTPException(status_code=404, detail="Voucher không tồn tại")
     require_shop_access(db, db_v.shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_VOUCHER)
     code = db_v.code
     db.delete(db_v)
     db.commit()

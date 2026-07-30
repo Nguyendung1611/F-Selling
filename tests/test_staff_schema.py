@@ -24,6 +24,14 @@ def test_cot_staff_shop_id_ton_tai(client, db):
     assert "staff_shop_id" in _cot_users(db)
 
 
+def test_cot_staff_role_ton_tai(client, db):
+    assert "staff_role" in _cot_users(db)
+
+
+def test_cot_user_is_active_ton_tai(client, db):
+    assert "is_active" in _cot_users(db)
+
+
 def test_index_staff_shop_id_ton_tai(client, db):
     indexes = {row[1] for row in db.execute(text("PRAGMA index_list(users)"))}
     assert "ix_users_staff_shop_id" in indexes
@@ -107,6 +115,7 @@ def test_user_moi_mac_dinh_khong_phai_staff(client):
         )
         assert user.role == "SELLER"
         assert user.staff_shop_id is None
+        assert user.staff_role is None
     finally:
         session.close()
 

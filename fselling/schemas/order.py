@@ -25,6 +25,7 @@ class OrderCreate(BaseModel):
     items: List[OrderItemCreate]
     voucher_code: Optional[str] = None
     payment_method: str = "transfer"
+    operation_id: Optional[str] = Field(default=None, min_length=8, max_length=128)
     # Gắn khách vào đơn (tùy chọn). Bỏ trống = khách vãng lai.
     customer_id: Optional[int] = None
 
@@ -45,6 +46,16 @@ class CashTopup(BaseModel):
 
     amount: Optional[float] = None
     note: Optional[str] = None
+
+
+class CashPayment(BaseModel):
+    """Tiền khách thực đưa khi thanh toán một đơn tiền mặt.
+
+    Server tự tính tiền thừa từ tổng đơn đã chốt trong DB; client không được
+    gửi hay tự quyết định số tiền phải trả lại.
+    """
+
+    tendered_amount: float
 
 
 class RefundComplete(BaseModel):

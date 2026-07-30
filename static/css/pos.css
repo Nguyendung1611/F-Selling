@@ -2,13 +2,25 @@ body { overflow: hidden; } /* Ngăn cuộn trang chính để tạo cảm giác 
 .pos-layout {
     display: grid;
     grid-template-columns: 1fr 400px 350px;
+    grid-template-rows: auto minmax(0, 1fr);
     gap: 1rem;
-    height: calc(100vh - 90px);
+    height: calc(100vh - 68px);
+    height: calc(100dvh - 68px);
     padding: 1rem;
     box-sizing: border-box;
 }
 @media (max-width: 1200px) {
-    .pos-layout { grid-template-columns: 1fr 350px; } /* Ẩn cột checkout riêng thành dạng modal hoặc stack xuống */
+    /* Tablet vẫn giữ sản phẩm bên trái; giỏ và thanh toán chia đôi chiều cao bên
+       phải. Trước đây chỉ đổi thành 2 cột nhưng vẫn có 3 panel, khiến thanh toán
+       bị rơi xuống một hàng grid ngầm và tràn khỏi khung cao cố định. */
+    .pos-layout {
+        grid-template-columns: minmax(0, 1fr) minmax(340px, 410px);
+        grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr);
+    }
+    .shift-bar    { grid-column: 1 / -1; grid-row: 1; }
+    .pos-products { grid-column: 1; grid-row: 2 / 4; }
+    .pos-cart     { grid-column: 2; grid-row: 2; }
+    .pos-payment  { grid-column: 2; grid-row: 3; }
 }
 .pos-col {
     background: #1E293B;
@@ -17,6 +29,8 @@ body { overflow: hidden; } /* Ngăn cuộn trang chính để tạo cảm giác 
     display: flex;
     flex-direction: column;
     border: 1px solid var(--border-color);
+    min-width: 0;
+    min-height: 0;
 }
 .scroll-area {
     overflow-y: auto;
@@ -131,6 +145,440 @@ body { overflow: hidden; } /* Ngăn cuộn trang chính để tạo cảm giác 
 .qr-wrapper { text-align: center; background: white; padding: 1rem; border-radius: 8px; margin-top: 1rem; }
 .qr-wrapper img { max-width: 100%; border-radius: 4px; }
 
+/* ===== Ca làm việc ===== */
+.shift-bar {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem 1rem;
+    padding: 0.65rem 0.85rem;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    background: #0F172A;
+    color: #F8FAFC;
+    min-width: 0;
+}
+
+.shift-status {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    min-width: 0;
+}
+
+.shift-status > div {
+    min-width: 0;
+}
+
+.shift-status strong,
+.shift-status small {
+    display: block;
+}
+
+.shift-status strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.shift-status small {
+    color: #94A3B8;
+    margin-top: 0.15rem;
+    font-size: 0.76rem;
+}
+
+.shift-status-dot {
+    flex: 0 0 auto;
+    width: 0.72rem;
+    height: 0.72rem;
+    border-radius: 999px;
+    background: #F59E0B;
+    box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.16);
+}
+
+.shift-bar.is-open .shift-status-dot {
+    background: #10B981;
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.16);
+}
+
+.shift-bar.is-closed .shift-status-dot {
+    background: #EF4444;
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.14);
+}
+
+.shift-bar.is-error .shift-status-dot {
+    background: #F59E0B;
+}
+
+.shift-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 0 0 auto;
+}
+
+.shift-actions button {
+    padding: 0.55rem 0.8rem;
+    box-shadow: none;
+    white-space: nowrap;
+}
+
+.shift-actions .btn-outline {
+    color: #FDBA74;
+    border-color: #C2410C;
+}
+
+.shift-actions .btn-shift-close {
+    color: #FCA5A5;
+    border-color: #7F1D1D;
+}
+
+/* ===== Tiền khách đưa / tiền thối ===== */
+.cash-tender {
+    margin: -0.15rem 0 1rem;
+    padding: 0.85rem;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    background: #0F172A;
+    color: #F8FAFC;
+}
+
+.cash-tender > label {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: #CBD5E1;
+    font-size: 0.86rem;
+    font-weight: 600;
+}
+
+.cash-input-wrap {
+    display: flex;
+    align-items: center;
+    border: 1px solid #475569;
+    border-radius: 9px;
+    overflow: hidden;
+    background: #1E293B;
+}
+
+.cash-input-wrap:focus-within {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.2);
+}
+
+.cash-input-wrap input {
+    min-width: 0;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: #F8FAFC;
+    box-shadow: none;
+    transform: none;
+    font-size: 1.15rem;
+    font-weight: 700;
+    text-align: right;
+}
+
+.cash-input-wrap input:focus {
+    border: 0;
+    box-shadow: none;
+    transform: none;
+}
+
+.cash-input-wrap > span {
+    padding-right: 0.8rem;
+    color: #94A3B8;
+    font-weight: 600;
+}
+
+.cash-quick-amounts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.4rem;
+    margin-top: 0.55rem;
+}
+
+.cash-quick-amounts button {
+    min-width: 0;
+    min-height: 40px;
+    padding: 0.42rem 0.35rem;
+    border: 1px solid #475569;
+    background: #1E293B;
+    color: #CBD5E1;
+    border-radius: 7px;
+    box-shadow: none;
+    font-size: 0.78rem;
+}
+
+.cash-quick-amounts button:hover {
+    background: #334155;
+    transform: none;
+}
+
+.cash-change-status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.65rem;
+    padding-top: 0.65rem;
+    border-top: 1px dashed #475569;
+    color: #94A3B8;
+}
+
+.cash-change-status strong {
+    color: #86EFAC;
+    font-size: 1.08rem;
+    white-space: nowrap;
+}
+
+.cash-change-status.is-short strong {
+    color: #FCA5A5;
+}
+
+.cash-pending-notice {
+    margin-top: 0.7rem;
+    padding: 0.65rem;
+    border: 1px solid #F59E0B;
+    border-radius: 8px;
+    background: rgba(245, 158, 11, 0.12);
+    color: #FDE68A;
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+
+.cash-pending-notice span {
+    display: block;
+    margin-bottom: 0.5rem;
+}
+
+.cash-pending-notice button {
+    width: 100%;
+    min-height: 40px;
+    padding: 0.45rem;
+    border-color: #F59E0B;
+    color: #FDE68A;
+    box-shadow: none;
+}
+
+button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+    transform: none !important;
+}
+
+/* ===== Modal nghiệp vụ tiền mặt ===== */
+.pos-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 10020;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgba(2, 6, 23, 0.78);
+    backdrop-filter: blur(4px);
+}
+
+.pos-modal-card {
+    width: min(94vw, 480px);
+    max-height: min(90vh, 760px);
+    max-height: min(90dvh, 760px);
+    overflow-y: auto;
+    padding: 1.2rem;
+    border: 1px solid #334155;
+    border-radius: 14px;
+    background: #0F172A;
+    color: #E2E8F0;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
+}
+
+.pos-modal-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.8rem;
+}
+
+.pos-modal-head small {
+    display: block;
+    margin-bottom: 0.25rem;
+    color: #94A3B8;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.pos-modal-head h3 {
+    margin: 0;
+    color: #F8FAFC;
+    font-size: 1.15rem;
+}
+
+.pos-modal-close {
+    width: 42px;
+    height: 42px;
+    flex: 0 0 42px;
+    padding: 0;
+    border: 1px solid #334155;
+    border-radius: 999px;
+    background: transparent;
+    color: #CBD5E1;
+    box-shadow: none;
+    font-size: 1.45rem;
+}
+
+.pos-modal-help {
+    margin-bottom: 1rem;
+    color: #94A3B8;
+    font-size: 0.86rem;
+    line-height: 1.55;
+}
+
+.pos-field-label {
+    display: block;
+    margin: 0.9rem 0 0.45rem;
+    color: #E2E8F0;
+    font-size: 0.86rem;
+    font-weight: 600;
+}
+
+.pos-field-label span {
+    color: #94A3B8;
+    font-size: 0.76rem;
+    font-weight: 400;
+}
+
+.pos-modal-card textarea {
+    margin: 0;
+    border-color: #334155;
+    background: #1E293B;
+    color: #F8FAFC;
+}
+
+.pos-modal-money input {
+    min-height: 48px;
+}
+
+.modal-quick-amounts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.movement-type-picker {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    margin: 0.25rem 0 1rem;
+}
+
+.movement-type-picker button {
+    min-height: 48px;
+    border: 1px solid #475569;
+    background: #1E293B;
+    color: #CBD5E1;
+    box-shadow: none;
+}
+
+.movement-type-picker button.active {
+    border-color: #10B981;
+    background: rgba(16, 185, 129, 0.16);
+    color: #86EFAC;
+}
+
+.movement-type-picker #btnMovementOut.active {
+    border-color: #EF4444;
+    background: rgba(239, 68, 68, 0.14);
+    color: #FCA5A5;
+}
+
+.pos-modal-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.65rem;
+    margin-top: 1.1rem;
+}
+
+.pos-modal-actions button {
+    min-height: 46px;
+    padding: 0.65rem;
+}
+
+.pos-modal-actions .btn-outline {
+    color: #FDBA74;
+    border-color: #C2410C;
+}
+
+.btn-danger {
+    background: #DC2626;
+}
+
+.btn-danger:hover {
+    background: #B91C1C;
+}
+
+.shift-close-summary {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.6rem;
+    margin: 0.25rem 0 1rem;
+}
+
+.shift-close-summary > div {
+    min-width: 0;
+    padding: 0.7rem;
+    border: 1px solid #334155;
+    border-radius: 9px;
+    background: #1E293B;
+}
+
+.shift-close-summary span,
+.shift-close-summary strong {
+    display: block;
+}
+
+.shift-close-summary span {
+    color: #94A3B8;
+    font-size: 0.74rem;
+}
+
+.shift-close-summary strong {
+    margin-top: 0.25rem;
+    overflow: hidden;
+    color: #F8FAFC;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.shift-difference {
+    margin-top: 0.55rem;
+    padding: 0.65rem 0.75rem;
+    border-radius: 8px;
+    background: rgba(16, 185, 129, 0.13);
+    color: #86EFAC;
+    font-size: 0.86rem;
+    font-weight: 700;
+}
+
+.shift-difference.is-short {
+    background: rgba(239, 68, 68, 0.14);
+    color: #FCA5A5;
+}
+
+.shift-difference.neutral {
+    background: #1E293B;
+    color: #94A3B8;
+}
+
+body.pos-modal-open {
+    overflow: hidden !important;
+}
+
+#toast {
+    z-index: 10050;
+    max-width: min(90vw, 420px);
+}
+
 .input-wrapper input{
     color: #a2a2a2;
 }
@@ -160,6 +608,28 @@ h2{
         height: auto;
         padding: 0.5rem;
         gap: 1.5rem;
+    }
+
+    .shift-bar {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+
+    .shift-status {
+        width: 100%;
+    }
+
+    .shift-actions {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+        width: 100%;
+    }
+
+    .shift-actions button {
+        min-width: 0;
+        min-height: 42px;
+        padding: 0.55rem 0.35rem;
+        font-size: 0.78rem;
     }
     
     .pos-col {
@@ -216,5 +686,25 @@ h2{
     #posCustNewForm button {
         min-height: 40px;
     }
-}
 
+    .cash-input-wrap input {
+        font-size: 1.08rem;
+    }
+
+    .pos-modal {
+        align-items: flex-end;
+        padding: 0;
+    }
+
+    .pos-modal-card {
+        width: 100%;
+        max-width: none;
+        max-height: 92vh;
+        max-height: 92dvh;
+        padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom));
+        border-right: 0;
+        border-bottom: 0;
+        border-left: 0;
+        border-radius: 16px 16px 0 0;
+    }
+}

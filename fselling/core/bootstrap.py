@@ -20,6 +20,7 @@ _MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN email VARCHAR(255)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users(email)",
     "ALTER TABLE users ADD COLUMN is_verified BOOLEAN DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
     "ALTER TABLE users ADD COLUMN session_id VARCHAR(255)",
     "ALTER TABLE users ADD COLUMN verification_code VARCHAR(255)",
     "ALTER TABLE users ADD COLUMN verification_code_expires DATETIME",
@@ -29,6 +30,11 @@ _MIGRATIONS = [
     # C1a: nhân viên (role=STAFF) được gán vào đúng một shop. NULL với ADMIN/SELLER.
     "ALTER TABLE users ADD COLUMN staff_shop_id INTEGER",
     "CREATE INDEX IF NOT EXISTS ix_users_staff_shop_id ON users(staff_shop_id)",
+    # Preset quyền cho STAFF. Backfill MANAGER giữ nguyên quyền vận hành rộng
+    # của mọi tài khoản nhân viên đã được tạo trước khi có RBAC.
+    "ALTER TABLE users ADD COLUMN staff_role VARCHAR(20)",
+    "UPDATE users SET staff_role = 'MANAGER' "
+    "WHERE role = 'STAFF' AND staff_role IS NULL",
     # C2a: khách hàng gắn vào đơn (tùy chọn). Bảng `customers` do create_all() tự
     # tạo; ở đây chỉ cần thêm cột customer_id cho bảng orders đã tồn tại.
     "ALTER TABLE orders ADD COLUMN customer_id INTEGER",
@@ -115,6 +121,35 @@ _MIGRATIONS = [
     "WHERE status = 'PAID' AND paid_amount > total_amount "
     "AND COALESCE(refunded_amount, 0) = 0 "
     "AND COALESCE(refund_due_amount, 0) = 0",
+    # E1: ca thu ngân server-side. Hai bảng cash_shifts/cash_movements được
+    # create_all() tạo mới; các ALTER này nâng cấp orders/order_payments cũ.
+    "ALTER TABLE orders ADD COLUMN created_by_user_id INTEGER",
+    "ALTER TABLE orders ADD COLUMN shift_id INTEGER",
+    "ALTER TABLE orders ADD COLUMN cash_tendered_amount FLOAT",
+    "ALTER TABLE orders ADD COLUMN cash_change_amount FLOAT",
+    "ALTER TABLE orders ADD COLUMN operation_id VARCHAR(128)",
+    "ALTER TABLE orders ADD COLUMN operation_fingerprint VARCHAR(64)",
+    "ALTER TABLE order_payments ADD COLUMN shift_id INTEGER",
+    "CREATE INDEX IF NOT EXISTS ix_orders_created_by_user_id "
+    "ON orders(created_by_user_id)",
+    "CREATE INDEX IF NOT EXISTS ix_orders_shift_id ON orders(shift_id)",
+    "CREATE INDEX IF NOT EXISTS ix_order_payments_shift_id "
+    "ON order_payments(shift_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_operation_id "
+    "ON orders(operation_id)",
+    "CREATE INDEX IF NOT EXISTS ix_cash_shifts_shop_id ON cash_shifts(shop_id)",
+    "CREATE INDEX IF NOT EXISTS ix_cash_shifts_opened_by_user_id "
+    "ON cash_shifts(opened_by_user_id)",
+    # Nhiều người được mở ca trong cùng shop; duy nhất chỉ theo cặp shop + user
+    # và chỉ trên ca OPEN để không chặn lịch sử.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_cash_shifts_shop_user_open "
+    "ON cash_shifts(shop_id, opened_by_user_id) WHERE status = 'OPEN'",
+    "CREATE INDEX IF NOT EXISTS ix_cash_movements_shift_id "
+    "ON cash_movements(shift_id)",
+    "CREATE INDEX IF NOT EXISTS ix_cash_movements_order_id "
+    "ON cash_movements(order_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_cash_movements_operation_id "
+    "ON cash_movements(operation_id)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
@@ -126,6 +161,9 @@ _REQUIRED_INDEXES = [
     "ix_products_shop_code",
     "ix_products_shop_name",
     "ux_order_payments_idempotency_key",
+    "ux_orders_operation_id",
+    "ux_cash_shifts_shop_user_open",
+    "ux_cash_movements_operation_id",
 ]
 
 _INDEX_EXISTS = (
@@ -365,10 +403,18 @@ def initialize() -> None:
         dedupe_product_codes(db)
         run_migrations(db)
         missing_indexes = verify_required_indexes(db)
-        if "ux_order_payments_idempotency_key" in missing_indexes:
+        financial_indexes = {
+            "ux_order_payments_idempotency_key",
+            "ux_orders_operation_id",
+            "ux_cash_shifts_shop_user_open",
+            "ux_cash_movements_operation_id",
+        }
+        missing_financial_indexes = financial_indexes.intersection(missing_indexes)
+        if missing_financial_indexes:
             raise RuntimeError(
-                "Thiếu unique index chống cộng trùng webhook "
-                "ux_order_payments_idempotency_key; dừng khởi động để bảo vệ số tiền"
+                "Thiếu unique index bảo vệ sổ tiền: "
+                f"{', '.join(sorted(missing_financial_indexes))}; "
+                "dừng khởi động để tránh ghi trùng"
             )
         backfill_legacy_order_payments(db)
         backfill_order_item_product_id(db)

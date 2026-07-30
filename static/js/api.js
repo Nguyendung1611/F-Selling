@@ -96,7 +96,9 @@ async function apiCall(endpoint, method = 'GET', body = null) {
         } else if (typeof msg === 'object') {
             msg = JSON.stringify(msg);
         }
-        throw new Error(msg);
+        const error = new Error(msg);
+        error.status = res.status;
+        throw error;
     }
     return data;
 }

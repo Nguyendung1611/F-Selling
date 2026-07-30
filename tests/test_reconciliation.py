@@ -765,7 +765,15 @@ def test_dashboard_reconciliation_only_loc_dung_ba_nhom_dang_mo(
     }
     assert all(
         set(row.keys())
-        == {"id", "total", "status", "date"} | PAYMENT_SUMMARY_KEYS
+        == {
+            "id",
+            "total",
+            "status",
+            "date",
+            "cashier_username",
+            "shift_id",
+        }
+        | PAYMENT_SUMMARY_KEYS
         for row in rows
     )
     reason_by_id = {row["id"]: row["reconciliation_reason"] for row in rows}

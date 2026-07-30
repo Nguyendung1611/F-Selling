@@ -17,6 +17,7 @@ from ..core.security import (
     new_session_id,
     verify_password,
 )
+from ..dependencies import effective_staff_role
 from ..schemas.auth import (
     ChangePasswordRequest,
     EmailVerify,
@@ -30,6 +31,13 @@ from . import email_service
 from .log_service import log_system_action
 
 PASSWORD_POLICY_MSG = "Mật khẩu phải bao gồm kí tự đặc biệt, chữ hoa, chữ thường và số"
+
+
+def _token_response(user: models.User, token: str) -> Dict[str, str]:
+    response = {"access_token": token, "token_type": "bearer", "role": user.role}
+    if user.role == "STAFF":
+        response["staff_role"] = effective_staff_role(user)
+    return response
 
 
 def _otp_expiry() -> datetime:
@@ -163,13 +171,16 @@ def change_password(
     log_system_action(
         db, current_user.id, "CHANGE_PASSWORD", f"User {current_user.username} changed password"
     )
-    return {"access_token": token, "token_type": "bearer", "role": current_user.role}
+    db.refresh(current_user)
+    return _token_response(current_user, token)
 
 
 def login(db: Session, user: Login) -> Dict[str, str]:
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
     if not db_user or not verify_password(user.password, db_user.hashed_password):
         raise HTTPException(status_code=401, detail="Tên đăng nhập hoặc mật khẩu không chính xác")
+    if db_user.is_active is False:
+        raise HTTPException(status_code=403, detail="Tài khoản đã ngừng hoạt động")
 
     if db_user.email and not db_user.is_verified:
         raise HTTPException(
@@ -183,5 +194,6 @@ def login(db: Session, user: Login) -> Dict[str, str]:
 
     token = create_access_token(db_user.username, new_sid)
     log_system_action(db, db_user.id, "LOGIN", f"User {db_user.username} logged in")
+    db.refresh(db_user)
     log_to_file(f"Login success: user='{user.username}' (ID={db_user.id})")
-    return {"access_token": token, "token_type": "bearer", "role": db_user.role}
+    return _token_response(db_user, token)

@@ -25,14 +25,18 @@ def test_chu_shop_tao_duoc_nhan_vien(client):
     res = _tao_nv(client, ctx["token"], ctx["shop_id"], username="nv_an")
     assert res.status_code == 200, res.text
     body = res.json()
-    assert set(body.keys()) == {"id", "username", "shop_id", "is_active"}
+    assert set(body.keys()) == {
+        "id", "username", "shop_id", "is_active", "staff_role"
+    }
     assert body["username"] == "nv_an"
     assert body["shop_id"] == ctx["shop_id"]
+    assert body["staff_role"] == "MANAGER"
 
     session = SessionLocal()
     try:
         nv = session.query(models.User).filter(models.User.username == "nv_an").first()
         assert nv.role == "STAFF"
+        assert nv.staff_role == "MANAGER"
         assert nv.staff_shop_id == ctx["shop_id"]
         assert nv.is_verified is True
         assert nv.email is None
@@ -136,9 +140,21 @@ def test_chu_shop_xoa_duoc_nhan_vien(client):
 
     session = SessionLocal()
     try:
-        assert session.query(models.User).filter(models.User.id == nv_id).first() is None
+        nv = session.query(models.User).filter(models.User.id == nv_id).first()
+        assert nv is not None, "Giữ hồ sơ để lịch sử ca/đơn còn tên thu ngân"
+        assert nv.is_active is False
     finally:
         session.close()
+
+    listed = client.get(
+        f"/api/staff/{ctx['shop_id']}", headers=auth(ctx["token"])
+    ).json()
+    assert all(item["id"] != nv_id for item in listed)
+    disabled_login = client.post(
+        "/api/auth/login",
+        json={"username": "nv_xoa", "password": STAFF_PW},
+    )
+    assert disabled_login.status_code == 403
 
 
 def test_seller_khac_khong_xoa_duoc_nv(client):
@@ -154,6 +170,34 @@ def test_seller_khac_khong_xoa_duoc_nv(client):
         assert session.query(models.User).filter(models.User.id == nv_id).first() is not None
     finally:
         session.close()
+
+
+def test_khong_ngung_tai_khoan_khi_nhan_vien_con_ca_mo(client):
+    ctx = seller_with_shop(client)
+    staff = _tao_nv(
+        client, ctx["token"], ctx["shop_id"], username="nv_con_ca"
+    ).json()
+    staff_token = login(client, "nv_con_ca", STAFF_PW)
+    shift = client.post(
+        f"/api/shifts/{ctx['shop_id']}/open",
+        json={"opening_cash_amount": 0},
+        headers=auth(staff_token),
+    ).json()
+
+    blocked = client.delete(
+        f"/api/staff/member/{staff['id']}", headers=auth(ctx["token"])
+    )
+    assert blocked.status_code == 409
+    assert "kết ca" in blocked.json()["detail"]
+
+    assert client.post(
+        f"/api/shifts/{shift['id']}/close",
+        json={"counted_cash_amount": 0},
+        headers=auth(staff_token),
+    ).status_code == 200
+    assert client.delete(
+        f"/api/staff/member/{staff['id']}", headers=auth(ctx["token"])
+    ).status_code == 200
 
 
 def test_xoa_nv_khong_ton_tai(client):

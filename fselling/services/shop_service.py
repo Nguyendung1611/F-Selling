@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..core.config import MAX_SHOPS_PER_USER, log_to_file
+from ..core.security import new_session_id
 from ..dependencies import require_own_shop
 from ..schemas.shop import ShopCreate
 from .log_service import log_system_action
@@ -44,6 +45,10 @@ def _clean_and_validate(shop: ShopCreate) -> Dict[str, str]:
 
 
 def create_shop(db: Session, current_user: models.User, shop: ShopCreate) -> models.Shop:
+    # STAFF chỉ vận hành shop được gán; nếu tự tạo shop họ sẽ trở thành owner
+    # và đi vòng qua ranh giới quản trị đang được require_own_shop bảo vệ.
+    if current_user.role == "STAFF":
+        raise HTTPException(status_code=403, detail="Nhân viên không được tạo cửa hàng")
     count = db.query(models.Shop).filter(models.Shop.owner_id == current_user.id).count()
     if count >= MAX_SHOPS_PER_USER:
         raise HTTPException(
@@ -120,14 +125,55 @@ def delete_shop(db: Session, current_user: models.User, shop_id: int) -> Dict[st
     order_ids = [
         row[0] for row in db.query(models.Order.id).filter(models.Order.shop_id == shop_id).all()
     ]
+    shift_ids = [
+        row[0]
+        for row in db.query(models.CashShift.id)
+        .filter(models.CashShift.shop_id == shop_id)
+        .all()
+    ]
+    if shift_ids:
+        db.query(models.CashMovement).filter(
+            models.CashMovement.shift_id.in_(shift_ids)
+        ).delete(synchronize_session=False)
     if order_ids:
+        db.query(models.OrderPayment).filter(
+            models.OrderPayment.order_id.in_(order_ids)
+        ).delete(synchronize_session=False)
         db.query(models.OrderItem).filter(
             models.OrderItem.order_id.in_(order_ids)
         ).delete(synchronize_session=False)
-    db.query(models.Order).filter(models.Order.shop_id == shop_id).delete()
-    db.query(models.Product).filter(models.Product.shop_id == shop_id).delete()
-    db.query(models.Category).filter(models.Category.shop_id == shop_id).delete()
-    db.query(models.Voucher).filter(models.Voucher.shop_id == shop_id).delete()
+    db.query(models.Order).filter(models.Order.shop_id == shop_id).delete(
+        synchronize_session=False
+    )
+    if shift_ids:
+        db.query(models.CashShift).filter(
+            models.CashShift.id.in_(shift_ids)
+        ).delete(synchronize_session=False)
+    db.query(models.Customer).filter(models.Customer.shop_id == shop_id).delete(
+        synchronize_session=False
+    )
+    db.query(models.Product).filter(models.Product.shop_id == shop_id).delete(
+        synchronize_session=False
+    )
+    db.query(models.Category).filter(models.Category.shop_id == shop_id).delete(
+        synchronize_session=False
+    )
+    db.query(models.Voucher).filter(models.Voucher.shop_id == shop_id).delete(
+        synchronize_session=False
+    )
+    # Shop không còn tồn tại thì mọi tài khoản nhân viên gán vào đó phải bị
+    # vô hiệu ngay; giữ User để audit cũ vẫn truy ra đúng tên.
+    db.query(models.User).filter(
+        models.User.role == "STAFF",
+        models.User.staff_shop_id == shop_id,
+    ).update(
+        {
+            models.User.is_active: False,
+            models.User.session_id: new_session_id(),
+            models.User.staff_shop_id: None,
+        },
+        synchronize_session=False,
+    )
 
     db.delete(db_shop)
     db.commit()

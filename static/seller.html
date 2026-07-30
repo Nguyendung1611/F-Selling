@@ -245,7 +245,7 @@
     <div class="nav-bar">
         <img class="logo" src="img/logo.png" alt="Logo FSelling">   
         <div class="flex-row" style="gap: 1rem; align-items: center;">
-            <button onclick="openPosShopSelector()" style="display: flex; align-items: center; gap: 0.3rem; background: var(--primary);"><i class="ph ph-shopping-cart"></i> Mở POS Bán Hàng</button>
+            <button id="btnOpenPos" onclick="openPosShopSelector()" style="display: flex; align-items: center; gap: 0.3rem; background: var(--primary);"><i class="ph ph-shopping-cart"></i> Mở POS Bán Hàng</button>
             <button class="btn-outline" onclick="showChangePasswordModal()" style="display: flex; align-items: center; gap: 0.3rem;"><i class="ph ph-key"></i> Đổi mật khẩu</button>
             <button class="btn-outline" onclick="logout()" style="display: flex; align-items: center; gap: 0.3rem;"><i class="ph ph-sign-out"></i> Đăng xuất</button>
         </div>
@@ -342,7 +342,7 @@
                 <div class="table-responsive">
                     <table class="db-table">
                         <thead>
-                            <tr><th>Mã ĐH</th><th>Ngày</th><th>Tổng tiền</th><th>Trạng thái</th><th></th></tr>
+                            <tr><th>Mã ĐH</th><th>Ngày</th><th>Thu ngân</th><th>Tổng tiền</th><th>Trạng thái</th><th></th></tr>
                         </thead>
                         <tbody id="orderList"></tbody>
                     </table>
@@ -354,6 +354,26 @@
                         <button class="btn-outline" id="btnTrangTruoc" onclick="doiTrang(-1)">← Trước</button>
                         <button class="btn-outline" id="btnTrangSau" onclick="doiTrang(1)">Sau →</button>
                     </div>
+                </div>
+
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2rem; gap:0.75rem; flex-wrap:wrap;">
+                    <div>
+                        <h4 style="margin:0;"><i class="ph ph-clock-counter-clockwise"></i> Ca làm việc gần đây</h4>
+                        <small style="color:var(--text-muted);">Số tiền theo sổ và chênh lệch được chốt ở server.</small>
+                    </div>
+                    <button class="btn-outline" onclick="loadShiftHistory(currentShopId)" style="padding:0.45rem 0.8rem;">
+                        <i class="ph ph-arrow-clockwise"></i> Làm mới
+                    </button>
+                </div>
+                <div class="table-responsive" style="margin-top:0.8rem;">
+                    <table class="db-table">
+                        <thead>
+                            <tr><th>Ca</th><th>Thu ngân</th><th>Mở ca</th><th>Đóng ca</th><th>Theo sổ</th><th>Thực đếm</th><th>Chênh lệch</th></tr>
+                        </thead>
+                        <tbody id="shiftHistoryList">
+                            <tr><td colspan="7" style="color:var(--text-muted);">Đang tải...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
@@ -720,7 +740,7 @@
             <div id="staffContainer" style="margin-bottom: 2rem;">
                 <hr style="border-color: var(--border-color); margin-bottom: 1.5rem;">
                 <h4 style="margin-bottom: 0.5rem; color: var(--text-muted);"><i class="ph ph-users"></i> Nhân viên bán hàng</h4>
-                <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Nhân viên bán hàng và quản lý sản phẩm/kho cho cửa hàng, nhưng không sửa được thông tin cửa hàng hay quản lý nhân viên khác.</p>
+                <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Thu ngân bán hàng và chăm sóc khách; nhân viên kho quản lý sản phẩm/tồn; quản lý được toàn bộ nghiệp vụ vận hành. Không vai trò nào được sửa thông tin cửa hàng hay quản lý nhân viên khác.</p>
 
                 <div style="margin-bottom: 1rem;">
                     <label style="font-size: 0.85rem; color: var(--text-muted);">Chọn cửa hàng</label>
@@ -736,12 +756,20 @@
                         <label style="font-size: 0.85rem; color: var(--text-muted);">Mật khẩu</label>
                         <input type="password" id="staffPassword" placeholder="Chữ hoa, thường, số, ký tự đặc biệt" style="margin-bottom: 0;">
                     </div>
+                    <div>
+                        <label style="font-size: 0.85rem; color: var(--text-muted);">Vai trò</label>
+                        <select id="staffRole" style="margin-bottom: 0;">
+                            <option value="CASHIER">Thu ngân</option>
+                            <option value="WAREHOUSE">Kho</option>
+                            <option value="MANAGER">Quản lý</option>
+                        </select>
+                    </div>
                     <button onclick="taoNhanVien()"><i class="ph ph-user-plus"></i> Thêm nhân viên</button>
                 </div>
 
                 <div class="table-responsive">
                     <table class="db-table">
-                        <thead><tr><th>Tên đăng nhập</th><th></th></tr></thead>
+                        <thead><tr><th>Tên đăng nhập</th><th>Vai trò</th><th></th></tr></thead>
                         <tbody id="staffList"></tbody>
                     </table>
                 </div>
@@ -967,6 +995,6 @@
     <script src="/js/barcode.js"></script>
     <script src="/js/barcode-camera.js"></script>
     <script src="/js/doc-tien.js?v=20260731-reconciliation"></script>
-    <script src="/js/seller.js?v=20260731-reconciliation"></script>
+    <script src="/js/seller.js?v=20260731-cash-shift-2"></script>
 </body>
 </html>

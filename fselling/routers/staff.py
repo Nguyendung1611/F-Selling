@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..dependencies import get_current_user, get_db
-from ..schemas.staff import StaffCreate
+from ..schemas.staff import StaffCreate, StaffRoleUpdate
 from ..services import staff_service
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
@@ -51,3 +51,13 @@ def reset_staff_password(
     current_user: models.User = Depends(get_current_user),
 ):
     return staff_service.reset_staff_password(db, current_user, staff_id, body.new_password)
+
+
+@router.put("/member/{staff_id}/role")
+def update_staff_role(
+    staff_id: int,
+    body: StaffRoleUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return staff_service.update_staff_role(db, current_user, staff_id, body)

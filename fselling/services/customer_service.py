@@ -11,7 +11,11 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..dependencies import require_shop_access
+from ..dependencies import (
+    PERMISSION_CUSTOMER,
+    require_shop_access,
+    require_staff_permission,
+)
 from ..schemas.customer import CustomerCreate, CustomerUpdate
 from .log_service import log_system_action
 
@@ -41,6 +45,7 @@ def create_customer(
     db: Session, current_user: models.User, shop_id: int, data: CustomerCreate
 ) -> Dict:
     require_shop_access(db, shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_CUSTOMER)
     name, phone = _clean(data.name, data.phone)
 
     trung = (
@@ -73,6 +78,7 @@ def list_customers(
     db: Session, current_user: models.User, shop_id: int, q: Optional[str] = None
 ) -> List[Dict]:
     require_shop_access(db, shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_CUSTOMER)
     query = db.query(models.Customer).filter(models.Customer.shop_id == shop_id)
     if q and q.strip():
         like = f"%{q.strip()}%"
@@ -90,6 +96,7 @@ def _get_owned_customer(
     if not kh:
         raise HTTPException(status_code=404, detail="Không tìm thấy khách hàng")
     require_shop_access(db, kh.shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_CUSTOMER)
     return kh
 
 

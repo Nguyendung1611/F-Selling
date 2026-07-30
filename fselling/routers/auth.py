@@ -53,7 +53,7 @@ def change_password(
     return auth_service.change_password(db, current_user, data)
 
 
-@router.post("/login", response_model=Token)
+@router.post("/login", response_model=Token, response_model_exclude_none=True)
 def login(user: Login, db: Session = Depends(get_db)):
     return auth_service.login(db, user)
 

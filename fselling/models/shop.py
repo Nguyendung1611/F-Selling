@@ -24,3 +24,4 @@ class Shop(Base):
     categories = relationship("Category", back_populates="shop")
     products = relationship("Product", back_populates="shop")
     orders = relationship("Order", back_populates="shop")
+    cash_shifts = relationship("CashShift", back_populates="shop")

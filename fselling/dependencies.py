@@ -12,6 +12,41 @@ from .core.config import log_to_file
 from .core.database import SessionLocal
 from .core.security import decode_access_token, extract_bearer_token
 
+STAFF_ROLE_CASHIER = "CASHIER"
+STAFF_ROLE_WAREHOUSE = "WAREHOUSE"
+STAFF_ROLE_MANAGER = "MANAGER"
+STAFF_ROLES = frozenset(
+    {STAFF_ROLE_CASHIER, STAFF_ROLE_WAREHOUSE, STAFF_ROLE_MANAGER}
+)
+
+PERMISSION_SALE = "SALE"
+PERMISSION_INVENTORY = "INVENTORY"
+PERMISSION_CUSTOMER = "CUSTOMER"
+PERMISSION_REPORT = "REPORT"
+PERMISSION_VOUCHER = "VOUCHER"
+PERMISSION_RECONCILIATION = "RECONCILIATION"
+PERMISSION_CATALOG_READ = "CATALOG_READ"
+
+_STAFF_ROLE_PERMISSIONS = {
+    STAFF_ROLE_CASHIER: frozenset(
+        {PERMISSION_SALE, PERMISSION_CUSTOMER, PERMISSION_CATALOG_READ}
+    ),
+    STAFF_ROLE_WAREHOUSE: frozenset(
+        {PERMISSION_INVENTORY, PERMISSION_CATALOG_READ}
+    ),
+    STAFF_ROLE_MANAGER: frozenset(
+        {
+            PERMISSION_SALE,
+            PERMISSION_INVENTORY,
+            PERMISSION_CUSTOMER,
+            PERMISSION_REPORT,
+            PERMISSION_VOUCHER,
+            PERMISSION_RECONCILIATION,
+            PERMISSION_CATALOG_READ,
+        }
+    ),
+}
+
 
 def get_db():
     db = SessionLocal()
@@ -46,6 +81,9 @@ def get_current_user(
     if user is None:
         log_to_file(f"Auth failed: User not found: '{username}'")
         raise HTTPException(status_code=401, detail="User not found")
+    if user.is_active is False:
+        log_to_file(f"Auth failed: User disabled: '{username}'")
+        raise HTTPException(status_code=401, detail="Tài khoản đã ngừng hoạt động")
 
     # Kiểm tra Session ID để đảm bảo đăng xuất thiết bị cũ
     if user.session_id and sid != user.session_id:
@@ -62,6 +100,50 @@ def get_current_user(
 def require_admin(current_user: models.User = Depends(get_current_user)) -> models.User:
     if current_user.role != "ADMIN":
         raise HTTPException(status_code=403, detail="Admin only")
+    return current_user
+
+
+def effective_staff_role(current_user: models.User) -> Optional[str]:
+    """Vai trò vận hành thực tế của STAFF.
+
+    Dữ liệu STAFF tạo trước khi có cột ``staff_role`` được coi là MANAGER để
+    giữ nguyên toàn bộ quyền vận hành cũ. Giá trị lạ không được tự nâng lên
+    MANAGER; bảng quyền phía dưới sẽ từ chối mọi thao tác có phân quyền.
+    """
+    if current_user.role != "STAFF":
+        return None
+    return (getattr(current_user, "staff_role", None) or STAFF_ROLE_MANAGER).upper()
+
+
+def has_staff_permission(current_user: models.User, permission: str) -> bool:
+    """SELLER/ADMIN không bị giới hạn bởi preset của STAFF."""
+    if current_user.role != "STAFF":
+        return True
+    permissions = _STAFF_ROLE_PERMISSIONS.get(
+        effective_staff_role(current_user), frozenset()
+    )
+    return permission in permissions
+
+
+def require_staff_permission(
+    current_user: models.User, permission: str
+) -> models.User:
+    if not has_staff_permission(current_user, permission):
+        raise HTTPException(
+            status_code=403,
+            detail="Vai trò nhân viên không có quyền thực hiện thao tác này",
+        )
+    return current_user
+
+
+def require_any_staff_permission(
+    current_user: models.User, *permissions: str
+) -> models.User:
+    if not any(has_staff_permission(current_user, p) for p in permissions):
+        raise HTTPException(
+            status_code=403,
+            detail="Vai trò nhân viên không có quyền thực hiện thao tác này",
+        )
     return current_user
 
 

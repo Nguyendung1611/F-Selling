@@ -1,11 +1,19 @@
-from typing import Optional
+from typing import Literal
 
 from pydantic import BaseModel
+
+StaffRole = Literal["CASHIER", "WAREHOUSE", "MANAGER"]
 
 
 class StaffCreate(BaseModel):
     username: str
     password: str
+    # MANAGER giữ nguyên tập quyền STAFF trước khi có RBAC.
+    staff_role: StaffRole = "MANAGER"
+
+
+class StaffRoleUpdate(BaseModel):
+    staff_role: StaffRole
 
 
 class StaffOut(BaseModel):
@@ -13,3 +21,4 @@ class StaffOut(BaseModel):
     username: str
     shop_id: int
     is_active: bool
+    staff_role: StaffRole

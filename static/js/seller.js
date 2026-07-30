@@ -2,6 +2,19 @@
 // những gì được hiển thị (xem applyRoleUI ở cuối file).
 const MY_ROLE = localStorage.getItem('role');
 if(MY_ROLE !== 'SELLER' && MY_ROLE !== 'STAFF') window.location.href = '/';
+const MY_STAFF_ROLE = MY_ROLE === 'STAFF'
+    ? (localStorage.getItem('staff_role') || 'MANAGER').toUpperCase()
+    : null;
+const STAFF_UI_PERMISSIONS = Object.freeze({
+    CASHIER: new Set(['SALE', 'CUSTOMER']),
+    WAREHOUSE: new Set(['INVENTORY']),
+    MANAGER: new Set(['SALE', 'INVENTORY', 'CUSTOMER', 'REPORT', 'VOUCHER', 'RECONCILIATION'])
+});
+
+function coQuyenNhanVien(permission) {
+    if (MY_ROLE !== 'STAFF') return true;
+    return STAFF_UI_PERMISSIONS[MY_STAFF_ROLE]?.has(permission) === true;
+}
 
 const BANKS = [
     { code: 'VCB', label: 'Vietcombank (VCB)' },
@@ -68,13 +81,12 @@ async function init() {
         renderShopsList(); // Cho phần cài đặt
         // Danh sách nhân viên chỉ dành cho chủ shop (nhân viên gọi sẽ bị 404).
         if (MY_ROLE !== 'STAFF') renderStaffShopOptions();
-        // Khách hàng: cả chủ shop lẫn nhân viên đều quản lý được.
-        renderCustomerShopOptions();
+        if (coQuyenNhanVien('CUSTOMER')) renderCustomerShopOptions();
 
         if(allShops.length === 0) {
             document.getElementById('dashboardContent').style.display = 'none';
             document.getElementById('noShopMsg').style.display = 'block';
-            openCreateShopForm();
+            if (MY_ROLE !== 'STAFF') openCreateShopForm();
         } else {
             // Mặc định nạp dữ liệu cho shop đầu tiên nếu có currentShopId
             let savedId = localStorage.getItem('currentShopId');
@@ -184,12 +196,14 @@ async function loadDashboardShop(id) {
             tbody.innerHTML += `<tr>
                 <td><strong>#${o.id}</strong></td>
                 <td>${dt}</td>
+                <td>${escapeHtml(o.cashier_username || '—')}${o.shift_id ? `<br><small style="color:var(--text-muted);">Ca #${o.shift_id}</small>` : ''}</td>
                 <td>${o.total.toLocaleString()} ₫</td>
                 <td style="color: ${hienThi.color}; font-weight: 600;">${escapeHtml(hienThi.label)}</td>
                 <td><button class="btn-outline" style="padding: 0.25rem 0.6rem; font-size: 0.8rem;" onclick="xemChiTietDon(${o.id})">Xem</button></td>
             </tr>`;
         });
         capNhatDieuKhienTrang(res);
+        loadShiftHistory(id);
 
         // Lấy số liệu thống kê & biểu đồ (API mới)
         const stats = await apiCall(`/shops/${id}/stats${chuoiThamSoNgay()}`);
@@ -261,6 +275,41 @@ async function loadDashboardShop(id) {
             });
         }
     } catch(e) { showToast(e.message); }
+}
+
+async function loadShiftHistory(shopId) {
+    const tbody = document.getElementById('shiftHistoryList');
+    if (!tbody || !shopId) return;
+    tbody.innerHTML = `<tr><td colspan="7" style="color:var(--text-muted);">Đang tải...</td></tr>`;
+    try {
+        const data = await apiCall(`/shifts/history/${shopId}?page=1&per_page=10`);
+        if (shopId !== currentShopId) return;
+        if (!data.items.length) {
+            tbody.innerHTML = `<tr><td colspan="7" style="color:var(--text-muted);">Chưa có ca làm việc</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = data.items.map(shift => {
+            const dangMo = shift.status === 'OPEN';
+            const variance = Number(shift.variance_amount);
+            const varianceText = dangMo || !Number.isFinite(variance)
+                ? '—'
+                : `${variance > 0 ? '+' : ''}${dinhDangTienDoiSoat(variance)}`;
+            const varianceColor = variance < 0
+                ? '#EF4444'
+                : (variance > 0 ? '#F59E0B' : 'var(--success)');
+            return `<tr>
+                <td><strong>#${shift.id}</strong><br><small style="color:${dangMo ? '#10B981' : 'var(--text-muted)'};">${dangMo ? 'Đang mở' : 'Đã đóng'}</small></td>
+                <td>${escapeHtml(shift.opened_by_username || '—')}</td>
+                <td>${dinhDangNgayGio(shift.opened_at)}</td>
+                <td>${dangMo ? '—' : dinhDangNgayGio(shift.closed_at)}</td>
+                <td>${dinhDangTienDoiSoat(shift.expected_cash_amount || 0)}</td>
+                <td>${dangMo || shift.counted_cash_amount == null ? '—' : dinhDangTienDoiSoat(shift.counted_cash_amount)}</td>
+                <td style="font-weight:700; color:${varianceColor};">${varianceText}</td>
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="7" style="color:#EF4444;">${escapeHtml(e.message || 'Không tải được lịch sử ca')}</td></tr>`;
+    }
 }
 
 // ===== D4: danh sách đơn cần đối soát =====
@@ -656,31 +705,40 @@ function changeShop(id) {
 
 function loadDataForCurrentShop() {
     if(allShops.length === 0) return;
-    document.getElementById('dashboardContent').style.display = 'block';
-    document.getElementById('warehouseContent').style.display = 'grid';
-    document.getElementById('voucherContent').style.display = 'grid';
-    document.getElementById('kkContent').style.display = 'block';
+    const canReport = coQuyenNhanVien('REPORT');
+    const canInventory = coQuyenNhanVien('INVENTORY');
+    const canVoucher = coQuyenNhanVien('VOUCHER');
+    document.getElementById('dashboardContent').style.display = canReport ? 'block' : 'none';
+    document.getElementById('warehouseContent').style.display = canInventory ? 'grid' : 'none';
+    document.getElementById('voucherContent').style.display = canVoucher ? 'grid' : 'none';
+    document.getElementById('kkContent').style.display = canInventory ? 'block' : 'none';
     document.getElementById('noShopMsg').style.display = 'none';
     
     const shop = allShops.find(s => s.id === currentShopId);
-    document.getElementById('currentShopName').innerText = shop.name;
-    document.getElementById('whShopName').innerText = shop.name;
-    document.getElementById('vcShopName').innerText = shop.name;
-    document.getElementById('kkShopName').innerText = shop.name;
-    kkXoaHet();   // đổi shop thì phiếu đếm của shop cũ không còn nghĩa lý gì
-    
-    // Clear inputs for new shop
-    document.getElementById('prodCode').value = '';
-    document.getElementById('prodBarcode').value = '';
-    document.getElementById('prodName').value = '';
-    document.getElementById('prodPrice').value = '';
-    document.getElementById('prodImage').value = '';
-    document.getElementById('catNameInput').value = '';
-    
-    loadDashboardShop(currentShopId);
-    loadCategories();
-    loadProducts();
-    loadVouchers();
+    if (canReport) {
+        document.getElementById('currentShopName').innerText = shop.name;
+        loadDashboardShop(currentShopId);
+    }
+    if (canInventory) {
+        document.getElementById('whShopName').innerText = shop.name;
+        document.getElementById('kkShopName').innerText = shop.name;
+        kkXoaHet();   // đổi shop thì phiếu đếm của shop cũ không còn nghĩa lý gì
+
+        // Clear inputs for new shop
+        document.getElementById('prodCode').value = '';
+        document.getElementById('prodBarcode').value = '';
+        document.getElementById('prodName').value = '';
+        document.getElementById('prodPrice').value = '';
+        document.getElementById('prodImage').value = '';
+        document.getElementById('catNameInput').value = '';
+
+        loadCategories();
+        loadProducts();
+    }
+    if (canVoucher) {
+        document.getElementById('vcShopName').innerText = shop.name;
+        loadVouchers();
+    }
 }
 
 // Settings List Render
@@ -1560,6 +1618,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await apiCall('/auth/change-password', 'POST', { old_password, new_password });
             successMsg.innerText = "Đổi mật khẩu thành công!";
             localStorage.setItem('token', res.access_token);
+            if (res.staff_role) localStorage.setItem('staff_role', res.staff_role);
             showToast("Đổi mật khẩu thành công!");
             closeChangePasswordModal();
         } catch (err) {
@@ -1602,7 +1661,9 @@ if (btnOk) {
 init();
 // Bắt cả giao dịch chuyển thêm sau khi POS đã xuất hóa đơn và dọn đơn hiện
 // tại. Khi tab ẩn chỉ tải 1 dòng để cập nhật badge; khi tab mở tải lại danh sách.
-setInterval(lamMoiBadgeDoiSoatNen, 30000);
+if (coQuyenNhanVien('RECONCILIATION')) {
+    setInterval(lamMoiBadgeDoiSoatNen, 30000);
+}
 
 // ===== Phân trang + lọc ngày cho danh sách đơn (nhóm B) =====
 let trangDonHienTai = 1;
@@ -1825,6 +1886,30 @@ function applyRoleUI() {
     document.querySelectorAll('#settings > *').forEach(el => {
         if (el.id !== 'khoiDocTien') el.style.display = 'none';
     });
+
+    const allowedTabs = {
+        CASHIER: new Set(['customers', 'settings']),
+        WAREHOUSE: new Set(['warehouse', 'kiemke', 'settings']),
+        MANAGER: new Set([
+            'dashboard', 'reconciliation', 'warehouse', 'kiemke',
+            'voucher', 'customers', 'settings'
+        ])
+    }[MY_STAFF_ROLE] || new Set(['settings']);
+
+    document.querySelectorAll('.tab-btn[data-main-tab]').forEach(button => {
+        if (!allowedTabs.has(button.dataset.mainTab)) button.style.display = 'none';
+    });
+    document.querySelectorAll('.tab-content').forEach(section => {
+        if (!allowedTabs.has(section.id)) section.style.display = 'none';
+    });
+
+    const btnOpenPos = document.getElementById('btnOpenPos');
+    if (btnOpenPos && !coQuyenNhanVien('SALE')) btnOpenPos.style.display = 'none';
+
+    const defaultTab = MY_STAFF_ROLE === 'CASHIER'
+        ? 'customers'
+        : (MY_STAFF_ROLE === 'WAREHOUSE' ? 'warehouse' : 'dashboard');
+    switchTab(defaultTab);
 }
 
 // ===== C1d: quản lý nhân viên (chỉ chủ shop) =====
@@ -1843,14 +1928,22 @@ async function loadStaff() {
         const tbody = document.getElementById('staffList');
         tbody.innerHTML = '';
         if (!list.length) {
-            tbody.innerHTML = `<tr><td colspan="2" style="color: var(--text-muted);">Chưa có nhân viên</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="3" style="color: var(--text-muted);">Chưa có nhân viên</td></tr>`;
             return;
         }
         list.forEach(nv => {
+            const selectedRole = nv.staff_role || 'MANAGER';
             tbody.innerHTML += `<tr>
                 <td>${escapeHtml(nv.username)}</td>
+                <td>
+                    <select onchange="capNhatVaiTroNhanVien(${nv.id}, this)" style="margin: 0; min-width: 8.5rem;">
+                        <option value="CASHIER" ${selectedRole === 'CASHIER' ? 'selected' : ''}>Thu ngân</option>
+                        <option value="WAREHOUSE" ${selectedRole === 'WAREHOUSE' ? 'selected' : ''}>Kho</option>
+                        <option value="MANAGER" ${selectedRole === 'MANAGER' ? 'selected' : ''}>Quản lý</option>
+                    </select>
+                </td>
                 <td style="text-align:right;">
-                    <button class="btn-outline" style="padding: 0.2rem 0.5rem; color:#ef4444;" onclick="xoaNhanVien(${nv.id}, '${escapeHtml(nv.username)}')" title="Xóa"><i class="ph ph-trash"></i></button>
+                    <button class="btn-outline" style="padding: 0.2rem 0.5rem; color:#ef4444;" onclick="xoaNhanVien(${nv.id}, '${escapeHtml(nv.username)}')" title="Ngừng tài khoản"><i class="ph ph-user-minus"></i></button>
                 </td>
             </tr>`;
         });
@@ -1861,11 +1954,16 @@ async function taoNhanVien() {
     const sel = document.getElementById('staffShopSelect');
     const username = document.getElementById('staffUsername').value.trim();
     const password = document.getElementById('staffPassword').value;
+    const staffRole = document.getElementById('staffRole').value;
     if (!sel || !sel.value) return showToast('Vui lòng chọn cửa hàng');
     if (!username) return showToast('Vui lòng nhập tên đăng nhập');
     if (!password) return showToast('Vui lòng nhập mật khẩu');
     try {
-        await apiCall(`/staff/${sel.value}`, 'POST', { username, password });
+        await apiCall(`/staff/${sel.value}`, 'POST', {
+            username,
+            password,
+            staff_role: staffRole
+        });
         showToast('Đã thêm nhân viên');
         document.getElementById('staffUsername').value = '';
         document.getElementById('staffPassword').value = '';
@@ -1873,14 +1971,24 @@ async function taoNhanVien() {
     } catch (e) { showToast(e.message); }
 }
 
+async function capNhatVaiTroNhanVien(id, select) {
+    try {
+        await apiCall(`/staff/member/${id}/role`, 'PUT', { staff_role: select.value });
+        showToast('Đã cập nhật vai trò; nhân viên cần đăng nhập lại');
+    } catch (e) {
+        showToast(e.message);
+        loadStaff();
+    }
+}
+
 function xoaNhanVien(id, username) {
     showCustomConfirm(
-        'Xóa nhân viên',
-        `Xóa nhân viên "${username}"? Tài khoản này sẽ không đăng nhập được nữa.`,
+        'Ngừng tài khoản nhân viên',
+        `Ngừng tài khoản "${username}"? Nhân viên sẽ không đăng nhập được nữa, nhưng tên vẫn được giữ trên lịch sử ca và hóa đơn.`,
         async () => {
             try {
                 await apiCall(`/staff/member/${id}`, 'DELETE');
-                showToast('Đã xóa nhân viên');
+                showToast('Đã ngừng tài khoản nhân viên');
                 loadStaff();
             } catch (e) { showToast(e.message); }
         }

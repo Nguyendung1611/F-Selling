@@ -9,11 +9,18 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
         const data = await apiCall('/auth/login', 'POST', { username, password });
         localStorage.setItem('token', data.access_token);
         localStorage.setItem('role', data.role);
+        if (data.role === 'STAFF') {
+            localStorage.setItem('staff_role', data.staff_role || 'MANAGER');
+        } else {
+            localStorage.removeItem('staff_role');
+        }
         // Để hóa đơn ở POS ghi được tên người bán. Lấy từ ô đăng nhập chứ không
         // giải mã token: chỉ dùng để hiển thị, không dùng để phân quyền.
         localStorage.setItem('username', username);
         if (data.role === 'ADMIN') {
             window.location.href = '/admin';
+        } else if (data.role === 'STAFF' && data.staff_role === 'CASHIER') {
+            window.location.href = '/pos';
         } else {
             window.location.href = '/seller';
         }

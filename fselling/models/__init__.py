@@ -4,6 +4,7 @@ from ..core.database import Base
 from .catalog import Category, Product, Voucher
 from .customer import Customer
 from .order import Order, OrderItem, OrderPayment
+from .shift import CashMovement, CashShift
 from .shop import Shop
 from .system_log import SystemLog
 from .user import User
@@ -18,6 +19,8 @@ __all__ = [
     "Order",
     "OrderItem",
     "OrderPayment",
+    "CashShift",
+    "CashMovement",
     "SystemLog",
     "Customer",
 ]

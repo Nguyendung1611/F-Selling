@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -12,8 +13,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..dependencies import has_shop_operator_access, require_shop_access
-from ..schemas.order import CashTopup, OrderCreate, RefundComplete
+from ..dependencies import (
+    PERMISSION_RECONCILIATION,
+    PERMISSION_SALE,
+    STAFF_ROLE_CASHIER,
+    effective_staff_role,
+    has_shop_operator_access,
+    require_shop_access,
+    require_staff_permission,
+)
+from ..schemas.order import CashPayment, CashTopup, OrderCreate, RefundComplete
 from . import inventory_service, payment_service, voucher_service
 from .log_service import log_system_action
 
@@ -113,10 +122,66 @@ def _serialize_payment(payment: models.OrderPayment) -> Dict[str, Any]:
         "bank_txn_id": payment.bank_txn_id,
         "account_no": payment.account_no,
         "created_by_user_id": payment.created_by_user_id,
+        "shift_id": payment.shift_id,
         "note": payment.note,
         "reference": payment.reference,
         "created_at": payment.created_at,
     }
+
+
+def _current_cash_shift(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    *,
+    required_for_cashier: bool = False,
+    lock_for_cash_write: bool = False,
+) -> Optional[models.CashShift]:
+    """Ca OPEN của chính người đang thao tác trong shop.
+
+    API cũ vẫn cho chủ shop/MANAGER thu tiền không qua ca để không phá client
+    đang chạy sau deploy. Riêng preset CASHIER phải mở ca trước khi đụng tiền
+    mặt; giao diện web mới cũng hướng mọi người dùng vào luồng này.
+    """
+    shift = (
+        db.query(models.CashShift)
+        .filter(
+            models.CashShift.shop_id == shop_id,
+            models.CashShift.opened_by_user_id == current_user.id,
+            models.CashShift.status == "OPEN",
+        )
+        .order_by(models.CashShift.id.desc())
+        .first()
+    )
+    if (
+        shift is None
+        and required_for_cashier
+        and current_user.role == "STAFF"
+        and effective_staff_role(current_user) == STAFF_ROLE_CASHIER
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Thu ngân phải mở ca trước khi thu hoặc chi tiền mặt",
+        )
+    if shift is not None and lock_for_cash_write:
+        # SQLite không có SELECT FOR UPDATE. No-op UPDATE lấy write lock và
+        # đồng thời xác nhận ca vẫn OPEN; close_shift dùng đúng hàng rào này.
+        # Nhờ vậy kết ca không thể chụp expected rồi một payment đến muộn lại
+        # gắn vào chính ca CLOSED đó.
+        locked = db.execute(
+            text(
+                "UPDATE cash_shifts SET status = status "
+                "WHERE id = :shift_id AND status = 'OPEN'"
+            ),
+            {"shift_id": shift.id},
+        )
+        if locked.rowcount != 1:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Ca vừa được đóng; vui lòng tải lại và mở ca mới",
+            )
+    return shift
 
 
 def read_status(db: Session, order_id: int) -> Optional[str]:
@@ -157,14 +222,95 @@ def transition_status(
     return changed
 
 
+def _order_operation_fingerprint(order: OrderCreate) -> str:
+    """Dấu vân tay phần request có ý nghĩa nghiệp vụ, bỏ giá client gửi."""
+    items = sorted(
+        [
+            {
+                "product_id": item.product_id,
+                "product_name": (item.product_name or "").strip() or None,
+                "quantity": item.quantity,
+            }
+            for item in order.items
+        ],
+        key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True),
+    )
+    payload = {
+        "items": items,
+        "voucher_code": (order.voucher_code or "").strip().upper() or None,
+        "payment_method": order.payment_method,
+        "customer_id": order.customer_id,
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _create_order_response(
+    shop: models.Shop, existing: models.Order
+) -> Dict[str, Any]:
+    discount = _so_tien(existing.discount_amount)
+    total = _so_tien(existing.total_amount)
+    return {
+        "order_id": existing.id,
+        "subtotal": total + discount,
+        "discount": discount,
+        "total": total,
+        "qr_url": payment_service.build_qr_url(shop, total, existing.id),
+    }
+
+
+def _existing_operation_order(
+    db: Session,
+    shop: models.Shop,
+    current_user: models.User,
+    operation_id: str,
+    fingerprint: str,
+) -> Optional[Dict[str, Any]]:
+    existing = (
+        db.query(models.Order)
+        .filter(models.Order.operation_id == operation_id)
+        .first()
+    )
+    if existing is None:
+        return None
+    if (
+        existing.shop_id != shop.id
+        or existing.created_by_user_id != current_user.id
+        or existing.operation_fingerprint != fingerprint
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Mã retry tạo đơn đã được dùng cho một đơn khác",
+        )
+    return _create_order_response(shop, existing)
+
+
 def create_order(
     db: Session, current_user: models.User, shop_id: int, order: OrderCreate
 ) -> Dict[str, Any]:
     # Yêu cầu đăng nhập và chỉ chủ shop (hoặc admin) mới được tạo đơn cho shop này.
     shop = require_shop_access(db, shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_SALE)
 
     if not order.items:
         raise HTTPException(status_code=400, detail="Đơn hàng không có sản phẩm nào")
+    operation_id = (order.operation_id or "").strip() or None
+    operation_fingerprint = _order_operation_fingerprint(order)
+    if operation_id:
+        existing_response = _existing_operation_order(
+            db,
+            shop,
+            current_user,
+            operation_id,
+            operation_fingerprint,
+        )
+        if existing_response is not None:
+            return existing_response
 
     # Tính tiền TỪ DB, không tin giá client gửi.
     wanted = inventory_service.collect_quantities(order.items)
@@ -177,6 +323,12 @@ def create_order(
     total = subtotal - discount_amount
     if total < 0:
         total = 0
+    current_shift = _current_cash_shift(
+        db,
+        current_user,
+        shop_id,
+        lock_for_cash_write=True,
+    )
 
     # Khách hàng gắn vào đơn (tùy chọn). Phải là khách của ĐÚNG shop này -
     # không cho mượn customer_id của shop khác.
@@ -198,6 +350,10 @@ def create_order(
 
     new_order = models.Order(
         shop_id=shop_id,
+        created_by_user_id=current_user.id,
+        shift_id=current_shift.id if current_shift else None,
+        operation_id=operation_id,
+        operation_fingerprint=operation_fingerprint if operation_id else None,
         total_amount=total,
         discount_amount=discount_amount,
         voucher_code=order.voucher_code,
@@ -207,7 +363,21 @@ def create_order(
         status=STATUS_PAID if total <= MONEY_EPSILON else STATUS_PENDING,
     )
     db.add(new_order)
-    db.flush()  # lấy new_order.id mà chưa commit, cùng một transaction
+    try:
+        db.flush()  # lấy id mà chưa commit, cùng một transaction
+    except IntegrityError:
+        db.rollback()
+        if operation_id:
+            existing_response = _existing_operation_order(
+                db,
+                shop,
+                current_user,
+                operation_id,
+                operation_fingerprint,
+            )
+            if existing_response is not None:
+                return existing_response
+        raise
 
     for prod, qty in resolved_items:
         db.add(
@@ -230,13 +400,7 @@ def create_order(
     db.commit()
     db.refresh(new_order)
 
-    return {
-        "order_id": new_order.id,
-        "subtotal": subtotal,
-        "discount": discount_amount,
-        "total": total,
-        "qr_url": payment_service.build_qr_url(shop, total, new_order.id),
-    }
+    return _create_order_response(shop, new_order)
 
 
 def get_order(db: Session, current_user: models.User, order_id: int) -> Dict[str, Any]:
@@ -248,6 +412,7 @@ def get_order(db: Session, current_user: models.User, order_id: int) -> Dict[str
         raise HTTPException(status_code=404, detail="Không tìm thấy cửa hàng của đơn hàng")
     if not has_shop_operator_access(shop, current_user):
         raise HTTPException(status_code=403, detail="Không có quyền truy cập đơn hàng này")
+    require_staff_permission(current_user, PERMISSION_SALE)
     result = {
         "id": order.id,
         "shop_id": order.shop_id,
@@ -259,7 +424,12 @@ def get_order(db: Session, current_user: models.User, order_id: int) -> Dict[str
     return result
 
 
-def pay_order(db: Session, current_user: models.User, order_id: int) -> Dict[str, str]:
+def pay_order(
+    db: Session,
+    current_user: models.User,
+    order_id: int,
+    request: Optional[CashPayment] = None,
+) -> Dict[str, str]:
     """Thu tiền mặt cho đơn PENDING.
 
     Đơn chuyển khoản phải do webhook xác nhận; không còn đường bấm tay biến
@@ -269,6 +439,7 @@ def pay_order(db: Session, current_user: models.User, order_id: int) -> Dict[str
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     require_shop_access(db, order.shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_SALE)
 
     if order.payment_method != "cash":
         raise HTTPException(
@@ -280,6 +451,22 @@ def pay_order(db: Session, current_user: models.User, order_id: int) -> Dict[str
         return {"msg": "Paid successfully"}
 
     total_amount = _so_tien(order.total_amount)
+    tendered_amount = (
+        total_amount if request is None else float(request.tendered_amount)
+    )
+    if not math.isfinite(tendered_amount) or tendered_amount < total_amount:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tiền khách đưa phải ít nhất {total_amount:,.0f}đ",
+        )
+    change_amount = tendered_amount - total_amount
+    shift = _current_cash_shift(
+        db,
+        current_user,
+        order.shop_id,
+        required_for_cashier=True,
+        lock_for_cash_write=True,
+    )
 
     if not apply_transition(db, order_id, MANUAL_PAY_FROM, STATUS_PAID):
         db.rollback()
@@ -294,10 +481,19 @@ def pay_order(db: Session, current_user: models.User, order_id: int) -> Dict[str
     db.execute(
         text(
             "UPDATE orders SET cash_paid_amount = :amount, "
+            "cash_tendered_amount = :tendered, "
+            "cash_change_amount = :change, "
+            "shift_id = :shift_id, "
             "reconciliation_reason = NULL, refund_due_amount = 0 "
             "WHERE id = :order_id"
         ),
-        {"amount": total_amount, "order_id": order_id},
+        {
+            "amount": total_amount,
+            "tendered": tendered_amount,
+            "change": change_amount,
+            "shift_id": shift.id if shift else None,
+            "order_id": order_id,
+        },
     )
     db.add(
         models.OrderPayment(
@@ -305,6 +501,7 @@ def pay_order(db: Session, current_user: models.User, order_id: int) -> Dict[str
             entry_type=ENTRY_CASH,
             amount=total_amount,
             created_by_user_id=current_user.id,
+            shift_id=shift.id if shift else None,
             note="Thu tiền mặt khi thanh toán đơn",
         )
     )
@@ -333,6 +530,14 @@ def cash_topup(
     if not order:
         raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
     require_shop_access(db, order.shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_SALE)
+    shift = _current_cash_shift(
+        db,
+        current_user,
+        order.shop_id,
+        required_for_cashier=True,
+        lock_for_cash_write=True,
+    )
 
     if (
         order.status != STATUS_UNRECONCILED
@@ -412,6 +617,7 @@ def cash_topup(
             entry_type=ENTRY_CASH,
             amount=amount,
             created_by_user_id=current_user.id,
+            shift_id=shift.id if shift else None,
             note=note or "Thu bù phần thiếu bằng tiền mặt",
         )
     )
@@ -449,6 +655,17 @@ def complete_refund(
     if not order:
         raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
     require_shop_access(db, order.shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_RECONCILIATION)
+    refund_shift = (
+        _current_cash_shift(
+            db,
+            current_user,
+            order.shop_id,
+            lock_for_cash_write=True,
+        )
+        if request.method == "cash"
+        else None
+    )
 
     operation_id = request.operation_id.strip()
     if len(operation_id) < 8:
@@ -522,6 +739,7 @@ def complete_refund(
         amount=due,
         idempotency_key=operation_key,
         created_by_user_id=current_user.id,
+        shift_id=refund_shift.id if refund_shift else None,
         note=note,
         reference=reference,
     )
@@ -641,8 +859,16 @@ def get_order_detail(db: Session, current_user: models.User, order_id: int) -> D
         raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
     if current_user.role != "ADMIN":
         require_shop_access(db, order.shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_SALE)
 
     shop = db.query(models.Shop).filter(models.Shop.id == order.shop_id).first()
+    cashier_username = None
+    if order.created_by_user_id is not None:
+        cashier_username = (
+            db.query(models.User.username)
+            .filter(models.User.id == order.created_by_user_id)
+            .scalar()
+        )
     items = (
         db.query(models.OrderItem)
         .filter(models.OrderItem.order_id == order_id)
@@ -662,7 +888,12 @@ def get_order_detail(db: Session, current_user: models.User, order_id: int) -> D
         "shop_name": shop.name if shop else None,
         "status": order.status,
         "created_at": order.created_at,
+        "created_by_user_id": order.created_by_user_id,
+        "cashier_username": cashier_username,
+        "shift_id": order.shift_id,
         "payment_method": order.payment_method,
+        "cash_tendered_amount": order.cash_tendered_amount,
+        "cash_change_amount": order.cash_change_amount,
         "voucher_code": order.voucher_code,
         "discount_amount": order.discount_amount or 0,
         "total_amount": order.total_amount,
@@ -712,6 +943,7 @@ def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[
     # đi vòng qua kiểm tra quyền sở hữu shop.
     if current_user.role != "ADMIN":
         require_shop_access(db, order.shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_SALE)
 
     if order.status == STATUS_CANCELLED:
         return _ket_qua_huy(order_id, restored=0, unrestored=0, voucher_released=False)

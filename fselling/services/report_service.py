@@ -8,11 +8,15 @@ from typing import Any, Dict, List, Optional
 import openpyxl
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from .. import models
 from ..core.config import log_to_file
-from ..dependencies import require_shop_access
+from ..dependencies import (
+    PERMISSION_REPORT,
+    require_shop_access,
+    require_staff_permission,
+)
 from . import order_service
 
 TREND_DAYS = 7
@@ -72,6 +76,7 @@ def seller_dashboard(
     `total_revenue` luôn là doanh thu của KHOẢNG ĐANG LỌC, không phải của trang.
     """
     require_shop_access(db, shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_REPORT)
 
     if page < 1:
         raise HTTPException(status_code=400, detail="page phải >= 1")
@@ -100,7 +105,8 @@ def seller_dashboard(
 
     tong_don = base.count()
     orders = (
-        base.order_by(models.Order.created_at.desc())
+        base.options(joinedload(models.Order.created_by))
+        .order_by(models.Order.created_at.desc())
         .offset((page - 1) * per_page)
         .limit(per_page)
         .all()
@@ -134,6 +140,8 @@ def _dashboard_order(order: models.Order) -> Dict[str, Any]:
         "total": order.total_amount,
         "status": order.status,
         "date": order.created_at,
+        "cashier_username": order.created_by.username if order.created_by else None,
+        "shift_id": order.shift_id,
     }
     result.update(order_service.payment_summary(order))
     return result
@@ -157,6 +165,7 @@ def shop_stats(
     """Thống kê của shop. Không truyền ngày -> toàn bộ lịch sử + xu hướng 7 ngày
     (đúng như trước). Truyền ngày -> mọi con số và biểu đồ đều theo khoảng đó."""
     require_shop_access(db, shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_REPORT)
     co_loc_ngay = bool((tu_ngay or "").strip() or (den_ngay or "").strip())
 
     total_rev = (
@@ -264,15 +273,28 @@ def admin_excel(db: Session) -> io.BytesIO:
 
 def seller_excel(db: Session, current_user: models.User, shop_id: int) -> io.BytesIO:
     require_shop_access(db, shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_REPORT)
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Lịch sử giao dịch"
-    ws.append(["Mã đơn", "Ngày tạo", "Trạng thái", "Thành tiền"])
+    ws.append(["Mã đơn", "Ngày tạo", "Thu ngân", "Mã ca", "Trạng thái", "Thành tiền"])
 
-    orders = db.query(models.Order).filter(models.Order.shop_id == shop_id).all()
+    orders = (
+        db.query(models.Order)
+        .options(joinedload(models.Order.created_by))
+        .filter(models.Order.shop_id == shop_id)
+        .all()
+    )
     total_rev = 0
     for o in orders:
-        ws.append([o.id, str(o.created_at), o.status, o.total_amount])
+        ws.append([
+            o.id,
+            str(o.created_at),
+            o.created_by.username if o.created_by else "",
+            o.shift_id or "",
+            o.status,
+            o.total_amount,
+        ])
         if o.status == "PAID":
             total_rev += o.total_amount
 

@@ -6,7 +6,7 @@
     <title>POS Bán Hàng Chuyên Nghiệp | F-Selling</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
-    <link rel="stylesheet" href="/css/pos.css">
+    <link rel="stylesheet" href="/css/pos.css?v=20260731-cash-shift">
     <link rel="stylesheet" href="/css/style.css">
 
 </head>
@@ -22,8 +22,31 @@
     </div>
 
     <div class="pos-layout">
+        <!-- Trạng thái ca lấy từ server, không giữ trong localStorage: tải lại
+             trang hoặc mở tab khác vẫn thấy đúng ca đang hoạt động. -->
+        <section id="shiftBar" class="shift-bar is-loading" aria-live="polite">
+            <div class="shift-status">
+                <span class="shift-status-dot" aria-hidden="true"></span>
+                <div>
+                    <strong id="shiftStatusText">Đang kiểm tra ca làm việc...</strong>
+                    <small id="shiftStatusMeta">Vui lòng chờ trong giây lát</small>
+                </div>
+            </div>
+            <div class="shift-actions">
+                <button id="btnOpenShift" type="button" onclick="moModalMoCa()" style="display:none;">
+                    <i class="ph ph-play-circle"></i> Mở ca
+                </button>
+                <button id="btnCashMovement" type="button" class="btn-outline" onclick="moModalThuChi()" style="display:none;">
+                    <i class="ph ph-arrows-down-up"></i> Thu / chi
+                </button>
+                <button id="btnCloseShift" type="button" class="btn-outline btn-shift-close" onclick="moModalKetCa()" style="display:none;">
+                    <i class="ph ph-stop-circle"></i> Kết ca
+                </button>
+            </div>
+        </section>
+
         <!-- CỘT 1: SẢN PHẨM -->
-        <div class="pos-col">
+        <div class="pos-col pos-products">
             <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
                 <div class="input-wrapper" style="flex: 1; margin: 0;">
                     <input type="text" id="searchProd" placeholder="Quét mã vạch, hoặc nhập tên sản phẩm để tìm..." style="background: #0F172A;">
@@ -61,7 +84,7 @@
         </div>
 
         <!-- CỘT 2: GIỎ HÀNG -->
-        <div class="pos-col">
+        <div class="pos-col pos-cart">
             <h3 style="font-size: 1.1rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; margin-bottom: 0.5rem; color: white;"><i class="ph ph-shopping-cart"></i> Giỏ hàng</h3>
             <div class="scroll-area" id="cartContainer">
                 <!-- Cart items -->
@@ -78,7 +101,7 @@
         </div>
 
         <!-- CỘT 3: THANH TOÁN -->
-        <div class="pos-col" style="background: #0B1120; overflow-y: auto; padding-right: 0.5rem;">
+        <div class="pos-col pos-payment" style="background: #0B1120; overflow-y: auto; padding-right: 0.5rem;">
             <h3 style="font-size: 1.1rem; margin-bottom: 1rem; color: white;"><i class="ph ph-receipt"></i> Thanh Toán</h3>
 
             
@@ -115,7 +138,36 @@
                 <button class="method-btn" id="btnMethodCash" onclick="setMethod('cash')"><i class="ph ph-money"></i><br>Tiền mặt</button>
             </div>
 
-            <button onclick="checkout()" style="width: 100%; padding: 1rem; font-size: 1.1rem; margin-bottom: 1rem;"><i class="ph ph-check-circle"></i> Hoàn tất Đơn Hàng</button>
+            <!-- Chỉ hiện khi chọn tiền mặt. inputmode=numeric mở bàn phím số trên
+                 điện thoại nhưng vẫn cho JS định dạng dấu phân cách hàng nghìn. -->
+            <div id="cashTenderSection" class="cash-tender" style="display:none;">
+                <label for="cashTenderedInput"><i class="ph ph-hand-coins"></i> Tiền khách đưa</label>
+                <div class="cash-input-wrap">
+                    <input
+                        id="cashTenderedInput"
+                        type="text"
+                        inputmode="numeric"
+                        pattern="[0-9.]*"
+                        autocomplete="off"
+                        placeholder="0"
+                        aria-describedby="cashChangeStatus"
+                    >
+                    <span>₫</span>
+                </div>
+                <div id="cashQuickAmounts" class="cash-quick-amounts" aria-label="Chọn nhanh số tiền khách đưa"></div>
+                <div id="cashChangeStatus" class="cash-change-status" aria-live="polite">
+                    <span>Tiền thối</span>
+                    <strong id="txtCashChange">0 ₫</strong>
+                </div>
+                <div id="cashPendingNotice" class="cash-pending-notice" style="display:none;">
+                    <span id="cashPendingText">Đơn đã tạo nhưng chưa ghi nhận thanh toán.</span>
+                    <button type="button" class="btn-outline" onclick="cancelOrder()">
+                        <i class="ph ph-x-circle"></i> Hủy đơn &amp; hoàn kho
+                    </button>
+                </div>
+            </div>
+
+            <button id="btnCheckout" onclick="checkout()" style="width: 100%; padding: 1rem; font-size: 1.1rem; margin-bottom: 1rem;"><i class="ph ph-check-circle"></i> Hoàn tất Đơn Hàng</button>
 
             <!-- Khối hiện QR sau khi chốt đơn -->
             <div id="qrSection" style="display: none;">
@@ -166,6 +218,99 @@
         </div>
     </div>
 
+    <!-- MỞ CA -->
+    <div id="openShiftModal" class="pos-modal" role="dialog" aria-modal="true" aria-labelledby="openShiftTitle" style="display:none;">
+        <div class="pos-modal-card">
+            <div class="pos-modal-head">
+                <div>
+                    <small>CA LÀM VIỆC</small>
+                    <h3 id="openShiftTitle"><i class="ph ph-play-circle"></i> Mở ca bán hàng</h3>
+                </div>
+                <button type="button" class="pos-modal-close" onclick="dongModalCa('openShiftModal')" aria-label="Đóng">&times;</button>
+            </div>
+            <p class="pos-modal-help">Nhập số tiền mặt có sẵn trong ngăn kéo trước khi bắt đầu bán.</p>
+            <label class="pos-field-label" for="openingCashInput">Tiền đầu ca</label>
+            <div class="cash-input-wrap pos-modal-money">
+                <input id="openingCashInput" type="text" inputmode="numeric" pattern="[0-9.]*" autocomplete="off" value="0">
+                <span>₫</span>
+            </div>
+            <div class="cash-quick-amounts modal-quick-amounts">
+                <button type="button" class="btn-outline" onclick="datGiaTriTien('openingCashInput', 0)">0 ₫</button>
+                <button type="button" class="btn-outline" onclick="datGiaTriTien('openingCashInput', 500000)">500.000 ₫</button>
+                <button type="button" class="btn-outline" onclick="datGiaTriTien('openingCashInput', 1000000)">1.000.000 ₫</button>
+            </div>
+            <label class="pos-field-label" for="openingShiftNote">Ghi chú <span>(không bắt buộc)</span></label>
+            <textarea id="openingShiftNote" rows="2" maxlength="500" placeholder="Ví dụ: Bàn giao từ ca sáng"></textarea>
+            <div class="pos-modal-actions">
+                <button type="button" class="btn-outline" onclick="dongModalCa('openShiftModal')">Để sau</button>
+                <button id="btnSubmitOpenShift" type="button" onclick="moCa()"><i class="ph ph-check-circle"></i> Bắt đầu ca</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- THU / CHI TIỀN MẶT -->
+    <div id="cashMovementModal" class="pos-modal" role="dialog" aria-modal="true" aria-labelledby="cashMovementTitle" style="display:none;">
+        <div class="pos-modal-card">
+            <div class="pos-modal-head">
+                <div>
+                    <small>SỔ TIỀN MẶT</small>
+                    <h3 id="cashMovementTitle"><i class="ph ph-arrows-down-up"></i> Ghi nhận thu / chi</h3>
+                </div>
+                <button type="button" class="pos-modal-close" onclick="dongModalCa('cashMovementModal')" aria-label="Đóng">&times;</button>
+            </div>
+            <div class="movement-type-picker" role="group" aria-label="Loại giao dịch">
+                <button id="btnMovementIn" type="button" class="active" onclick="chonLoaiThuChi('PAY_IN')">
+                    <i class="ph ph-arrow-down-left"></i> Thu tiền
+                </button>
+                <button id="btnMovementOut" type="button" onclick="chonLoaiThuChi('PAY_OUT')">
+                    <i class="ph ph-arrow-up-right"></i> Chi tiền
+                </button>
+            </div>
+            <label class="pos-field-label" for="movementAmountInput">Số tiền</label>
+            <div class="cash-input-wrap pos-modal-money">
+                <input id="movementAmountInput" type="text" inputmode="numeric" pattern="[0-9.]*" autocomplete="off" placeholder="0">
+                <span>₫</span>
+            </div>
+            <label class="pos-field-label" for="movementNote">Lý do <span>(bắt buộc)</span></label>
+            <textarea id="movementNote" rows="3" maxlength="500" placeholder="Ví dụ: Chi mua túi đóng gói"></textarea>
+            <div class="pos-modal-actions">
+                <button type="button" class="btn-outline" onclick="dongModalCa('cashMovementModal')">Hủy</button>
+                <button id="btnSubmitMovement" type="button" onclick="ghiNhanThuChi()"><i class="ph ph-check-circle"></i> Ghi nhận</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- KẾT CA -->
+    <div id="closeShiftModal" class="pos-modal" role="dialog" aria-modal="true" aria-labelledby="closeShiftTitle" style="display:none;">
+        <div class="pos-modal-card">
+            <div class="pos-modal-head">
+                <div>
+                    <small>ĐỐI CHIẾU CUỐI CA</small>
+                    <h3 id="closeShiftTitle"><i class="ph ph-stop-circle"></i> Kết ca</h3>
+                </div>
+                <button type="button" class="pos-modal-close" onclick="dongModalCa('closeShiftModal')" aria-label="Đóng">&times;</button>
+            </div>
+            <div class="shift-close-summary">
+                <div><span>Tiền đầu ca</span><strong id="closeOpeningCash">0 ₫</strong></div>
+                <div><span>Tiền theo sổ</span><strong id="closeExpectedCash">—</strong></div>
+            </div>
+            <label class="pos-field-label" for="actualCashInput">Tiền thực đếm trong ngăn kéo</label>
+            <div class="cash-input-wrap pos-modal-money">
+                <input id="actualCashInput" type="text" inputmode="numeric" pattern="[0-9.]*" autocomplete="off" placeholder="0">
+                <span>₫</span>
+            </div>
+            <div id="closeDifference" class="shift-difference neutral" aria-live="polite">
+                Nhập tiền thực đếm để xem chênh lệch
+            </div>
+            <label class="pos-field-label" for="closingShiftNote">Ghi chú <span>(nên ghi khi lệch tiền)</span></label>
+            <textarea id="closingShiftNote" rows="2" maxlength="500" placeholder="Giải thích nếu tiền thực tế khác sổ"></textarea>
+            <div class="pos-modal-actions">
+                <button type="button" class="btn-outline" onclick="dongModalCa('closeShiftModal')">Quay lại</button>
+                <button id="btnSubmitCloseShift" type="button" class="btn-danger" onclick="ketCa()"><i class="ph ph-lock-key"></i> Xác nhận kết ca</button>
+            </div>
+        </div>
+    </div>
+
     <div id="toast"></div>
 
     <script src="/js/api.js"></script>
@@ -173,6 +318,6 @@
     <script src="/js/barcode.js"></script>
     <script src="/js/barcode-camera.js"></script>
     <script src="/js/doc-tien.js?v=20260731-reconciliation"></script>
-    <script src="/js/pos.js?v=20260731-reconciliation"></script>
+    <script src="/js/pos.js?v=20260731-cash-shift"></script>
 </body>
 </html>

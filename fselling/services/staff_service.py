@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..core.security import hash_password, is_strong_password, new_session_id
-from ..dependencies import require_own_shop
-from ..schemas.staff import StaffCreate
+from ..dependencies import effective_staff_role, require_own_shop
+from ..schemas.staff import StaffCreate, StaffRoleUpdate
 from .log_service import log_system_action
 
 ROLE_STAFF = "STAFF"
@@ -26,9 +26,8 @@ def _to_out(staff: models.User) -> Dict:
         "id": staff.id,
         "username": staff.username,
         "shop_id": staff.staff_shop_id,
-        # is_active: tài khoản còn hiệu lực. Ta dùng session_id != None để suy ra
-        # "đang có phiên", nhưng trạng thái hoạt động thực chất luôn True khi tồn tại.
-        "is_active": True,
+        "is_active": staff.is_active is not False,
+        "staff_role": effective_staff_role(staff),
     }
 
 
@@ -55,6 +54,7 @@ def create_staff(
         email=None,
         is_verified=True,
         staff_shop_id=shop_id,
+        staff_role=data.staff_role,
     )
     db.add(staff)
     db.commit()
@@ -63,8 +63,9 @@ def create_staff(
         db,
         current_user.id,
         "CREATE_STAFF",
-        f"Tạo nhân viên '{username}' cho shop #{shop_id}",
+        f"Tạo nhân viên '{username}' ({data.staff_role}) cho shop #{shop_id}",
     )
+    db.refresh(staff)
     return _to_out(staff)
 
 
@@ -72,7 +73,11 @@ def list_staff(db: Session, current_user: models.User, shop_id: int) -> List[Dic
     require_own_shop(db, shop_id, current_user)
     nhan_vien = (
         db.query(models.User)
-        .filter(models.User.role == ROLE_STAFF, models.User.staff_shop_id == shop_id)
+        .filter(
+            models.User.role == ROLE_STAFF,
+            models.User.staff_shop_id == shop_id,
+            models.User.is_active.is_(True),
+        )
         .order_by(models.User.username)
         .all()
     )
@@ -90,14 +95,31 @@ def delete_staff(db: Session, current_user: models.User, staff_id: int) -> Dict[
 
     # Chỉ chủ của đúng shop mà nhân viên này thuộc về mới được xóa.
     require_own_shop(db, staff.staff_shop_id, current_user)
+    open_shift = (
+        db.query(models.CashShift.id)
+        .filter(
+            models.CashShift.shop_id == staff.staff_shop_id,
+            models.CashShift.opened_by_user_id == staff.id,
+            models.CashShift.status == "OPEN",
+        )
+        .first()
+    )
+    if open_shift:
+        raise HTTPException(
+            status_code=409,
+            detail="Nhân viên còn ca đang mở; hãy kết ca trước khi ngừng tài khoản",
+        )
 
     username = staff.username
-    db.delete(staff)
+    # Giữ User để Order/CashShift/SystemLog còn truy ra đúng tên thu ngân.
+    # Đổi session_id để token đang mở trên web hết hiệu lực ngay.
+    staff.is_active = False
+    staff.session_id = new_session_id()
     db.commit()
     log_system_action(
-        db, current_user.id, "DELETE_STAFF", f"Xóa nhân viên '{username}'"
+        db, current_user.id, "DISABLE_STAFF", f"Ngừng tài khoản nhân viên '{username}'"
     )
-    return {"msg": "Deleted"}
+    return {"msg": "Disabled"}
 
 
 def reset_staff_password(
@@ -126,3 +148,35 @@ def reset_staff_password(
         f"Đặt lại mật khẩu nhân viên '{staff.username}'",
     )
     return {"msg": "Đã đặt lại mật khẩu nhân viên"}
+
+
+def update_staff_role(
+    db: Session,
+    current_user: models.User,
+    staff_id: int,
+    data: StaffRoleUpdate,
+) -> Dict:
+    staff = (
+        db.query(models.User)
+        .filter(models.User.id == staff_id, models.User.role == ROLE_STAFF)
+        .first()
+    )
+    if not staff:
+        raise HTTPException(status_code=404, detail="Không tìm thấy nhân viên")
+    require_own_shop(db, staff.staff_shop_id, current_user)
+
+    old_role = effective_staff_role(staff)
+    staff.staff_role = data.staff_role
+    # Buộc tài khoản đăng nhập lại để giao diện nhận preset mới ngay, thay vì
+    # tiếp tục hiện các nút cũ rồi chỉ bị backend từ chối.
+    staff.session_id = new_session_id()
+    db.commit()
+    db.refresh(staff)
+    result = _to_out(staff)
+    log_system_action(
+        db,
+        current_user.id,
+        "UPDATE_STAFF_ROLE",
+        f"Đổi vai trò nhân viên '{staff.username}': {old_role} -> {data.staff_role}",
+    )
+    return result

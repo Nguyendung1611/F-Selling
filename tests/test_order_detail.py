@@ -34,7 +34,12 @@ def test_chi_tiet_don_mot_san_pham(client):
         "shop_name",
         "status",
         "created_at",
+        "created_by_user_id",
+        "cashier_username",
+        "shift_id",
         "payment_method",
+        "cash_tendered_amount",
+        "cash_change_amount",
         "voucher_code",
         "discount_amount",
         "total_amount",
@@ -52,6 +57,11 @@ def test_chi_tiet_don_mot_san_pham(client):
     assert dong["line_total"] == 200000
     assert body["subtotal"] == 200000
     assert body["total_amount"] == 200000
+    assert body["cashier_username"] == ctx["username"]
+    assert body["created_by_user_id"] is not None
+    assert body["shift_id"] is None
+    assert body["cash_tendered_amount"] is None
+    assert body["cash_change_amount"] is None
 
 
 def test_chi_tiet_don_nhieu_san_pham(client):

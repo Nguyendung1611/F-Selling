@@ -64,6 +64,7 @@ ROUTES_BO_SUNG = {
     ("GET", "/api/staff/{shop_id}"),                # C1b: danh sách nhân viên
     ("DELETE", "/api/staff/member/{staff_id}"),     # C1b: xóa nhân viên
     ("PUT", "/api/staff/member/{staff_id}/password"),  # C1b: đặt lại mật khẩu NV
+    ("PUT", "/api/staff/member/{staff_id}/role"),      # RBAC: đổi preset quyền NV
     ("POST", "/api/customers/{shop_id}"),            # C2b: thêm khách hàng
     ("GET", "/api/customers/{shop_id}"),             # C2b: danh sách/tìm khách
     ("GET", "/api/customers/member/{customer_id}"),  # C2b: chi tiết khách
@@ -76,6 +77,12 @@ ROUTES_BO_SUNG = {
     ("GET", "/api/tts/status"),    # D3: frontend hỏi server có đọc hộ được không
     ("POST", "/api/orders/{order_id}/cash-topup"),  # D4: thu tiền mặt bù phần thiếu
     ("POST", "/api/orders/{order_id}/refund-complete"),  # D4: ghi nhận đã hoàn tiền
+    ("GET", "/api/shifts/current/{shop_id}"),  # E1: ca OPEN của user hiện tại
+    ("POST", "/api/shifts/{shop_id}/open"),  # E1: mở ca thu ngân
+    ("GET", "/api/shifts/history/{shop_id}"),  # E1: lịch sử ca
+    ("GET", "/api/shifts/{shift_id}"),  # E1: chi tiết ca và sổ thu/chi
+    ("POST", "/api/shifts/{shift_id}/movements"),  # E1: thu/chi tiền mặt
+    ("POST", "/api/shifts/{shift_id}/close"),  # E1: chốt ca
 }
 
 
