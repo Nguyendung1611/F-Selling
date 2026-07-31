@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import openpyxl
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, distinct, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from .. import models
@@ -15,6 +15,7 @@ from ..core.config import log_to_file
 from ..core.i18n import tr
 from ..dependencies import (
     PERMISSION_REPORT,
+    has_cost_visibility,
     require_shop_access,
     require_staff_permission,
 )
@@ -66,6 +67,84 @@ def _loc_khoang_ngay(query, tu_ngay: Optional[str], den_ngay: Optional[str]):
     if ket_thuc:
         query = query.filter(models.Order.created_at < ket_thuc + timedelta(days=1))
     return query
+
+
+def _lai_gop(db: Session, paid_orders_subquery) -> Dict[str, Any]:
+    """Lãi gộp của các đơn ĐÃ THANH TOÁN trong phạm vi truy vấn.
+
+    Lãi gộp = doanh thu (đã trừ giảm giá voucher) - tổng giá vốn hàng bán.
+    Giảm giá trừ ở mức ĐƠN HÀNG chứ không phân bổ xuống từng dòng, nên tổng số
+    luôn khớp; đổi lại "lãi theo từng sản phẩm" (nếu sau này làm) sẽ là lãi chưa
+    trừ giảm giá và phải nói rõ điều đó trên giao diện.
+
+    Chỉ tính trên những đơn có ĐỦ giá vốn ở MỌI dòng. Đơn thiếu dù chỉ một dòng
+    cũng bị loại nguyên đơn, vì giảm giá nằm ở mức đơn nên không tách được phần
+    doanh thu tương ứng với riêng các dòng đã biết giá vốn. Loại nửa vời - trừ
+    giá vốn đã biết ra khỏi toàn bộ doanh thu - còn tệ hơn không tính: nó ĐẨY
+    LÃI LÊN đúng bằng phần chưa khai, và sai theo hướng làm người ta yên tâm.
+
+    `cost_price` NULL không bao giờ được coi là 0. Phần bị loại trả về nguyên
+    con số (`orders_missing_cost`, `revenue_missing_cost`) để giao diện nói ra
+    báo cáo đang thiếu bao nhiêu, thay vì im lặng.
+    """
+    don_thieu_gia_von = db.query(distinct(models.OrderItem.order_id)).filter(
+        models.OrderItem.order_id.in_(paid_orders_subquery),
+        models.OrderItem.cost_price.is_(None),
+    )
+
+    def _tinh_duoc(query):
+        """Giới hạn về các đơn đủ giá vốn."""
+        return query.filter(~models.Order.id.in_(don_thieu_gia_von))
+
+    doanh_thu_tinh_duoc = (
+        _tinh_duoc(
+            db.query(func.sum(models.Order.total_amount)).filter(
+                models.Order.id.in_(paid_orders_subquery)
+            )
+        ).scalar()
+        or 0
+    )
+    tong_gia_von = (
+        db.query(func.sum(models.OrderItem.cost_price * models.OrderItem.quantity))
+        .filter(
+            models.OrderItem.order_id.in_(paid_orders_subquery),
+            ~models.OrderItem.order_id.in_(don_thieu_gia_von),
+        )
+        .scalar()
+        or 0
+    )
+    so_don_thieu = (
+        db.query(func.count(models.Order.id))
+        .filter(
+            models.Order.id.in_(paid_orders_subquery),
+            models.Order.id.in_(don_thieu_gia_von),
+        )
+        .scalar()
+        or 0
+    )
+    doanh_thu_bi_loai = (
+        db.query(func.sum(models.Order.total_amount))
+        .filter(
+            models.Order.id.in_(paid_orders_subquery),
+            models.Order.id.in_(don_thieu_gia_von),
+        )
+        .scalar()
+        or 0
+    )
+
+    lai = doanh_thu_tinh_duoc - tong_gia_von
+    return {
+        "revenue_with_cost": doanh_thu_tinh_duoc,
+        "total_cost": tong_gia_von,
+        "gross_profit": lai,
+        # Doanh thu 0 thì tỷ suất không xác định, không phải 0%. Trả None để
+        # giao diện hiện "--" thay vì một con số bịa.
+        "gross_margin": (
+            (lai / doanh_thu_tinh_duoc * 100) if doanh_thu_tinh_duoc else None
+        ),
+        "orders_missing_cost": so_don_thieu,
+        "revenue_missing_cost": doanh_thu_bi_loai,
+    }
 
 
 def seller_dashboard(
@@ -173,7 +252,7 @@ def shop_stats(
 ) -> Dict[str, Any]:
     """Thống kê của shop. Không truyền ngày -> toàn bộ lịch sử + xu hướng 7 ngày
     (đúng như trước). Truyền ngày -> mọi con số và biểu đồ đều theo khoảng đó."""
-    require_shop_access(db, shop_id, current_user)
+    shop = require_shop_access(db, shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_REPORT)
     co_loc_ngay = bool((tu_ngay or "").strip() or (den_ngay or "").strip())
 
@@ -253,7 +332,7 @@ def shop_stats(
     trend_labels = sorted(revenue_by_date.keys())
     trend_data = [revenue_by_date[k] for k in trend_labels]
 
-    return {
+    ket_qua = {
         "total_revenue": total_rev,
         "total_orders": total_orders,
         "total_sold": total_sold,
@@ -261,6 +340,13 @@ def shop_stats(
         "trend_labels": trend_labels,
         "trend_data": trend_data,
     }
+    # MANAGER có PERMISSION_REPORT nên vẫn xem được doanh thu, nhưng lãi thì
+    # không: biết lãi là suy ra được giá vốn. Khi không có quyền thì BỎ HẲN các
+    # field này khỏi phản hồi, không trả 0 - ở đây 0 là một con số có nghĩa
+    # (bán đúng bằng giá vốn), trả 0 là nói dối chứ không phải giấu.
+    if has_cost_visibility(shop, current_user):
+        ket_qua.update(_lai_gop(db, paid_orders_subquery))
+    return ket_qua
 
 
 def _workbook_to_stream(wb: "openpyxl.Workbook") -> io.BytesIO:
@@ -280,30 +366,56 @@ def admin_excel(db: Session) -> io.BytesIO:
     return _workbook_to_stream(wb)
 
 
+def _gia_von_don(order: models.Order) -> Optional[float]:
+    """Tổng giá vốn của một đơn, hoặc None nếu còn dòng chưa khai giá vốn.
+
+    Thiếu một dòng là cả đơn không tính được: cộng phần đã biết rồi so với
+    doanh thu cả đơn sẽ ra một con số lãi cao hơn sự thật.
+    """
+    if not order.items:
+        return None
+    tong = 0.0
+    for item in order.items:
+        if item.cost_price is None:
+            return None
+        tong += item.cost_price * item.quantity
+    return tong
+
+
 def seller_excel(db: Session, current_user: models.User, shop_id: int) -> io.BytesIO:
-    require_shop_access(db, shop_id, current_user)
+    shop = require_shop_access(db, shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_REPORT)
+    xem_duoc_gia_von = has_cost_visibility(shop, current_user)
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = tr("Lịch sử giao dịch")
-    ws.append([
+    tieu_de = [
         tr("Mã đơn"),
         tr("Ngày tạo"),
         tr("Thu ngân"),
         tr("Mã ca"),
         tr("Trạng thái"),
         tr("Thành tiền"),
-    ])
+    ]
+    if xem_duoc_gia_von:
+        tieu_de += [tr("Giá vốn"), tr("Lãi gộp")]
+    ws.append(tieu_de)
 
     orders = (
         db.query(models.Order)
-        .options(joinedload(models.Order.created_by))
+        .options(
+            joinedload(models.Order.created_by),
+            joinedload(models.Order.items),
+        )
         .filter(models.Order.shop_id == shop_id)
         .all()
     )
     total_rev = 0
+    tong_gia_von = 0.0
+    tong_lai = 0.0
+    don_thieu_gia_von = 0
     for o in orders:
-        ws.append([
+        dong = [
             o.id,
             str(o.created_at),
             o.created_by.username if o.created_by else "",
@@ -315,10 +427,32 @@ def seller_excel(db: Session, current_user: models.User, shop_id: int) -> io.Byt
                 "UNRECONCILED": "Cần đối soát",
             }.get(o.status, o.status)),
             o.total_amount,
-        ])
+        ]
+        gia_von = _gia_von_don(o) if xem_duoc_gia_von else None
+        if xem_duoc_gia_von:
+            if gia_von is None:
+                # Ô trống hơn hẳn số 0: 0 trong cột giá vốn đọc ra là hàng tặng.
+                dong += ["", tr("Chưa khai giá vốn")]
+            else:
+                dong += [gia_von, o.total_amount - gia_von]
+        ws.append(dong)
         if o.status == "PAID":
             total_rev += o.total_amount
+            if gia_von is None:
+                if xem_duoc_gia_von:
+                    don_thieu_gia_von += 1
+            else:
+                tong_gia_von += gia_von
+                tong_lai += o.total_amount - gia_von
 
     ws.append([])
     ws.append([tr("Tổng Doanh Thu (Đã thanh toán)"), total_rev])
+    if xem_duoc_gia_von:
+        ws.append([tr("Tổng Giá Vốn (đơn đã đủ giá vốn)"), tong_gia_von])
+        ws.append([tr("Tổng Lãi Gộp (đơn đã đủ giá vốn)"), tong_lai])
+        if don_thieu_gia_von:
+            ws.append([
+                tr("Số đơn chưa đủ giá vốn (không tính vào lãi)"),
+                don_thieu_gia_von,
+            ])
     return _workbook_to_stream(wb)

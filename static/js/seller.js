@@ -16,6 +16,17 @@ function coQuyenNhanVien(permission) {
     return STAFF_UI_PERMISSIONS[MY_STAFF_ROLE]?.has(permission) === true;
 }
 
+// Giá vốn và lãi chỉ dành cho chủ cửa hàng, kể cả nhân viên MANAGER (đang xem
+// được doanh thu) cũng không thấy. Đây CHỈ là lớp giao diện cho gọn mắt - server
+// mới là chỗ chặn thật (has_cost_visibility trong dependencies.py). Đừng bao giờ
+// coi cờ này là biện pháp bảo mật: sửa localStorage là qua được.
+const XEM_DUOC_GIA_VON = MY_ROLE === 'SELLER';
+
+// Giá vốn theo product_id, nạp riêng qua endpoint có xác thực. Danh sách sản
+// phẩm công khai KHÔNG kèm giá vốn nên phải ghép ở đây.
+let giaVonTheoSanPham = {};
+let soSanPhamChuaKhaiGiaVon = 0;
+
 const BANKS = [
     { code: 'VCB', label: 'Vietcombank (VCB)' },
     { code: 'ACB', label: 'ACB' },
@@ -339,10 +350,51 @@ function renderDashboardOrders(id, res) {
     document.getElementById('dashboardContent').style.display = 'block';
 }
 
+/** Thẻ lãi gộp trên dashboard.
+ *
+ *  Server BỎ HẲN nhóm field này khi người gọi không được xem, nên điều kiện là
+ *  "field có mặt hay không" chứ không phải giá trị của nó - lãi bằng 0 là một
+ *  con số hợp lệ (bán đúng bằng giá vốn) và vẫn phải hiện ra.
+ *
+ *  Phần đơn chưa đủ giá vốn LUÔN được nói ra khi có. Im lặng ở đây nghĩa là
+ *  chủ shop nhìn một con số lãi thấp hơn thực tế mà tưởng đó là toàn bộ. */
+function veTheLaiGop(stats) {
+    const card = document.getElementById('statProfitCard');
+    if (!card) return;
+    if (stats.gross_profit === undefined) {
+        card.style.display = 'none';
+        return;
+    }
+    card.style.display = '';
+    document.getElementById('statProfit').innerText =
+        dinhDangTienDoiSoat(stats.gross_profit);
+
+    const ghiChu = document.getElementById('statProfitNote');
+    if (!ghiChu) return;
+    const phan = [];
+    if (stats.gross_margin !== null && stats.gross_margin !== undefined) {
+        phan.push(t('seller.dashboard.gross_margin', {
+            percent: dinhDangSoSeller(stats.gross_margin, {
+                maximumFractionDigits: 1
+            })
+        }));
+    }
+    if (stats.orders_missing_cost) {
+        phan.push(t('seller.dashboard.orders_missing_cost', {
+            count: stats.orders_missing_cost,
+            formattedCount: dinhDangSoSeller(stats.orders_missing_cost),
+            amount: dinhDangTienDoiSoat(stats.revenue_missing_cost || 0)
+        }));
+    }
+    ghiChu.innerText = phan.join(' · ');
+    ghiChu.style.color = stats.orders_missing_cost ? '#B45309' : '#64748B';
+}
+
 function renderDashboardStats(stats) {
     document.getElementById('statRev').innerText = dinhDangTienDoiSoat(stats.total_revenue);
     document.getElementById('statOrders').innerText = dinhDangSoSeller(stats.total_orders);
     document.getElementById('statSold').innerText = dinhDangSoSeller(stats.total_sold);
+    veTheLaiGop(stats);
 
     const pieCtx = document.getElementById('productPieChart').getContext('2d');
     if (pieChartInstance) pieChartInstance.destroy();
@@ -1331,6 +1383,12 @@ async function loadProducts() {
         ) return;
         currentProducts = products;
         currentProductsShopId = shopId;
+        await napGiaVon(shopId, generation, requestId);
+        if (
+            requestId !== productsRequestId
+            || generation !== currentShopGeneration
+            || currentShopId !== shopId
+        ) return;
         filterProducts();
     } catch (e) {
         if (
@@ -1339,6 +1397,55 @@ async function loadProducts() {
             && currentShopId === shopId
         ) showToast(e.message);
     }
+}
+
+/** Nạp giá vốn cho shop đang xem. Nhân viên không gọi, và lỗi thì bỏ qua im
+ *  lặng: thiếu giá vốn không được phép làm hỏng cả bảng kho hàng. */
+async function napGiaVon(shopId, generation, requestId) {
+    if (!XEM_DUOC_GIA_VON) {
+        giaVonTheoSanPham = {};
+        soSanPhamChuaKhaiGiaVon = 0;
+        return;
+    }
+    try {
+        const res = await apiCall(`/products/${shopId}/costs`);
+        if (
+            requestId !== productsRequestId
+            || generation !== currentShopGeneration
+            || currentShopId !== shopId
+        ) return;
+        const bang = {};
+        (res.costs || []).forEach(d => { bang[d.product_id] = d.cost_price; });
+        giaVonTheoSanPham = bang;
+        soSanPhamChuaKhaiGiaVon = res.chua_khai || 0;
+    } catch (e) {
+        giaVonTheoSanPham = {};
+        soSanPhamChuaKhaiGiaVon = 0;
+    }
+}
+
+/** Giá vốn của một sản phẩm, hoặc null nếu chưa khai. `undefined` (chưa nạp
+ *  xong) cũng quy về null - không được đoán là 0. */
+function giaVonCua(productId) {
+    const gia = giaVonTheoSanPham[productId];
+    return (gia === undefined || gia === null) ? null : gia;
+}
+
+/** Dòng giá vốn nhỏ dưới ô giá bán trong bảng kho hàng.
+ *
+ *  Sản phẩm chưa khai được nêu rõ bằng chữ chứ không để trống: chỗ trống đọc ra
+ *  là "giá vốn bằng 0", và chính những dòng này mới là thứ đang khiến báo cáo
+ *  lãi thiếu đơn. */
+function dongGiaVon(productId) {
+    if (!XEM_DUOC_GIA_VON) return '';
+    const gia = giaVonCua(productId);
+    if (gia === null) {
+        return `<br><span style="font-size:0.72rem; color:#B45309;">`
+            + `${escapeHtml(t('seller.products.cost_missing'))}</span>`;
+    }
+    return `<br><span style="font-size:0.72rem; color:#64748B;">`
+        + `${escapeHtml(t('seller.products.cost_short'))} `
+        + `${escapeHtml(dinhDangTienDoiSoat(gia))}</span>`;
 }
 
 function filterProducts() {
@@ -1359,7 +1466,7 @@ function filterProducts() {
         tbody.innerHTML += `<tr>
             <td>${escapeHtml(p.code||'--')}${p.barcode ? `<br><span style="font-size:0.75rem; color:#64748B;" title="${escapeHtml(t('seller.products.barcode'))}"><i class="ph ph-barcode"></i> ${escapeHtml(p.barcode)}</span>` : ''}</td>
             <td>${escapeHtml(p.name)} <br>${activeText}</td>
-            <td>${dinhDangTienDoiSoat(p.price)}</td>
+            <td>${dinhDangTienDoiSoat(p.price)}${dongGiaVon(p.id)}</td>
             <td>${dinhDangSoSeller(p.stock)}</td>
             <td style="display:flex; justify-content: center; align-items: center; gap:0.5rem; height: 7rem;">
                 <button class="btn-outline" onclick="editProduct(${p.id})" style="padding: 0.2rem 0.5rem;" title="${escapeHtml(t('common.edit'))}" aria-label="${escapeHtml(t('common.edit'))}"><i class="ph ph-pencil-simple"></i></button>
@@ -1390,6 +1497,13 @@ function editProduct(id) {
     document.getElementById('prodBarcode').value = product.barcode || '';
     document.getElementById('prodName').value = product.name;
     document.getElementById('prodPrice').value = product.price;
+    const oGiaVon = document.getElementById('prodCost');
+    if (oGiaVon) {
+        // Chưa khai thì để TRỐNG chứ không điền 0. Điền 0 là ghi đè một con số
+        // sai vào lúc người dùng chỉ định sửa cái tên.
+        const giaVon = giaVonCua(product.id);
+        oGiaVon.value = giaVon === null ? '' : giaVon;
+    }
     document.getElementById('prodStock').value = product.stock;
     _khoaOTonKho(true);
     document.getElementById('catSelect').value = String(product.category_id);
@@ -1404,6 +1518,8 @@ function cancelEditProduct() {
     document.getElementById('prodBarcode').value = '';
     document.getElementById('prodName').value = '';
     document.getElementById('prodPrice').value = '';
+    const oGiaVon = document.getElementById('prodCost');
+    if (oGiaVon) oGiaVon.value = '';
     document.getElementById('prodStock').value = '100';
     _khoaOTonKho(false);
     document.getElementById('prodImage').value = '';
@@ -1425,8 +1541,32 @@ async function nhapXuatKho(id) {
     if(raw === null) return;
     const delta = parseInt(raw, 10);
     if(isNaN(delta) || delta === 0) return showToast(t('seller.products.stock_number_required'));
+
+    // Chỉ hỏi đơn giá khi NHẬP kho. Xuất kho không làm đổi đơn giá bình quân
+    // của số hàng còn lại, và backend từ chối thẳng nếu gửi kèm.
+    const body = { delta };
+    if (XEM_DUOC_GIA_VON && delta > 0) {
+        const giaVonHienTai = giaVonCua(id);
+        const rawCost = prompt(t('seller.products.unit_cost_prompt', {
+            name: product.name,
+            current: giaVonHienTai === null
+                ? t('seller.products.cost_missing')
+                : dinhDangTienDoiSoat(giaVonHienTai)
+        }));
+        if (rawCost === null) return;   // bấm Hủy ở ô đơn giá = hủy cả phiếu nhập
+        const chuoi = rawCost.trim();
+        if (chuoi !== '') {
+            const unitCost = parseFloat(chuoi);
+            if (isNaN(unitCost) || unitCost < 0) {
+                return showToast(t('seller.products.cost_nonnegative'));
+            }
+            // Gửi cả khi bằng 0: hàng tặng có đơn giá 0 thật và phải kéo bình
+            // quân xuống. Bỏ trống mới là "không khai", và khi đó không gửi.
+            body.unit_cost = unitCost;
+        }
+    }
     try {
-        const res = await apiCall(`/products/${id}/stock`, 'POST', { delta });
+        const res = await apiCall(`/products/${id}/stock`, 'POST', body);
         if (generation !== currentShopGeneration || currentShopId !== shopId) return;
         showToast(t(
             delta > 0 ? 'seller.products.stock_updated_in' : 'seller.products.stock_updated_out',
@@ -1779,6 +1919,17 @@ async function createProduct() {
     if(parseInt(stockStr) < 0) return showToast(t('seller.products.stock_nonnegative'));
 
     formData.append('price', priceStr);
+    // CHỈ chủ shop mới gửi field này. Nhân viên kho mà gửi kèm (dù rỗng) thì
+    // backend hiểu là đang cố sửa giá vốn và trả 403 - cả thao tác sửa tên sản
+    // phẩm cũng hỏng theo. Không gửi = giữ nguyên giá vốn đang có.
+    if (XEM_DUOC_GIA_VON) {
+        const costStr = document.getElementById('prodCost')?.value ?? '';
+        if (costStr !== '' && parseFloat(costStr) < 0) {
+            return showToast(t('seller.products.cost_nonnegative'));
+        }
+        // Gửi cả khi rỗng: rỗng nghĩa là XÓA giá vốn, dùng khi khai nhầm.
+        formData.append('cost_price', costStr);
+    }
     formData.append('stock', stockStr);
     formData.append('category_id', catSelect.value);
     const img = document.getElementById('prodImage').files[0];
@@ -2353,6 +2504,12 @@ function dtKhoiTao() {
 
 // ===== C1d: phân biệt vai trò SELLER / STAFF trên giao diện =====
 function applyRoleUI() {
+    if (!XEM_DUOC_GIA_VON) {
+        // Ô giá vốn ở form sản phẩm. Nhân viên kho vẫn thêm/sửa sản phẩm được,
+        // chỉ là không thấy và không gửi field này (xem createProduct).
+        const oGiaVon = document.getElementById('prodCostGroup');
+        if (oGiaVon) oGiaVon.style.display = 'none';
+    }
     if (MY_ROLE !== 'STAFF') return;
     // Nhân viên KHÔNG quản lý cửa hàng, nhưng vẫn phải chỉnh được phần Đọc tiền:
     // họ mới là người đứng quầy POS và nghe cái loa đó. Nên giữ tab Cài Đặt,

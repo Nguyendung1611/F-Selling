@@ -25,6 +25,10 @@ class Product(Base):
     barcode = Column(String(64), index=True, nullable=True)
     name = Column(String, index=True)
     price = Column(Float)
+    # Giá vốn bình quân gia quyền, cập nhật mỗi lần nhập kho có kèm đơn giá.
+    # NULL = chưa khai bao giờ, KHÁC HẲN 0 = hàng được tặng. Báo cáo lãi gộp
+    # phải loại NULL ra và đếm riêng, không được quy về 0.
+    cost_price = Column(Float, nullable=True)
     stock = Column(Integer, default=0)
     image_url = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)

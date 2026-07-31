@@ -290,6 +290,80 @@ theo tên.
 Truyền thẳng `Query` vào `in_()` (SQLAlchemy tự coerce thành scalar subquery);
 gọi `.subquery()` sẽ sinh `SAWarning` về coercion.
 
+### 13. Giá vốn: `NULL` không bao giờ được đối xử như `0`
+
+`products.cost_price` và `order_items.cost_price` đều nullable, và hai giá trị
+này là hai chuyện khác hẳn nhau:
+
+| Giá trị | Nghĩa |
+|---|---|
+| `NULL` | Chưa ai khai giá vốn. Không có cơ sở tính lãi. |
+| `0` | Hàng được tặng. Lãi bằng đúng giá bán. |
+
+Gộp lại thì mọi sản phẩm cũ bỗng có lãi bằng giá bán, và chủ shop nhìn con số
+đó tin là thật. Đây đúng là bài học của webhook thanh toán ở mục 8, lặp lại ở
+một chỗ khác. Vì vậy cũng KHÔNG có bước backfill: đơn bán trước migration F1
+không có cách nào biết giá vốn, báo cáo phải đếm riêng và nói ra.
+
+**Ba điều dễ làm sai khi sửa tiếp:**
+
+**Giá vốn phải được CHỐT vào `order_items` lúc bán**, giống cách `product_name`
+chụp lại tên. Tra ngược `Product.cost_price` lúc làm báo cáo thì mỗi lần nhập
+một lô giá khác là lãi của các tháng trước tự đổi số - và không lấy lại được
+số cũ nữa.
+
+**Báo cáo lãi loại NGUYÊN ĐƠN khi đơn còn dòng thiếu giá vốn.** Giảm giá
+voucher nằm ở mức đơn hàng nên không tách được phần doanh thu ứng với riêng
+các dòng đã biết giá vốn. Loại nửa vời - trừ giá vốn đã biết ra khỏi toàn bộ
+doanh thu - **đẩy lãi lên** đúng bằng phần chưa khai, tức là sai theo hướng
+làm người xem yên tâm. `_lai_gop()` trả về `orders_missing_cost` và
+`revenue_missing_cost` để giao diện nói ra phần bị loại.
+
+**Chỉ chủ shop và ADMIN được xem giá vốn và lãi** (`has_cost_visibility`).
+MANAGER có `PERMISSION_REPORT` nên vẫn xem doanh thu, nhưng biết lãi là suy ra
+được giá vốn. Khi không có quyền thì `shop_stats` **bỏ hẳn** nhóm field đó khỏi
+phản hồi chứ không trả 0 - lãi bằng 0 là một con số có nghĩa (bán đúng bằng giá
+vốn), trả 0 là nói dối chứ không phải giấu.
+
+Hệ quả về route: `GET /api/products/{shop_id}` **không yêu cầu đăng nhập** (POS
+đang dựa vào), nên tuyệt đối không nhét `cost_price` vào đó. Giá vốn đi qua
+`GET /api/products/{shop_id}/costs` riêng, có xác thực.
+
+### 14. Bình quân gia quyền tính ngay trong câu UPDATE, và phụ thuộc SQLite
+
+`adjust_stock` nhận thêm `unit_cost` - đơn giá của **lô đang nhập**, không phải
+giá vốn mới. Công thức nằm trong `_ADJUST_STOCK`, cùng một câu UPDATE nguyên tử
+với `stock = stock + delta`: tách ra đọc-rồi-ghi là mở lại đúng khe hở mà câu
+lệnh đó sinh ra để bịt.
+
+```
+cost_mới = (tồn_cũ × cost_cũ + SL_nhập × đơn_giá) / (tồn_cũ + SL_nhập)
+```
+
+**SQLite đánh giá mọi vế phải của `SET` theo giá trị CŨ của hàng**, nên `stock`
+trong biểu thức tính giá vốn vẫn là tồn trước khi nhập, bất kể thứ tự các mệnh
+đề `SET`. MySQL thì ngược lại (đánh giá lần lượt, vế sau thấy giá trị đã cập
+nhật) - đổi database là phải viết lại câu này. Cùng loại ràng buộc với mục 6.
+
+Bốn ca biên, đều có test trong `tests/test_gia_von.py`:
+
+| Tình huống | Xử lý |
+|---|---|
+| Không gửi `unit_cost` | Giữ nguyên giá vốn, chỉ cộng tồn |
+| `unit_cost = 0` | Đơn giá thật của hàng tặng, kéo bình quân xuống |
+| Tồn cũ ≤ 0, hoặc `cost_price` NULL | Lấy luôn đơn giá (không có gì để bình quân) |
+| Xuất kho (`delta < 0`) kèm `unit_cost` | **Từ chối 400**, không im lặng bỏ qua |
+
+Ô đơn giá đi qua **JSON body** (`StockAdjust`) chứ không phải form, nên `None`
+và `0` là hai giá trị khác nhau thật sự - không dính bẫy #3. Ngược lại ô giá vốn
+trên form sửa sản phẩm thì dính, và được xử lý theo đúng mẫu của `barcode_field`
+(`cost_price_field` trong `routers/products.py`).
+
+**Kiểm kê và hủy đơn đều KHÔNG đụng vào giá vốn.** Kiểm kê chỉ đặt lại số
+lượng. Hủy đơn hoàn tồn kho đúng số lượng đã trừ, mà số đó ra đi với đúng giá
+vốn đã chốt, nên bình quân tự khớp lại - chạy lại công thức lúc hoàn mới là cái
+làm lệch.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

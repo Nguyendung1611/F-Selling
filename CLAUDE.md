@@ -34,6 +34,13 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   nguyên tồn, KHÔNG coi là 0. Và phải so `stock_snapshot` với tồn hiện tại để
   không nuốt mất số hàng vừa bán trong lúc đếm.
 - Tồn kho đổi qua `adjust_stock` (cộng trừ theo delta), không ghi đè.
+- **Giá vốn `NULL` không phải `0`.** `NULL` = chưa ai khai; `0` = hàng tặng,
+  lãi bằng cả giá bán. Gộp lại là mọi sản phẩm cũ bỗng có lãi bằng giá bán và
+  chủ shop tin là thật. Giá vốn phải **chốt vào `order_items` lúc bán**, và báo
+  cáo lãi **loại nguyên đơn** nào còn dòng thiếu giá vốn — loại nửa vời sẽ đẩy
+  lãi lên. Chỉ chủ shop và ADMIN xem được giá vốn/lãi (`has_cost_visibility`);
+  `GET /api/products/{shop_id}` không có xác thực nên tuyệt đối không trả giá
+  vốn ở đó.
 
 **Database**
 

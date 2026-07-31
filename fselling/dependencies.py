@@ -168,6 +168,31 @@ def has_shop_operator_access(shop: models.Shop, current_user: models.User) -> bo
     return False
 
 
+def has_cost_visibility(shop: models.Shop, current_user: models.User) -> bool:
+    """Ai được XEM và SỬA giá vốn: chỉ ADMIN và chủ shop.
+
+    Hẹp hơn hẳn `has_shop_operator_access` và CỐ Ý không đi theo
+    PERMISSION_REPORT: MANAGER đang xem được doanh thu, nhưng giá vốn là con số
+    nhạy cảm nhất của cửa hàng (biết giá vốn là biết chỗ để rút ruột, và là thứ
+    một nhân viên nghỉ việc mang thẳng sang đối thủ được). Nới ra sau này dễ,
+    thu hẹp lại thì dữ liệu đã lộ rồi.
+
+    Thu ngân vẫn bán hàng bình thường: giá vốn được đọc và chốt ở phía server
+    khi tạo đơn, không bao giờ đi ra client.
+    """
+    if current_user.role == "ADMIN":
+        return True
+    return shop.owner_id == current_user.id
+
+
+def require_cost_visibility(shop: models.Shop, current_user: models.User) -> None:
+    if not has_cost_visibility(shop, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail=tr("Chỉ chủ cửa hàng mới xem được giá vốn và lãi"),
+        )
+
+
 def require_shop_access(
     db: Session, shop_id: int, current_user: models.User
 ) -> models.Shop:

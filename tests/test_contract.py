@@ -83,6 +83,9 @@ ROUTES_BO_SUNG = {
     ("GET", "/api/shifts/{shift_id}"),  # E1: chi tiết ca và sổ thu/chi
     ("POST", "/api/shifts/{shift_id}/movements"),  # E1: thu/chi tiền mặt
     ("POST", "/api/shifts/{shift_id}/close"),  # E1: chốt ca
+    # F1: giá vốn tách riêng khỏi GET /api/products/{shop_id} vì endpoint đó
+    # KHÔNG yêu cầu đăng nhập. Route này có xác thực và chỉ chủ shop/ADMIN xem.
+    ("GET", "/api/products/{shop_id}/costs"),
 }
 
 

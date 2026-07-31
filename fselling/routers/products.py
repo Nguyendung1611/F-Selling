@@ -31,6 +31,19 @@ async def barcode_field(request: Request) -> Optional[str]:
     return str(form.get("barcode") or "")
 
 
+async def cost_price_field(request: Request) -> Optional[str]:
+    """Lấy giá vốn từ form, cùng lý do và cùng cách làm với `barcode_field`.
+
+    Trả về `None` = giữ nguyên giá vốn, `""` = xóa giá vốn về NULL (khai nhầm
+    thì gỡ ra được), chuỗi số = đặt giá vốn mới. Service parse và báo 400 nếu
+    không phải số.
+    """
+    form = await request.form()
+    if "cost_price" not in form:
+        return None
+    return str(form.get("cost_price") or "")
+
+
 @router.post("")
 def create_product(
     shop_id: int,
@@ -41,6 +54,7 @@ def create_product(
     stock: int = Form(...),
     category_id: int = Form(...),
     image: UploadFile = File(None),
+    cost_price: Optional[float] = Form(None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -55,12 +69,25 @@ def create_product(
         code=code,
         barcode=barcode,
         image=image,
+        cost_price=cost_price,
     )
 
 
 @router.get("/{shop_id}")
 def get_products(shop_id: int, db: Session = Depends(get_db)):
+    """CỐ Ý không yêu cầu đăng nhập (hành vi sẵn có, POS đang dựa vào).
+    Vì vậy tuyệt đối KHÔNG trả `cost_price` ở đây - giá vốn đi qua
+    `GET /{shop_id}/costs`, nơi có xác thực và chỉ chủ shop xem được."""
     return catalog_service.list_products(db, shop_id)
+
+
+@router.get("/{shop_id}/costs")
+def get_product_costs(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return catalog_service.list_product_costs(db, current_user, shop_id)
 
 
 @router.get("/{shop_id}/barcode/{barcode}")
@@ -85,6 +112,7 @@ def update_product(
     stock: Optional[int] = Form(None),
     category_id: int = Form(...),
     image: UploadFile = File(None),
+    cost_price: Optional[str] = Depends(cost_price_field),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -98,6 +126,7 @@ def update_product(
         code=code,
         barcode=barcode,
         image=image,
+        cost_price=cost_price,
     )
 
 
@@ -108,7 +137,9 @@ def adjust_stock(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return catalog_service.adjust_stock(db, current_user, product_id, payload.delta)
+    return catalog_service.adjust_stock(
+        db, current_user, product_id, payload.delta, payload.unit_cost
+    )
 
 
 @router.post("/{shop_id}/stocktake")

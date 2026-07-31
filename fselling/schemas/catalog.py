@@ -27,6 +27,11 @@ class VoucherCreate(BaseModel):
 
 class StockAdjust(BaseModel):
     delta: int  # >0 nhập kho, <0 xuất kho
+    # Đơn giá của lô đang nhập, dùng để tính lại giá vốn bình quân gia quyền.
+    # None = không khai (giữ nguyên giá vốn cũ); 0 = hàng tặng, là một đơn giá
+    # thật và phải kéo bình quân xuống. JSON body giữ được sự khác biệt đó, khác
+    # với form multipart nơi field rỗng rơi về default.
+    unit_cost: Optional[float] = None
 
 
 class StocktakeItem(BaseModel):

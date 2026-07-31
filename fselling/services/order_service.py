@@ -434,6 +434,13 @@ def create_order(
                 product_id=prod.id,
                 product_name=prod.name,
                 price=prod.price,
+                # Ảnh chụp giá vốn, cùng lý do với product_name ở trên. Nhập lô
+                # hàng giá khác sau này không được phép làm đổi lãi của đơn đã
+                # bán - mà tra ngược Product.cost_price lúc làm báo cáo thì đúng
+                # là như vậy, và không lấy lại được số cũ nữa.
+                # NULL ở đây = chưa khai giá vốn; báo cáo đếm riêng, không tính
+                # thành lãi bằng cả giá bán.
+                cost_price=prod.cost_price,
                 quantity=qty,
             )
         )

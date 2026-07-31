@@ -71,6 +71,12 @@ class OrderItem(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=True, index=True)
     product_name = Column(String)
     price = Column(Float)
+    # Ảnh chụp giá vốn tại thời điểm bán, giống cách `product_name` chụp tên.
+    # Tra ngược Product.cost_price lúc làm báo cáo thì mỗi lần nhập lô hàng giá
+    # khác là lãi của các tháng trước tự đổi số - và không cứu lại được nữa.
+    # NULL = bán trước khi có giá vốn; báo cáo loại ra chứ không tính lãi bằng
+    # cả giá bán.
+    cost_price = Column(Float, nullable=True)
     quantity = Column(Integer)
     order = relationship("Order", back_populates="items")
 

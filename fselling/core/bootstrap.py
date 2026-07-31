@@ -150,6 +150,14 @@ _MIGRATIONS = [
     "ON cash_movements(order_id)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_cash_movements_operation_id "
     "ON cash_movements(operation_id)",
+    # F1: giá vốn để tính lãi gộp. CỐ Ý để NULL thay vì DEFAULT 0 - "chưa ai khai
+    # giá vốn" và "hàng được tặng, giá vốn bằng 0" là hai chuyện khác hẳn nhau.
+    # Gộp lại thì mọi sản phẩm cũ bỗng có lãi bằng đúng giá bán, và chủ shop mở
+    # dashboard ra tin là thật. Backfill cũng vì vậy mà KHÔNG có: đơn bán trước
+    # migration này không có cơ sở nào để biết giá vốn, báo cáo phải đếm riêng
+    # và nói ra, chứ không được đoán.
+    "ALTER TABLE products ADD COLUMN cost_price FLOAT",
+    "ALTER TABLE order_items ADD COLUMN cost_price FLOAT",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt

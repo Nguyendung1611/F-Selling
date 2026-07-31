@@ -199,6 +199,16 @@ def test_stats_khong_loc_giu_nguyen_contract(client):
         "top_products",
         "trend_labels",
         "trend_data",
+        # F1: nhóm field lãi gộp. Chỉ có mặt khi người gọi là chủ shop hoặc
+        # ADMIN - fixture này đăng nhập bằng chủ shop nên phải thấy đủ.
+        # test_gia_von.py kiểm ca ngược lại: MANAGER không được thấy field nào
+        # trong nhóm này.
+        "revenue_with_cost",
+        "total_cost",
+        "gross_profit",
+        "gross_margin",
+        "orders_missing_cost",
+        "revenue_missing_cost",
     }
     assert len(body["trend_labels"]) == 7, "Mặc định vẫn là xu hướng 7 ngày"
 

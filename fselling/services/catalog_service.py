@@ -23,8 +23,10 @@ from ..core.i18n import tr
 from ..dependencies import (
     PERMISSION_INVENTORY,
     PERMISSION_SALE,
+    has_cost_visibility,
     has_shop_operator_access,
     require_any_staff_permission,
+    require_cost_visibility,
     require_shop_access,
     require_staff_permission,
 )
@@ -225,6 +227,55 @@ def _require_shop_operator_403(
     return shop
 
 
+# Ba trạng thái của ô giá vốn trên form sửa sản phẩm cần ba giá trị khác nhau,
+# mà `None` đã mang nghĩa "xóa giá vốn" rồi. Sentinel này là trạng thái thứ ba:
+# form không gửi field -> giữ nguyên giá vốn đang có.
+_KHONG_DOI_GIA_VON = object()
+
+
+def _so_tien_tu_form(raw: Optional[str], ten_truong: str) -> Optional[float]:
+    """Chuỗi thô từ form -> số tiền. Rỗng = None (xóa), chữ rác = 400.
+
+    Không dùng kiểu số của FastAPI vì cần giữ được sự khác biệt giữa "không
+    gửi" và "gửi rỗng" (bẫy #3 trong KIEN_TRUC.md).
+    """
+    if raw is None:
+        return None
+    chuoi = str(raw).strip()
+    if not chuoi:
+        return None
+    try:
+        return float(chuoi)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=tr("{field} phải là một con số", field=ten_truong),
+        )
+
+
+def _mo_ta_gia_von(gia_von: Optional[float]) -> str:
+    """Giá vốn cho dòng log. NULL phải đọc ra được là "chưa khai", không phải 0."""
+    if gia_von is None:
+        return "chưa khai"
+    return f"{gia_von:,.0f}đ"
+
+
+def _kiem_gia_von(gia_von: Optional[float]) -> Optional[float]:
+    """Kiểm giá vốn nhận từ client. `None` đi thẳng qua - caller tự hiểu.
+
+    Cho phép 0: hàng khuyến mãi/hàng tặng có giá vốn bằng 0 thật. Chỉ chặn số
+    âm, thứ không có nghĩa gì trong kế toán kho.
+    """
+    if gia_von is None:
+        return None
+    if gia_von < 0:
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Giá vốn không được âm"),
+        )
+    return float(gia_von)
+
+
 # --- Categories ---
 def create_category(
     db: Session, current_user: models.User, name: str, shop_id: int
@@ -384,8 +435,12 @@ def create_product(
     code: Optional[str] = None,
     barcode: Optional[str] = None,
     image: Optional[UploadFile] = None,
+    cost_price: Optional[float] = None,
 ) -> models.Product:
-    _require_shop_operator_403(db, shop_id, current_user)
+    shop = _require_shop_operator_403(db, shop_id, current_user)
+    if cost_price is not None:
+        require_cost_visibility(shop, current_user)
+        cost_price = _kiem_gia_von(cost_price)
 
     existing_prod = (
         db.query(models.Product)
@@ -424,6 +479,7 @@ def create_product(
         barcode=barcode_value,
         name=name,
         price=price,
+        cost_price=cost_price,
         stock=stock,
         image_url=image_url,
         category_id=category_id,
@@ -443,7 +499,8 @@ def create_product(
         db,
         current_user.id,
         "CREATE_PRODUCT",
-        f"Tạo SP: '{name}' ({code}) - Giá: {price:,.0f}đ, Kho: {stock}",
+        f"Tạo SP: '{name}' ({code}) - Giá: {price:,.0f}đ, Kho: {stock}"
+        f", Giá vốn: {_mo_ta_gia_von(cost_price)}",
     )
     db.refresh(p)
     return p
@@ -474,6 +531,33 @@ def list_products(db: Session, shop_id: int) -> List[Dict]:
     return res
 
 
+def list_product_costs(
+    db: Session, current_user: models.User, shop_id: int
+) -> Dict[str, Any]:
+    """Giá vốn của toàn bộ sản phẩm trong shop. CHỈ chủ shop và ADMIN.
+
+    Tách hẳn khỏi `list_products` vì endpoint đó KHÔNG yêu cầu đăng nhập - POS
+    và trang bán hàng đang gọi nó tự do. Nhét giá vốn vào đó là đưa con số nhạy
+    cảm nhất của cửa hàng ra cho bất kỳ ai đoán được `shop_id`.
+
+    `chua_khai` đếm riêng số sản phẩm còn NULL để giao diện nhắc chủ shop khai
+    nốt - không có nó thì lãi gộp im lặng thiếu một phần và không ai biết.
+    """
+    shop = require_shop_access(db, shop_id, current_user)
+    require_cost_visibility(shop, current_user)
+    products = (
+        db.query(models.Product)
+        .filter(models.Product.shop_id == shop_id)
+        .all()
+    )
+    return {
+        "costs": [
+            {"product_id": p.id, "cost_price": p.cost_price} for p in products
+        ],
+        "chua_khai": sum(1 for p in products if p.cost_price is None),
+    }
+
+
 def update_product(
     db: Session,
     current_user: models.User,
@@ -484,13 +568,20 @@ def update_product(
     code: Optional[str] = None,
     barcode: Optional[str] = None,
     image: Optional[UploadFile] = None,
+    cost_price: Optional[str] = None,
 ) -> models.Product:
-    """Sửa thông tin sản phẩm: tên, giá, mã, mã vạch, danh mục, ảnh.
+    """Sửa thông tin sản phẩm: tên, giá, giá vốn, mã, mã vạch, danh mục, ảnh.
 
     `barcode` phân biệt hai trường hợp mà `code` không phân biệt:
     - `None` (form không gửi field) -> giữ nguyên mã vạch cũ.
     - `""` (form gửi field rỗng)    -> xóa mã vạch, đặt về NULL.
     Cần tách như vậy để sửa được lỗi gán nhầm mã vạch cho sản phẩm.
+
+    `cost_price` nhận CHUỖI thô vì cần đúng ba trạng thái, mà kiểu số chỉ có
+    hai: `None` = form không gửi (giữ nguyên), `""` = gửi rỗng (xóa giá vốn về
+    NULL, dùng khi khai nhầm), chuỗi số = đặt giá vốn mới. Sửa tay ở đây là
+    đường ghi đè bình quân gia quyền - dùng khi khai sai, không phải đường
+    thường xuyên (nhập hàng thì đi qua `adjust_stock` kèm đơn giá).
 
     CỐ Ý KHÔNG đụng vào `stock`. Ghi đè tồn kho từ form sửa gây mất hàng khi
     có bán song song (seller mở form thấy tồn 100, POS bán vài đơn, seller bấm
@@ -500,8 +591,13 @@ def update_product(
     prod = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not prod:
         raise HTTPException(status_code=404, detail=tr("Sản phẩm không tồn tại"))
-    require_shop_access(db, prod.shop_id, current_user)
+    shop = require_shop_access(db, prod.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_INVENTORY)
+
+    gia_von_moi = _KHONG_DOI_GIA_VON
+    if cost_price is not None:
+        require_cost_visibility(shop, current_user)
+        gia_von_moi = _kiem_gia_von(_so_tien_tu_form(cost_price, "Giá vốn"))
 
     name_stripped = name.strip() if name else ""
     if not name_stripped:
@@ -557,6 +653,15 @@ def update_product(
     prod.name = name_stripped
     prod.price = price
     prod.category_id = category_id
+    ghi_chu_gia_von = ""
+    if gia_von_moi is not _KHONG_DOI_GIA_VON:
+        gia_von_cu = prod.cost_price
+        prod.cost_price = gia_von_moi
+        if gia_von_cu != gia_von_moi:
+            ghi_chu_gia_von = (
+                f", Giá vốn: {_mo_ta_gia_von(gia_von_cu)}"
+                f" -> {_mo_ta_gia_von(gia_von_moi)}"
+            )
     if image and image.filename:
         prod.image_url = save_product_image(image)
 
@@ -565,7 +670,8 @@ def update_product(
         db,
         current_user.id,
         "UPDATE_PRODUCT",
-        f"Cập nhật SP: '{prod.name}' ({prod.code}) - Giá: {price:,.0f}đ",
+        f"Cập nhật SP: '{prod.name}' ({prod.code}) - Giá: {price:,.0f}đ"
+        f"{ghi_chu_gia_von}",
     )
     db.refresh(prod)
     return prod
@@ -681,14 +787,35 @@ def apply_stocktake(
     }
 
 
+# Giá vốn bình quân gia quyền được tính NGAY TRONG câu UPDATE nguyên tử, không
+# tách ra đọc-rồi-ghi: tách ra là mở lại đúng khe hở mà `stock = stock + delta`
+# sinh ra để bịt.
+#
+# SQLite đánh giá MỌI vế phải của SET theo giá trị CŨ của hàng, nên `stock`
+# trong biểu thức tính giá vốn vẫn là tồn trước khi nhập, bất kể thứ tự các
+# mệnh đề SET. MySQL thì ngược lại (đánh giá lần lượt, vế sau thấy giá trị đã
+# cập nhật) - đổi sang database khác là phải viết lại câu này.
 _ADJUST_STOCK = text(
-    "UPDATE products SET stock = stock + :delta "
+    "UPDATE products SET "
+    "cost_price = CASE "
+    # Không gửi đơn giá, hoặc là lệnh xuất kho -> giữ nguyên giá vốn.
+    # Xuất hàng đi không làm thay đổi đơn giá bình quân của số còn lại.
+    "  WHEN :unit_cost IS NULL OR :delta <= 0 THEN cost_price "
+    # Chưa khai giá vốn, hoặc kho đang trống: không có gì để bình quân với.
+    "  WHEN cost_price IS NULL OR stock <= 0 THEN :unit_cost "
+    "  ELSE (stock * cost_price + :delta * :unit_cost) / (stock + :delta) "
+    "END, "
+    "stock = stock + :delta "
     "WHERE id = :product_id AND stock + :delta >= 0"
 )
 
 
 def adjust_stock(
-    db: Session, current_user: models.User, product_id: int, delta: int
+    db: Session,
+    current_user: models.User,
+    product_id: int,
+    delta: int,
+    unit_cost: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Nhập (delta > 0) hoặc xuất (delta < 0) kho theo số lượng thay đổi.
 
@@ -696,11 +823,18 @@ def adjust_stock(
     nhiều thao tác kho / bán hàng chạy song song không ghi đè lẫn nhau. Điều
     kiện `stock + delta >= 0` nằm ngay trong câu UPDATE -> tồn kho không bao
     giờ âm; nếu xuất quá số đang có, rowcount = 0 và ta báo lỗi.
+
+    `unit_cost` là đơn giá của LÔ ĐANG NHẬP, không phải giá vốn mới. Gửi kèm
+    thì giá vốn được tính lại theo bình quân gia quyền; không gửi thì giữ
+    nguyên. Phân biệt "không gửi" với "gửi 0" là bắt buộc: 0 là giá thật của
+    hàng tặng và phải kéo bình quân xuống, còn không gửi là không có thông tin.
+    Chỗ này an toàn hơn ô trên form vì đi qua JSON body, nơi `None` và `0` là
+    hai giá trị khác nhau thật sự.
     """
     prod = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not prod:
         raise HTTPException(status_code=404, detail=tr("Sản phẩm không tồn tại"))
-    require_shop_access(db, prod.shop_id, current_user)
+    shop = require_shop_access(db, prod.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_INVENTORY)
 
     if delta == 0:
@@ -709,7 +843,23 @@ def adjust_stock(
             detail=tr("Số lượng thay đổi phải khác 0"),
         )
 
-    result = db.execute(_ADJUST_STOCK, {"delta": delta, "product_id": product_id})
+    if unit_cost is not None:
+        require_cost_visibility(shop, current_user)
+        unit_cost = _kiem_gia_von(unit_cost)
+        # Từ chối thẳng thay vì im lặng bỏ qua: người dùng gõ đơn giá vào phiếu
+        # xuất là đang hiểu sai công dụng của ô đó, và im lặng nuốt sẽ để họ tin
+        # rằng giá vốn vừa được cập nhật.
+        if delta < 0:
+            raise HTTPException(
+                status_code=400,
+                detail=tr("Phiếu xuất kho không nhận đơn giá nhập"),
+            )
+
+    gia_von_truoc = prod.cost_price
+    result = db.execute(
+        _ADJUST_STOCK,
+        {"delta": delta, "product_id": product_id, "unit_cost": unit_cost},
+    )
     if result.rowcount != 1:
         db.rollback()
         raise HTTPException(
@@ -722,16 +872,29 @@ def adjust_stock(
         )
     db.commit()
     db.refresh(prod)
+    gia_von_sau = prod.cost_price
 
     hanh_dong = "Nhập" if delta > 0 else "Xuất"
+    ghi_chu_gia_von = ""
+    if unit_cost is not None:
+        ghi_chu_gia_von = (
+            f", đơn giá {unit_cost:,.0f}đ"
+            f" -> giá vốn BQ {_mo_ta_gia_von(gia_von_truoc)}"
+            f" thành {_mo_ta_gia_von(gia_von_sau)}"
+        )
     log_system_action(
         db,
         current_user.id,
         "ADJUST_STOCK",
         f"{hanh_dong} kho SP '{prod.name}' ({prod.code}): "
-        f"{'+' if delta > 0 else ''}{delta} -> tồn {prod.stock}",
+        f"{'+' if delta > 0 else ''}{delta} -> tồn {prod.stock}{ghi_chu_gia_von}",
     )
-    return {"id": prod.id, "stock": prod.stock, "delta": delta}
+    ket_qua: Dict[str, Any] = {"id": prod.id, "stock": prod.stock, "delta": delta}
+    # Chỉ đính giá vốn cho người được xem. Nhân viên kho vẫn nhập/xuất được
+    # bình thường, chỉ là phản hồi không kèm con số đó.
+    if has_cost_visibility(shop, current_user):
+        ket_qua["cost_price"] = gia_von_sau
+    return ket_qua
 
 
 def toggle_product_status(

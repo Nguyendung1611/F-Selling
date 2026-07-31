@@ -299,6 +299,12 @@
                         <h4 data-i18n="seller.dashboard.products_sold">SẢN PHẨM ĐÃ BÁN</h4>
                         <strong id="statSold" class="stat-value">0</strong>
                     </div>
+
+                    <div class="stat-card" id="statProfitCard" style="display: none;">
+                        <h4 data-i18n="seller.dashboard.gross_profit">LÃI GỘP</h4>
+                        <strong id="statProfit" class="stat-value">0 ₫</strong>
+                        <small id="statProfitNote" style="display:block; color:#64748B; font-size:0.75rem; margin-top:0.25rem;"></small>
+                    </div>
             </div>
 
                 <!-- <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; margin-top: 2rem;">
@@ -495,6 +501,11 @@
                         <div class="form-group">
                             <label data-i18n="seller.products.price_required">Giá bán (VNĐ) *</label>
                             <div class="input-wrapper"><i class="ph ph-money"></i><input type="number" id="prodPrice" placeholder="Giá tiền" data-i18n-placeholder="seller.products.price_placeholder"></div>
+                        </div>
+                        <div class="form-group" id="prodCostGroup">
+                            <label data-i18n="seller.products.cost_label">Giá vốn (VNĐ - để trống nếu chưa biết)</label>
+                            <div class="input-wrapper"><i class="ph ph-tag"></i><input type="number" id="prodCost" placeholder="Giá nhập một sản phẩm" data-i18n-placeholder="seller.products.cost_placeholder"></div>
+                            <small style="color:#64748B; font-size:0.75rem;" data-i18n="seller.products.cost_hint">Chỉ chủ cửa hàng thấy ô này. Nhập hàng có kèm đơn giá thì giá vốn tự tính lại theo bình quân.</small>
                         </div>
                         <div class="form-group">
                             <label data-i18n="seller.products.stock_required">Số lượng tồn kho *</label>

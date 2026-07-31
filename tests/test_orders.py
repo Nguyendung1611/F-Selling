@@ -206,4 +206,11 @@ def test_doanh_thu_chi_tinh_don_da_thanh_toan(client):
         "top_products",
         "trend_labels",
         "trend_data",
+        # F1: nhóm field lãi gộp, chỉ chủ shop và ADMIN mới nhận được.
+        "revenue_with_cost",
+        "total_cost",
+        "gross_profit",
+        "gross_margin",
+        "orders_missing_cost",
+        "revenue_missing_cost",
     }
