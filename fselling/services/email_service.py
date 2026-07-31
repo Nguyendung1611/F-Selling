@@ -6,22 +6,24 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+from ..core.i18n import get_locale, tr
+
 DEFAULT_SUBJECT = "F-Selling: Mã xác minh của bạn"
 
 
 def _build_body(otp_code: str) -> str:
     return f"""
-        <html>
+        <html lang="{get_locale()}">
         <body style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-            <h2 style="color: #4F46E5;">Mã xác minh F-Selling</h2>
-            <p>Chào bạn,</p>
-            <p>Mã xác minh (OTP) của bạn là:</p>
+            <h2 style="color: #4F46E5;">{tr("Mã xác minh F-Selling")}</h2>
+            <p>{tr("Chào bạn,")}</p>
+            <p>{tr("Mã xác minh (OTP) của bạn là:")}</p>
             <div style="font-size: 24px; font-weight: bold; background: #F3F4F6; padding: 10px 20px; border-radius: 8px; display: inline-block; letter-spacing: 2px; color: #4F46E5; margin: 15px 0;">
                 {otp_code}
             </div>
-            <p>Mã này có hiệu lực trong vòng 15 phút. Vui lòng không chia sẻ mã này với bất kỳ ai.</p>
+            <p>{tr("Mã này có hiệu lực trong vòng 15 phút. Vui lòng không chia sẻ mã này với bất kỳ ai.")}</p>
             <hr style="border: none; border-top: 1px solid #E5E7EB; margin-top: 30px;">
-            <p style="font-size: 12px; color: #9CA3AF;">Hệ thống F-Selling - Ứng dụng bán hàng thông minh.</p>
+            <p style="font-size: 12px; color: #9CA3AF;">{tr("Hệ thống F-Selling - Ứng dụng bán hàng thông minh.")}</p>
         </body>
         </html>
         """
@@ -43,7 +45,7 @@ def send_otp_email(email_to: str, otp_code: str, subject: str = DEFAULT_SUBJECT)
         msg = MIMEMultipart()
         msg["From"] = smtp_user
         msg["To"] = email_to
-        msg["Subject"] = subject
+        msg["Subject"] = tr(subject)
         msg.attach(MIMEText(_build_body(otp_code), "html", "utf-8"))
 
         server = smtplib.SMTP(smtp_host, smtp_port)

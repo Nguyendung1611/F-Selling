@@ -1,81 +1,131 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>F-Selling | Đăng nhập</title>
+    <title data-i18n="login.page_title">F-Selling | Đăng nhập</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
     <link rel="stylesheet" href="/css/auth.css">
 
 </head>
 <body>
+    <div class="language-switcher language-switcher--floating language-switcher--auth">
+        <label for="languageSelector" data-i18n="common.language">Ngôn ngữ</label>
+        <select id="languageSelector"
+                data-language-selector
+                data-i18n-aria-label="auth.language_selector_aria"
+                data-i18n-title="auth.language_selector_aria">
+            <option value="vi" data-i18n="common.language.vi">Tiếng Việt</option>
+            <option value="en" data-i18n="common.language.en">English</option>
+        </select>
+    </div>
+
     <div class="login-container">
         <div class="glass-card login-box">
             <!-- <h1 class="text-gradient" style="text-align: center;">F-Selling</h1> -->
-            <img class="logo" src="img/logo.png" alt="">
-            <p style="text-align: center; color: var(--text-muted); margin-bottom: 2rem;">Đăng nhập vào tài khoản của bạn</p>
+            <img class="logo" src="img/logo.png" alt="F-Selling">
+            <p data-i18n="login.subtitle" style="text-align: center; color: var(--text-muted); margin-bottom: 2rem;">Đăng nhập vào tài khoản của bạn</p>
             
-            <form id="loginForm">
+            <form id="loginForm" data-i18n-aria-label="login.form_aria">
                 <div>
-                    <label>Tên đăng nhập</label>
-                    <input type="text" id="username" required>
+                    <label for="username" data-i18n="auth.username.label">Tên đăng nhập</label>
+                    <input type="text"
+                           id="username"
+                           autocomplete="username"
+                           data-i18n-placeholder="auth.username.placeholder"
+                           required>
                 </div>
                 <div>
-                    <label>Mật khẩu</label>
-                    <input type="password" id="password" required>
+                    <label for="password" data-i18n="auth.password.label">Mật khẩu</label>
+                    <input type="password"
+                           id="password"
+                           autocomplete="current-password"
+                           data-i18n-placeholder="auth.password.placeholder"
+                           required>
                 </div>
-                <button type="submit" style="width: 100%;">Đăng nhập</button>
-                <div id="errorMsg" style="color: #ef4444; margin-top: 1rem; text-align: center;"></div>
+                <button type="submit" data-i18n="login.submit" style="width: 100%;">Đăng nhập</button>
+                <div id="errorMsg" aria-live="polite" style="color: #ef4444; margin-top: 1rem; text-align: center;"></div>
             </form>
             <div style="text-align: center; margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem;">
-                <p><a href="#" onclick="showForgotModal()" style="color: var(--text-muted); text-decoration: none; font-size: 0.9rem;">Quên mật khẩu?</a></p>
-                <p>Chưa có tài khoản? <a href="/register" style="color: var(--primary);">Đăng ký Người bán</a></p>
+                <p><a href="#" onclick="showForgotModal()" data-i18n="login.forgot_password" style="color: var(--text-muted); text-decoration: none; font-size: 0.9rem;">Quên mật khẩu?</a></p>
+                <p><span data-i18n="login.no_account">Chưa có tài khoản?</span> <a href="/register" data-i18n="login.register_seller" style="color: var(--primary);">Đăng ký Người bán</a></p>
             </div>
         </div>
     </div>
 
     <!-- Modal Quên Mật Khẩu -->
-    <div id="forgotModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center;">
+    <div id="forgotModal"
+         role="dialog"
+         aria-modal="true"
+         data-i18n-aria-label="forgot.title"
+         style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center;">
         <div class="glass-card" style="max-width: 400px; width: 90%; background: var(--card-bg); text-align: center; position: relative;">
-            <button onclick="closeForgotModal()" style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; box-shadow: none; padding: 0;">&times;</button>
+            <button type="button"
+                    onclick="closeForgotModal()"
+                    data-i18n-aria-label="forgot.close_aria"
+                    data-i18n-title="forgot.close_aria"
+                    style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; box-shadow: none; padding: 0;">&times;</button>
             
-            <h3 class="text-gradient" id="forgotModalTitle" style="margin-top: 1rem;">Quên mật khẩu</h3>
+            <h3 class="text-gradient" id="forgotModalTitle" data-i18n="forgot.title" style="margin-top: 1rem;">Quên mật khẩu</h3>
             
             <!-- Step 1: Nhập email gửi OTP -->
-            <form id="forgotStep1Form">
-                <p style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">Nhập địa chỉ email liên kết với tài khoản của bạn để nhận mã xác minh OTP.</p>
+            <form id="forgotStep1Form" data-i18n-aria-label="forgot.request_form_aria">
+                <p data-i18n="forgot.request_instructions" style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">Nhập địa chỉ email liên kết với tài khoản của bạn để nhận mã xác minh OTP.</p>
                 <div style="text-align: left;">
-                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Email của bạn</label>
-                    <input type="email" id="forgotEmail" required>
+                    <label for="forgotEmail" data-i18n="auth.email.label" style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Email</label>
+                    <input type="email"
+                           id="forgotEmail"
+                           autocomplete="email"
+                           data-i18n-placeholder="auth.email.placeholder"
+                           required>
                 </div>
-                <button type="submit" style="width: 100%; margin-top: 0.5rem;">Gửi mã xác nhận</button>
+                <button type="submit" data-i18n="forgot.send_code" style="width: 100%; margin-top: 0.5rem;">Gửi mã xác nhận</button>
             </form>
             
             <!-- Step 2: Nhập OTP & Đặt mật khẩu mới -->
-            <form id="forgotStep2Form" style="display: none;">
-                <p style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">Mã xác thực đã được gửi. Vui lòng nhập mã và mật khẩu mới.</p>
+            <form id="forgotStep2Form" data-i18n-aria-label="forgot.reset_form_aria" style="display: none;">
+                <p data-i18n="forgot.reset_instructions" style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">Mã xác thực đã được gửi. Vui lòng nhập mã và mật khẩu mới.</p>
                 <div style="text-align: left;">
-                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mã OTP (6 chữ số)</label>
-                    <input type="text" id="forgotOTP" maxlength="6" required style="text-align: center; letter-spacing: 4px; font-weight: bold;">
+                    <label for="forgotOTP" data-i18n="forgot.otp_label" style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mã OTP (6 chữ số)</label>
+                    <input type="text"
+                           id="forgotOTP"
+                           maxlength="6"
+                           inputmode="numeric"
+                           autocomplete="one-time-code"
+                           data-i18n-placeholder="forgot.otp_placeholder"
+                           required
+                           style="text-align: center; letter-spacing: 4px; font-weight: bold;">
                 </div>
                 <div style="text-align: left;">
-                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mật khẩu mới</label>
-                    <input type="password" id="forgotNewPassword" required>
+                    <label for="forgotNewPassword" data-i18n="auth.password.new_label" style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mật khẩu mới</label>
+                    <input type="password"
+                           id="forgotNewPassword"
+                           autocomplete="new-password"
+                           data-i18n-placeholder="auth.password.new_placeholder"
+                           required>
                 </div>
                 <div style="text-align: left;">
-                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Xác nhận mật khẩu</label>
-                    <input type="password" id="forgotConfirmPassword" required>
+                    <label for="forgotConfirmPassword" data-i18n="auth.password.confirm_label" style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Xác nhận mật khẩu</label>
+                    <input type="password"
+                           id="forgotConfirmPassword"
+                           autocomplete="new-password"
+                           data-i18n-placeholder="auth.password.confirm_placeholder"
+                           required>
                 </div>
-                <button type="submit" style="width: 100%; margin-top: 0.5rem;">Đặt lại mật khẩu</button>
+                <button type="submit" data-i18n="forgot.reset_submit" style="width: 100%; margin-top: 0.5rem;">Đặt lại mật khẩu</button>
             </form>
             
-            <div id="forgotErrorMsg" style="color: #ef4444; margin-top: 1rem; text-align: center; font-size: 0.9rem;"></div>
-            <div id="forgotSuccessMsg" style="color: var(--success); margin-top: 1rem; text-align: center; font-weight: 600; font-size: 0.9rem;"></div>
+            <div id="forgotErrorMsg" aria-live="polite" style="color: #ef4444; margin-top: 1rem; text-align: center; font-size: 0.9rem;"></div>
+            <div id="forgotSuccessMsg" aria-live="polite" style="color: var(--success); margin-top: 1rem; text-align: center; font-weight: 600; font-size: 0.9rem;"></div>
         </div>
     </div>
 
-    <script src="/js/api.js"></script>
-    <script src="/js/auth.js?v=20260731-rbac"></script>
+    <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
+    <script src="/js/locales/common.js?v=20260731-i18n4"></script>
+    <script src="/js/locales/auth-admin.js?v=20260731-i18n4"></script>
+    <script src="/js/i18n.js?v=20260731-i18n4"></script>
+    <script src="/js/api.js?v=20260731-i18n4"></script>
+    <script src="/js/auth.js?v=20260731-i18n4"></script>
 </body>
 </html>

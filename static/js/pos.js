@@ -1,7 +1,7 @@
 // POS dùng chung cho chủ shop (SELLER) và nhân viên (STAFF).
 (function () {
     const role = localStorage.getItem('role');
-    if(role !== 'SELLER' && role !== 'STAFF') window.location.href = '/';
+    if(role !== 'SELLER' && role !== 'STAFF') redirectToLogin();
 })();
 let allShops = [];
 let currentShopId = parseInt(localStorage.getItem('currentShopId'));
@@ -28,9 +28,35 @@ let pendingCashOrderId = null;
 let checkoutOperationId = null;
 let pendingCheckoutState = null;
 let pendingMovementState = null;
+let voucherMessageKey = null;
+let voucherMessageRaw = '';
+let shiftBarState = 'loading';
+let shiftBarMessage = '';
+let lastPaymentStatus = null;
 
 const POS_CHECKOUT_STORAGE_PREFIX = 'fselling.pos.checkout.v2';
 const POS_MOVEMENT_STORAGE_PREFIX = 'fselling.pos.movement.v1';
+
+function dich(key, options = {}) {
+    return window.t ? window.t(key, options) : (options.defaultValue || key);
+}
+
+// Bản dịch là plain text. Khi đặt cạnh markup/icon bằng innerHTML vẫn escape
+// giống dữ liệu người dùng để catalog không thể vô tình trở thành HTML.
+function dichHtml(key, options = {}) {
+    return escapeHtml(dich(key, options));
+}
+
+function dinhDangSoPOS(value) {
+    if (window.FSellingI18n?.formatNumber) {
+        return window.FSellingI18n.formatNumber(value, { maximumFractionDigits: 0 });
+    }
+    return Math.round(Number(value) || 0).toLocaleString('vi-VN');
+}
+
+function htmlNut(icon, key, options = {}) {
+    return `<i class="ph ${icon}"></i> ${dichHtml(key, options)}`;
+}
 
 function sessionKey(prefix, suffix = '') {
     const username = localStorage.getItem('username') || 'anonymous';
@@ -135,7 +161,7 @@ async function loadShop() {
             // Shop đã bị xóa/khóa hoặc tài khoản không còn quyền truy cập:
             // không giữ một thao tác vĩnh viễn mà người dùng không thể xử lý.
             xoaCheckoutDangDo();
-            showToast('Đã bỏ trạng thái đơn cũ vì bạn không còn truy cập được cửa hàng đó');
+            showToast(dich('pos.order.stale_state_removed'));
         } else if (coQuyenShopDangCho) {
             // Một đơn chưa rõ kết quả phải kéo tab về đúng shop của nó. Nếu giữ
             // shop mới từ localStorage, nút retry/hủy có thể thao tác nhầm quầy.
@@ -143,7 +169,7 @@ async function loadShop() {
             localStorage.setItem('currentShopId', currentShopId);
         }
         const sel = document.getElementById('shopSelect');
-        sel.innerHTML = '<option value="">-- Chọn Cửa Hàng --</option>';
+        sel.innerHTML = `<option value="">${dichHtml('pos.shop.select')}</option>`;
         allShops.forEach(s => {
             sel.innerHTML += `<option value="${s.id}" ${s.id === currentShopId ? 'selected' : ''}>${escapeHtml(s.name)}</option>`;
         });
@@ -155,7 +181,7 @@ async function loadShop() {
         await Promise.all([loadCategories(), loadProducts(), loadCurrentShift()]);
         phucHoiCheckoutDangDo();
     } catch(e) {
-        showToast(e.message || 'Không tải được thông tin cửa hàng');
+        showToast(e.message || dich('pos.order.load_shops_error'));
     }
 }
 
@@ -165,11 +191,11 @@ async function changeShopPOS() {
     const shopMoi = parseInt(val);
     if (checkoutOperationId || currentOrderId || pendingCashOrderId) {
         document.getElementById('shopSelect').value = String(currentShopId);
-        return showToast('Hãy hoàn tất, thử lại hoặc hủy đơn hiện tại trước khi chuyển cửa hàng');
+        return showToast(dich('pos.order.finish_before_shop'));
     }
     if (activeShift && shopMoi !== currentShopId) {
         document.getElementById('shopSelect').value = String(currentShopId);
-        return showToast('Hãy kết ca hiện tại trước khi chuyển cửa hàng');
+        return showToast(dich('pos.order.close_shift_before_shop'));
     }
     currentShopId = shopMoi;
     localStorage.setItem('currentShopId', currentShopId);
@@ -198,7 +224,7 @@ async function loadCategories() {
 function renderCategories() {
     const container = document.getElementById('categoryFilter');
     if(!container) return;
-    container.innerHTML = `<button class="category-btn ${!currentCategoryId ? 'active' : ''}" onclick="filterByCategory(null)">Tất cả</button>`;
+    container.innerHTML = `<button class="category-btn ${!currentCategoryId ? 'active' : ''}" onclick="filterByCategory(null)">${dichHtml('pos.products.all_categories')}</button>`;
     categories.forEach(c => {
         container.innerHTML += `<button class="category-btn ${currentCategoryId === c.id ? 'active' : ''}" onclick="filterByCategory(${c.id})">${escapeHtml(c.name)}</button>`;
     });
@@ -230,11 +256,11 @@ function renderProducts(list) {
         const div = document.createElement('div');
         div.className = 'product-card';
         div.innerHTML = `
-            <div class="product-stock" style="color: white;">Kho: ${p.stock}</div>
+            <div class="product-stock" style="color: white;">${dichHtml('pos.products.stock', { count: p.stock })}</div>
             <img src="${imgUrl}" onerror="this.src='https://via.placeholder.com/150x150?text=Error'" class="product-img">
             <div class="product-info">
                 <div class="product-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
-                <div class="product-price">${p.price.toLocaleString()} ₫</div>
+                <div class="product-price">${escapeHtml(dinhDangTien(p.price))}</div>
             </div>
         `;
         div.onclick = () => addToCart(p);
@@ -274,7 +300,7 @@ async function xuLyQuetPOS(ma) {
         loadProducts();  // đồng bộ lại để lượt quét sau khớp ngay tại máy
     } catch (e) {
         BarcodeScanner.bipLoi();
-        showToast(`Không tìm thấy sản phẩm có mã "${ma}"`);
+        showToast(dich('pos.products.barcode_not_found', { code: ma }));
     }
 }
 
@@ -287,11 +313,11 @@ BarcodeScanner.batDau(xuLyQuetPOS);
 // nhau mà trùng tên từng bị cộng dồn vào một dòng, tính tiền sai.
 function dangKhoaChinhSuaDon() {
     if (currentOrderId || pendingCashOrderId) {
-        showToast('Đơn đã tạo, hãy hoàn tất hoặc hủy đơn trước khi chỉnh sửa');
+        showToast(dich('pos.cart.locked_created'));
         return true;
     }
     if (checkoutOperationId) {
-        showToast('Kết quả tạo đơn chưa rõ; hãy bấm thử tạo đơn lại');
+        showToast(dich('pos.cart.locked_unknown'));
         return true;
     }
     return false;
@@ -301,10 +327,10 @@ function addToCart(p) {
     try {
         if (dangKhoaChinhSuaDon()) return false;
         if(!cart) cart = [];
-        if(p.stock <= 0) { showToast("Sản phẩm đã hết hàng!"); return false; }
+        if(p.stock <= 0) { showToast(dich('pos.products.out_of_stock')); return false; }
         const existing = cart.find(i => i.product_id === p.id);
         if(existing) {
-            if(existing.quantity >= p.stock) { showToast("Vượt quá số lượng tồn kho!"); return false; }
+            if(existing.quantity >= p.stock) { showToast(dich('pos.products.exceeds_stock')); return false; }
             existing.quantity++;
         }
         else cart.push({ product_id: p.id, product_name: p.name, price: p.price, quantity: 1, max_stock: p.stock });
@@ -312,7 +338,7 @@ function addToCart(p) {
         return true;
     } catch (err) {
         console.error("Lỗi thêm vào giỏ:", err);
-        showToast("Lỗi hệ thống khi thêm sản phẩm.");
+        showToast(dich('pos.products.add_error'));
         return false;
     }
 }
@@ -320,7 +346,7 @@ function addToCart(p) {
 function updateQty(index, delta) {
     if (dangKhoaChinhSuaDon()) return;
     const item = cart[index];
-    if(item.quantity + delta > item.max_stock) return showToast("Vượt quá tồn kho!");
+    if(item.quantity + delta > item.max_stock) return showToast(dich('pos.products.exceeds_stock'));
     if(item.quantity + delta <= 0) cart.splice(index, 1);
     else item.quantity += delta;
     calcCart();
@@ -348,6 +374,8 @@ async function applyVoucher() {
     const code = document.getElementById('voucherInput').value.toUpperCase();
     if(!code) {
         currentVoucher = null; discount = 0; total = subtotal;
+        voucherMessageKey = null;
+        voucherMessageRaw = '';
         document.getElementById('voucherMsg').innerText = "";
         updateUI(); return;
     }
@@ -360,23 +388,47 @@ async function applyVoucher() {
     try {
         const res = await fetch(`/api/vouchers/apply/${currentShopId}`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${getToken()}` },
+            headers: {
+                'Authorization': `Bearer ${getToken()}`,
+                'Accept-Language': getCurrentLocale()
+            },
             body: formData
         });
-        const data = await res.json();
+        let data;
+        try {
+            data = await res.json();
+        } catch (parseError) {
+            const error = new Error(dich('common.api_error'));
+            error.translationKey = 'common.api_error';
+            throw error;
+        }
         if(!res.ok) {
             currentVoucher = null; discount = 0; total = subtotal;
-            document.getElementById('voucherMsg').innerText = data.detail;
+            voucherMessageKey = null;
+            voucherMessageRaw = data.detail || '';
+            document.getElementById('voucherMsg').innerText = voucherMessageRaw;
             document.getElementById('voucherMsg').style.color = '#EF4444';
         } else {
             currentVoucher = code;
             discount = data.discount_amount;
             total = data.new_total;
-            document.getElementById('voucherMsg').innerText = "Áp dụng thành công!";
+            voucherMessageKey = 'pos.voucher.success';
+            voucherMessageRaw = '';
+            document.getElementById('voucherMsg').innerText = dich(voucherMessageKey);
             document.getElementById('voucherMsg').style.color = 'var(--success)';
         }
         updateUI();
-    } catch(e) { console.log(e); }
+    } catch(e) {
+        currentVoucher = null;
+        discount = 0;
+        total = subtotal;
+        voucherMessageKey = e.translationKey || 'common.network_error';
+        voucherMessageRaw = '';
+        const voucherMessage = document.getElementById('voucherMsg');
+        voucherMessage.innerText = dich(voucherMessageKey);
+        voucherMessage.style.color = '#EF4444';
+        updateUI();
+    }
 }
 
 function updateUI() {
@@ -390,32 +442,32 @@ function updateUI() {
             <div class="cart-item">
                 <div class="cart-o-ten">
                     <div class="cart-name" title="${escapeHtml(item.product_name)}">${escapeHtml(item.product_name)}</div>
-                    <div class="cart-donGia">${item.price.toLocaleString()} × ${item.quantity}</div>
+                    <div class="cart-donGia">${escapeHtml(dinhDangTien(item.price))} × ${dinhDangSoPOS(item.quantity)}</div>
                 </div>
                 <div class="cart-o-sl" style="display: flex; gap: 0.3rem; align-items: center; color: white;">
                     <button class="btn-qty" onclick="updateQty(${index}, -1)">-</button>
                     <span>${item.quantity}</span>
                     <button class="btn-qty" onclick="updateQty(${index}, 1)">+</button>
                 </div>
-                <div class="cart-thanhTien cart-o-tien">${thanhTien.toLocaleString()} ₫</div>
+                <div class="cart-thanhTien cart-o-tien">${escapeHtml(dinhDangTien(thanhTien))}</div>
                 <button class="btn-del cart-o-xoa" onclick="removeItem(${index})"><i class="ph ph-trash"></i></button>
             </div>
         `;
     });
 
-    document.getElementById('txtSubtotal').innerText = subtotal.toLocaleString() + ' ₫';
-    document.getElementById('txtDiscount').innerText = '- ' + discount.toLocaleString() + ' ₫';
-    document.getElementById('txtTotal').innerText = total.toLocaleString() + ' ₫';
+    document.getElementById('txtSubtotal').innerText = dinhDangTien(subtotal);
+    document.getElementById('txtDiscount').innerText = dinhDangTien(-discount);
+    document.getElementById('txtTotal').innerText = dinhDangTien(total);
     renderCashQuickAmounts();
     capNhatTienKhachDua();
 }
 
 function setMethod(m) {
     if (currentOrderId || pendingCashOrderId) {
-        return showToast('Đơn đã tạo; hãy thanh toán hoặc hủy trước khi đổi phương thức');
+        return showToast(dich('pos.checkout.method_locked'));
     }
     if (checkoutOperationId && !currentOrderId) {
-        return showToast('Hãy thử tạo đơn lại trước khi đổi thanh toán');
+        return showToast(dich('pos.checkout.method_retry_first'));
     }
     apDungPhuongThucThanhToan(m, true);
 }
@@ -452,14 +504,14 @@ function dinhDangONhapTien(input) {
     if (!input) return 0;
     const raw = String(input.value || '');
     const amount = docGiaTriTien(raw);
-    input.value = raw.replace(/\D/g, '') ? amount.toLocaleString('vi-VN') : '';
+    input.value = raw.replace(/\D/g, '') ? dinhDangSoPOS(amount) : '';
     return amount;
 }
 
 function datGiaTriTien(inputId, amount) {
     const input = document.getElementById(inputId);
     if (!input) return;
-    input.value = Math.max(0, Math.round(Number(amount) || 0)).toLocaleString('vi-VN');
+    input.value = dinhDangSoPOS(Math.max(0, Math.round(Number(amount) || 0)));
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.focus();
 }
@@ -478,7 +530,7 @@ function renderCashQuickAmounts() {
     if (!amounts.length) amounts.push(0);
     box.innerHTML = amounts.map((amount, index) => `
         <button type="button" onclick="datTienKhachDua(${amount})">
-            ${index === 0 ? 'Đủ · ' : ''}${amount.toLocaleString('vi-VN')} ₫
+            ${index === 0 ? dichHtml('pos.cash.enough') : ''}${escapeHtml(dinhDangTien(amount))}
         </button>`).join('');
 }
 
@@ -500,10 +552,10 @@ function capNhatTienKhachDua() {
     const change = cashTenderedAmount - total;
     status.classList.toggle('is-short', paymentMethod === 'cash' && change < 0);
     if (paymentMethod === 'cash' && change < 0) {
-        status.firstElementChild.innerText = 'Còn thiếu';
+        status.firstElementChild.innerText = dich('pos.cash.remaining');
         output.innerText = dinhDangTien(Math.abs(change));
     } else {
-        status.firstElementChild.innerText = 'Tiền thối';
+        status.firstElementChild.innerText = dich('pos.cash.change');
         output.innerText = dinhDangTien(Math.max(0, change));
     }
     capNhatNutCheckout();
@@ -516,20 +568,20 @@ function capNhatNutCheckout() {
     const pendingText = document.getElementById('cashPendingText');
     if (pendingNotice) pendingNotice.style.display = pendingCashOrderId ? 'block' : 'none';
     if (pendingText && pendingCashOrderId) {
-        pendingText.innerText = `Đơn #${pendingCashOrderId} đã tạo nhưng chưa ghi nhận thanh toán.`;
+        pendingText.innerText = dich('pos.cash.pending_order', { id: pendingCashOrderId });
     }
     const thieuTien = paymentMethod === 'cash' && cashTenderedAmount < total;
     const donQRDangCho = currentOrderId !== null && !pendingCashOrderId;
     button.disabled = checkoutBusy || !activeShift || cart.length === 0 || thieuTien || donQRDangCho;
     button.innerHTML = pendingCashOrderId
-        ? '<i class="ph ph-arrow-clockwise"></i> Thử thu tiền lại'
+        ? htmlNut('ph-arrow-clockwise', 'pos.checkout.retry_cash')
         : (checkoutOperationId
-            ? '<i class="ph ph-arrow-clockwise"></i> Thử tạo đơn lại'
-            : '<i class="ph ph-check-circle"></i> Hoàn tất Đơn Hàng');
-    if (!activeShift) button.title = 'Mở ca trước khi bán hàng';
-    else if (cart.length === 0) button.title = 'Giỏ hàng đang trống';
-    else if (thieuTien) button.title = 'Tiền khách đưa chưa đủ';
-    else if (donQRDangCho) button.title = 'Đang chờ thanh toán đơn hiện tại';
+            ? htmlNut('ph-arrow-clockwise', 'pos.checkout.retry_create')
+            : htmlNut('ph-check-circle', 'pos.checkout.complete'));
+    if (!activeShift) button.title = dich('pos.checkout.open_shift_title');
+    else if (cart.length === 0) button.title = dich('pos.cart.empty');
+    else if (thieuTien) button.title = dich('pos.checkout.cash_short_title');
+    else if (donQRDangCho) button.title = dich('pos.checkout.waiting_title');
     else button.title = '';
 }
 
@@ -594,12 +646,16 @@ function phucHoiCheckoutDangDo() {
     const cashInput = document.getElementById('cashTenderedInput');
     if (cashInput) {
         cashInput.value = cashTenderedAmount
-            ? cashTenderedAmount.toLocaleString('vi-VN')
+            ? dinhDangSoPOS(cashTenderedAmount)
             : '';
     }
     if (selectedCustomerId !== null) {
         const selected = document.getElementById('khachDaChon');
-        if (selected) selected.innerText = state.selected_customer_text || `Khách hàng #${selectedCustomerId}`;
+        if (selected) {
+            selected.removeAttribute('data-i18n');
+            selected.innerText = state.selected_customer_text
+                || dich('pos.customer.numbered', { id: selectedCustomerId });
+        }
         const chooser = document.getElementById('khachChuaChon');
         const clearButton = document.getElementById('khachBoChon');
         if (chooser) chooser.style.display = 'none';
@@ -614,11 +670,11 @@ function phucHoiCheckoutDangDo() {
         document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total ?? total);
         document.getElementById('qrSection').style.display = 'block';
         startPaymentPolling();
-        showToast(`Đã phục hồi đơn chuyển khoản #${currentOrderId}`);
+        showToast(dich('pos.payment.restored_transfer', { id: currentOrderId }));
     } else if (state.phase === 'cash_pending' && currentOrderId) {
-        showToast(`Đã phục hồi đơn tiền mặt #${currentOrderId}; hãy thu tiền hoặc hủy đơn`);
+        showToast(dich('pos.payment.restored_cash', { id: currentOrderId }));
     } else {
-        showToast('Kết quả tạo đơn trước đó chưa rõ; bấm “Thử tạo đơn lại”');
+        showToast(dich('pos.payment.restored_unknown'));
     }
     capNhatNutCheckout();
     return true;
@@ -634,6 +690,8 @@ function taoOperationId() {
 }
 
 function capNhatThanhCa(state = activeShift ? 'open' : 'closed', message = '') {
+    shiftBarState = state;
+    shiftBarMessage = message;
     const bar = document.getElementById('shiftBar');
     const text = document.getElementById('shiftStatusText');
     const meta = document.getElementById('shiftStatusMeta');
@@ -646,27 +704,32 @@ function capNhatThanhCa(state = activeShift ? 'open' : 'closed', message = '') {
     bar.classList.add(`is-${state}`);
 
     if (state === 'loading') {
-        text.innerText = 'Đang kiểm tra ca làm việc...';
-        meta.innerText = 'Trạng thái được tải trực tiếp từ máy chủ';
+        text.innerText = dich('pos.shift.checking');
+        meta.innerText = dich('pos.shift.server_status');
         openButton.style.display = 'none';
         movementButton.style.display = 'none';
         closeButton.style.display = 'none';
     } else if (state === 'open' && activeShift) {
-        const nguoiMo = activeShift.opened_by_username || localStorage.getItem('username') || 'Nhân viên';
-        text.innerText = `Ca #${activeShift.id} đang mở`;
-        meta.innerText = `${nguoiMo} · từ ${dinhDangNgayGio(activeShift.opened_at)}`;
+        const nguoiMo = activeShift.opened_by_username
+            || localStorage.getItem('username')
+            || dich('pos.shift.employee');
+        text.innerText = dich('pos.shift.opened', { id: activeShift.id });
+        meta.innerText = dich('pos.shift.opened_meta', {
+            username: nguoiMo,
+            time: dinhDangNgayGio(activeShift.opened_at)
+        });
         openButton.style.display = 'none';
         movementButton.style.display = '';
         closeButton.style.display = '';
     } else if (state === 'error') {
-        text.innerText = 'Chưa xác định được trạng thái ca';
-        meta.innerText = message || 'Kiểm tra kết nối rồi tải lại trang';
+        text.innerText = dich('pos.shift.unknown');
+        meta.innerText = message || dich('pos.shift.connection_help');
         openButton.style.display = 'none';
         movementButton.style.display = 'none';
         closeButton.style.display = 'none';
     } else {
-        text.innerText = 'Chưa mở ca';
-        meta.innerText = 'Mở ca để bắt đầu bán và ghi nhận tiền mặt';
+        text.innerText = dich('pos.shift.not_open');
+        meta.innerText = dich('pos.shift.not_open_help');
         openButton.style.display = '';
         movementButton.style.display = 'none';
         closeButton.style.display = 'none';
@@ -692,7 +755,7 @@ async function loadCurrentShift(hienLoi = true) {
         if (requestId !== shiftRequestId) return activeShift;
         activeShift = null;
         capNhatThanhCa('error', e.message);
-        if (hienLoi) showToast(e.message || 'Không tải được trạng thái ca');
+        if (hienLoi) showToast(e.message || dich('pos.shift.load_error'));
         return null;
     }
 }
@@ -720,22 +783,28 @@ function dongModalCa(modalId) {
     modalCaFocusTruoc = null;
 }
 
-function datNutDangXuLy(buttonId, dangXuLy, textDangXuLy = 'Đang xử lý...') {
+function datNutDangXuLy(buttonId, dangXuLy, translationKey = 'pos.processing') {
     const button = document.getElementById(buttonId);
     if (!button) return;
     if (dangXuLy) {
-        button.dataset.normalHtml = button.innerHTML;
-        button.innerHTML = `<i class="ph ph-spinner-gap ph-spin"></i> ${textDangXuLy}`;
+        if (!button.dataset.processingKey) button.dataset.normalHtml = button.innerHTML;
+        button.dataset.processingKey = translationKey;
+        button.innerHTML = htmlNut('ph-spinner-gap ph-spin', translationKey);
         button.disabled = true;
     } else {
-        if (button.dataset.normalHtml) button.innerHTML = button.dataset.normalHtml;
+        if (button.dataset.normalHtml) {
+            button.innerHTML = button.dataset.normalHtml;
+            window.FSellingI18n?.apply?.(button);
+        }
+        delete button.dataset.processingKey;
+        delete button.dataset.normalHtml;
         button.disabled = false;
     }
 }
 
 function moModalMoCa() {
-    if (!currentShopId) return showToast('Vui lòng chọn cửa hàng');
-    if (activeShift) return showToast('Bạn đang có một ca mở');
+    if (!currentShopId) return showToast(dich('pos.shift.select_shop'));
+    if (activeShift) return showToast(dich('pos.shift.already_open'));
     document.getElementById('openingCashInput').value = '0';
     document.getElementById('openingShiftNote').value = '';
     hienModalCa('openShiftModal', 'openingCashInput');
@@ -745,7 +814,7 @@ async function moCa() {
     if (!currentShopId || activeShift) return;
     const openingCash = docGiaTriTien(document.getElementById('openingCashInput').value);
     const note = document.getElementById('openingShiftNote').value.trim();
-    datNutDangXuLy('btnSubmitOpenShift', true, 'Đang mở ca...');
+    datNutDangXuLy('btnSubmitOpenShift', true, 'pos.shift.opening');
     try {
         activeShift = await apiCall(`/shifts/${currentShopId}/open`, 'POST', {
             opening_cash_amount: openingCash,
@@ -753,7 +822,7 @@ async function moCa() {
         });
         dongModalCa('openShiftModal');
         capNhatThanhCa('open');
-        showToast(`Đã mở ca #${activeShift.id}`);
+        showToast(dich('pos.shift.opened_success', { id: activeShift.id }));
     } catch (e) {
         showToast(e.message);
         // Nếu phản hồi bị mất sau khi server đã mở ca, lần tải này lấy lại đúng
@@ -770,7 +839,7 @@ function chonLoaiThuChi(type, persistDraft = true) {
     document.getElementById('btnMovementIn').classList.toggle('active', movementType === 'PAY_IN');
     document.getElementById('btnMovementOut').classList.toggle('active', movementType === 'PAY_OUT');
     document.getElementById('movementNote').placeholder =
-        movementType === 'PAY_IN' ? 'Ví dụ: Nộp thêm tiền lẻ vào quầy' : 'Ví dụ: Chi mua túi đóng gói';
+        dich(movementType === 'PAY_IN' ? 'pos.movement.note_in' : 'pos.movement.note_out');
     if (persistDraft) capNhatMovementDraft();
 }
 
@@ -782,8 +851,8 @@ function khoaFormMovement(locked) {
     const submit = document.getElementById('btnSubmitMovement');
     if (submit && !submit.disabled) {
         submit.innerHTML = locked
-            ? '<i class="ph ph-arrow-clockwise"></i> Thử ghi lại đúng khoản này'
-            : '<i class="ph ph-check-circle"></i> Ghi nhận';
+            ? htmlNut('ph-arrow-clockwise', 'pos.movement.retry_exact')
+            : htmlNut('ph-check-circle', 'pos.movement.record');
     }
 }
 
@@ -807,7 +876,7 @@ function capNhatMovementDraft() {
 }
 
 function moModalThuChi() {
-    if (!activeShift) return showToast('Hãy mở ca trước khi ghi nhận thu / chi');
+    if (!activeShift) return showToast(dich('pos.shift.open_before_movement'));
     pendingMovementState = docMovementDangDo(activeShift.id);
     if (!pendingMovementState) {
         pendingMovementState = luuMovementDangDo({
@@ -824,7 +893,7 @@ function moModalThuChi() {
         : pendingMovementState.draft;
     movementType = values?.movement_type === 'PAY_OUT' ? 'PAY_OUT' : 'PAY_IN';
     document.getElementById('movementAmountInput').value =
-        Number(values?.amount) > 0 ? Number(values.amount).toLocaleString('vi-VN') : '';
+        Number(values?.amount) > 0 ? dinhDangSoPOS(values.amount) : '';
     document.getElementById('movementNote').value = values?.note || '';
     chonLoaiThuChi(movementType, false);
     khoaFormMovement(Boolean(pendingMovementState.submitted));
@@ -832,7 +901,7 @@ function moModalThuChi() {
 }
 
 async function ghiNhanThuChi() {
-    if (!activeShift) return showToast('Ca đã đóng hoặc không còn tồn tại');
+    if (!activeShift) return showToast(dich('pos.shift.closed_or_missing'));
     let state = pendingMovementState || docMovementDangDo(activeShift.id);
     let payload = state?.submitted ? state.payload : null;
     if (!payload) {
@@ -841,11 +910,11 @@ async function ghiNhanThuChi() {
         const note = document.getElementById('movementNote').value.trim();
         if (amount <= 0) {
             amountInput.focus();
-            return showToast('Vui lòng nhập số tiền lớn hơn 0');
+            return showToast(dich('pos.movement.amount_required'));
         }
         if (!note) {
             document.getElementById('movementNote').focus();
-            return showToast('Vui lòng nhập lý do thu / chi');
+            return showToast(dich('pos.movement.reason_required'));
         }
         if (!state) {
             state = {
@@ -871,13 +940,18 @@ async function ghiNhanThuChi() {
     pendingMovementState = state;
     movementOperationId = state.operation_id;
     khoaFormMovement(true);
-    datNutDangXuLy('btnSubmitMovement', true, 'Đang ghi...');
+    datNutDangXuLy('btnSubmitMovement', true, 'pos.movement.recording');
     try {
         const res = await apiCall(`/shifts/${state.shift_id}/movements`, 'POST', payload);
         if (res?.shift) activeShift = res.shift;
         dongModalCa('cashMovementModal');
         capNhatThanhCa('open');
-        showToast(`${payload.movement_type === 'PAY_IN' ? 'Đã thu' : 'Đã chi'} ${dinhDangTien(payload.amount)}`);
+        showToast(dich(
+            payload.movement_type === 'PAY_IN'
+                ? 'pos.movement.in_success'
+                : 'pos.movement.out_success',
+            { amount: dinhDangTien(payload.amount) }
+        ));
         xoaMovementDangDo(state);
     } catch (e) {
         if (laLoi4xx(e)) {
@@ -885,13 +959,13 @@ async function ghiNhanThuChi() {
             // để người dùng sửa và gửi một thao tác mới.
             xoaMovementDangDo(state);
             khoaFormMovement(false);
-            showToast(`${e.message}. Hãy sửa thông tin rồi ghi nhận lại.`);
+            showToast(dich('pos.movement.fix_retry', { message: e.message }));
         } else {
             // Network/5xx: không biết server đã commit chưa, nên giữ nguyên state
             // và khóa form cho tới khi retry cùng payload trả về kết quả rõ ràng.
             pendingMovementState = state;
             luuMovementDangDo(state);
-            showToast(`${e.message}. Bấm “Thử ghi lại đúng khoản này” khi có mạng.`);
+            showToast(dich('pos.movement.network_retry', { message: e.message }));
         }
         await loadCurrentShift(false);
     } finally {
@@ -901,16 +975,16 @@ async function ghiNhanThuChi() {
 }
 
 async function moModalKetCa() {
-    if (!activeShift) return showToast('Không có ca đang mở');
+    if (!activeShift) return showToast(dich('pos.shift.no_open_shift'));
     const movementDangDo = docMovementDangDo(activeShift.id);
     if (movementDangDo?.submitted) {
-        return showToast('Hãy thử ghi lại khoản thu / chi đang chờ trước khi kết ca');
+        return showToast(dich('pos.shift.finish_movement_first'));
     }
     if (cart.length > 0 || currentOrderId) {
-        return showToast('Hãy hoàn tất hoặc hủy đơn hiện tại trước khi kết ca');
+        return showToast(dich('pos.shift.finish_order_first'));
     }
     await loadCurrentShift(false);
-    if (!activeShift) return showToast('Ca không còn mở hoặc không tải được dữ liệu ca');
+    if (!activeShift) return showToast(dich('pos.shift.unavailable'));
 
     document.getElementById('closeOpeningCash').innerText =
         dinhDangTien(activeShift.opening_cash_amount || 0);
@@ -932,29 +1006,35 @@ function capNhatChenhLechKetCa() {
     const expected = Number(activeShift?.expected_cash_amount);
     if (!coNhap || !Number.isFinite(expected)) {
         box.className = 'shift-difference neutral';
-        box.innerText = coNhap ? 'Không có số tiền theo sổ để so sánh' : 'Nhập tiền thực đếm để xem chênh lệch';
+        box.innerText = dich(
+            coNhap ? 'pos.shift.close_no_expected' : 'pos.shift.close_count_prompt'
+        );
         return;
     }
     const counted = docGiaTriTien(input.value);
     const variance = counted - expected;
     if (variance === 0) {
         box.className = 'shift-difference';
-        box.innerText = 'Khớp tiền theo sổ';
+        box.innerText = dich('pos.shift.close_match');
     } else if (variance < 0) {
         box.className = 'shift-difference is-short';
-        box.innerText = `Thiếu ${dinhDangTien(Math.abs(variance))}`;
+        box.innerText = dich('pos.shift.close_short', {
+            amount: dinhDangTien(Math.abs(variance))
+        });
     } else {
         box.className = 'shift-difference';
-        box.innerText = `Thừa ${dinhDangTien(variance)}`;
+        box.innerText = dich('pos.shift.close_over', {
+            amount: dinhDangTien(variance)
+        });
     }
 }
 
 async function ketCa() {
-    if (!activeShift) return showToast('Ca đã đóng hoặc không còn tồn tại');
+    if (!activeShift) return showToast(dich('pos.shift.closed_or_missing'));
     const input = document.getElementById('actualCashInput');
     if (!/\d/.test(input.value)) {
         input.focus();
-        return showToast('Vui lòng nhập tiền thực đếm');
+        return showToast(dich('pos.shift.close_enter_counted'));
     }
     const counted = docGiaTriTien(input.value);
     const expected = Number(activeShift.expected_cash_amount);
@@ -962,10 +1042,10 @@ async function ketCa() {
     const note = noteEl.value.trim();
     if (Number.isFinite(expected) && counted !== expected && !note) {
         noteEl.focus();
-        return showToast('Vui lòng ghi chú nguyên nhân khi lệch tiền');
+        return showToast(dich('pos.shift.close_note_required'));
     }
 
-    datNutDangXuLy('btnSubmitCloseShift', true, 'Đang kết ca...');
+    datNutDangXuLy('btnSubmitCloseShift', true, 'pos.shift.closing');
     try {
         const closedShift = await apiCall(`/shifts/${activeShift.id}/close`, 'POST', {
             counted_cash_amount: counted,
@@ -977,8 +1057,13 @@ async function ketCa() {
         capNhatThanhCa('closed');
         showToast(
             variance === 0
-                ? 'Đã kết ca, tiền thực tế khớp sổ'
-                : `Đã kết ca, ${variance < 0 ? 'thiếu' : 'thừa'} ${dinhDangTien(Math.abs(variance))}`
+                ? dich('pos.shift.closed_match')
+                : dich('pos.shift.closed_variance', {
+                    kind: dich(variance < 0
+                        ? 'pos.shift.variance_short'
+                        : 'pos.shift.variance_over'),
+                    amount: dinhDangTien(Math.abs(variance))
+                })
         );
     } catch (e) {
         showToast(e.message);
@@ -1039,17 +1124,23 @@ async function xacNhanTongTienServer(state) {
     const tendered = Number(state.tendered_amount) || 0;
     const chenhlech = tendered - serverTotal;
     const dongY = await xacNhan(
-        'Tổng tiền trên server đã thay đổi',
-        `Tổng vừa xác nhận: ${dinhDangTien(daXacNhan)}\n`
-        + `Tổng chính xác: ${dinhDangTien(serverTotal)}\n`
-        + `Khách đưa: ${dinhDangTien(tendered)}\n`
-        + `${chenhlech >= 0 ? 'Tiền thối' : 'Còn thiếu'}: ${dinhDangTien(Math.abs(chenhlech))}\n\n`
-        + 'Xác nhận lại tổng chính xác trước khi ghi nhận đã thu tiền.'
+        dich('pos.checkout.server_total_changed', {
+            defaultValue: 'Tổng tiền trên server đã thay đổi'
+        }),
+        dich('pos.checkout.server_total_body', {
+            confirmed: dinhDangTien(daXacNhan),
+            actual: dinhDangTien(serverTotal),
+            tendered: dinhDangTien(tendered),
+            differenceLabel: dich(
+                chenhlech >= 0 ? 'pos.cash.change' : 'pos.cash.remaining'
+            ),
+            difference: dinhDangTien(Math.abs(chenhlech))
+        })
     );
     if (!dongY) {
         state.server_total_confirmed = false;
         luuCheckoutDangDo(state);
-        showToast('Đơn đã được giữ lại; cần xác nhận tổng mới trước khi thu tiền');
+        showToast(dich('pos.checkout.new_total_retained'));
         return false;
     }
     state.server_total_confirmed = true;
@@ -1059,7 +1150,7 @@ async function xacNhanTongTienServer(state) {
 
 async function hoanTatTienMatDangCho(state) {
     const idDon = Number(state.order_id);
-    if (!idDon) throw new Error('Không có mã đơn tiền mặt để thanh toán');
+    if (!idDon) throw new Error(dich('pos.checkout.no_cash_order_id'));
 
     currentOrderId = idDon;
     pendingCashOrderId = idDon;
@@ -1071,7 +1162,9 @@ async function hoanTatTienMatDangCho(state) {
     if (!await xacNhanTongTienServer(state)) return false;
     if (cashTenderedAmount < total) {
         document.getElementById('cashTenderedInput')?.focus();
-        showToast(`Khách còn thiếu ${dinhDangTien(total - cashTenderedAmount)}`);
+        showToast(dich('pos.checkout.customer_short', {
+            amount: dinhDangTien(total - cashTenderedAmount)
+        }));
         return false;
     }
 
@@ -1082,7 +1175,9 @@ async function hoanTatTienMatDangCho(state) {
     // state durable của tab.
     xoaCheckoutDangDo();
     pendingCashOrderId = null;
-    showToast(`Thu tiền mặt thành công, thối ${dinhDangTien(cashTenderedAmount - total)}`);
+    showToast(dich('pos.checkout.cash_success', {
+        amount: dinhDangTien(cashTenderedAmount - total)
+    }));
     await hienHoaDon(idDon);
     return true;
 }
@@ -1107,7 +1202,7 @@ async function guiYeuCauTaoDonDangDo(state) {
         if (state.qr_url) document.getElementById('qrImage').src = state.qr_url;
         document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total);
         document.getElementById('qrSection').style.display = 'block';
-        showToast('Tạo đơn thành công! Khách vui lòng quét mã.');
+        showToast(dich('pos.checkout.created_transfer'));
         DocTien.chuanBiSoTien(res.total);
         startPaymentPolling();
         return;
@@ -1153,22 +1248,24 @@ async function checkout() {
     if (pendingCashOrderId) return thuTienMatDonDangCho();
     if (checkoutOperationId) {
         if (!activeShift) {
-            showToast('Hãy mở ca trước khi thử tạo lại đơn');
+            showToast(dich('pos.checkout.open_shift_retry'));
             return moModalMoCa();
         }
         const state = pendingCheckoutState || docCheckoutDangDo();
         return thuTaoDonDangDo(state);
     }
-    if (currentOrderId) return showToast('Đang có một đơn chờ thanh toán');
-    if(cart.length === 0) return showToast('Giỏ hàng trống!');
+    if (currentOrderId) return showToast(dich('pos.checkout.order_exists'));
+    if(cart.length === 0) return showToast(dich('pos.checkout.empty_cart'));
     if(!activeShift) {
-        showToast('Hãy mở ca trước khi bán hàng');
+        showToast(dich('pos.checkout.open_shift_first'));
         return moModalMoCa();
     }
     capNhatTienKhachDua();
     if (paymentMethod === 'cash' && cashTenderedAmount < total) {
         document.getElementById('cashTenderedInput')?.focus();
-        return showToast(`Khách còn thiếu ${dinhDangTien(total - cashTenderedAmount)}`);
+        return showToast(dich('pos.checkout.customer_short', {
+            amount: dinhDangTien(total - cashTenderedAmount)
+        }));
     }
 
     // Xác nhận trước khi chốt. Tạo đơn là TRỪ TỒN KHO ngay, và với tiền mặt còn
@@ -1176,14 +1273,29 @@ async function checkout() {
     // món rất dễ xảy ra mà danh sách lại cuộn nên khó thấy, nên bắt buộc phải
     // có một lần đối chiếu tổng số món và tổng tiền bằng mắt.
     const soMon = cart.reduce((n, i) => n + i.quantity, 0);
-    const tenPTTT = paymentMethod === 'cash' ? 'Tiền mặt' : 'Chuyển khoản (VietQR)';
-    const dongTomTat = cart.map(i => `  ${i.product_name}  ${i.price.toLocaleString()} × ${i.quantity}`).join('\n');
+    const tenPTTT = dich(
+        paymentMethod === 'cash' ? 'pos.payment.cash' : 'pos.payment.transfer'
+    );
+    const dongTomTat = cart
+        .map(i => `  ${i.product_name}  ${dinhDangTien(i.price)} × ${dinhDangSoPOS(i.quantity)}`)
+        .join('\n');
     const tomTatTienMat = paymentMethod === 'cash'
-        ? `\nKhách đưa: ${dinhDangTien(cashTenderedAmount)}\nTiền thối: ${dinhDangTien(cashTenderedAmount - total)}`
+        ? dich('pos.checkout.confirm_cash', {
+            tendered: dinhDangTien(cashTenderedAmount),
+            change: dinhDangTien(cashTenderedAmount - total)
+        })
         : '';
     const dongY = await xacNhan(
-        `Chốt đơn ${cart.length} mặt hàng (${soMon} món)?`,
-        `${dongTomTat}\n\nTỔNG CẦN THU: ${total.toLocaleString()} đ\nThanh toán: ${tenPTTT}${tomTatTienMat}`
+        dich('pos.checkout.confirm_title', {
+            lineCount: cart.length,
+            itemCount: soMon
+        }),
+        dich('pos.checkout.confirm_body', {
+            items: dongTomTat,
+            total: dinhDangTien(total),
+            method: tenPTTT,
+            cashSummary: tomTatTienMat
+        })
     );
     if (!dongY) return;
 
@@ -1203,10 +1315,10 @@ async function checkout() {
 
 async function thuTienMatDonDangCho() {
     if (!pendingCashOrderId || checkoutBusy) return;
-    if (!activeShift) return showToast('Ca đã đóng hoặc không còn tồn tại');
+    if (!activeShift) return showToast(dich('pos.shift.closed_or_missing'));
     const state = pendingCheckoutState || docCheckoutDangDo();
     if (!state || state.phase !== 'cash_pending') {
-        return showToast('Không tìm thấy trạng thái đơn tiền mặt để thử lại');
+        return showToast(dich('pos.checkout.cash_state_missing'));
     }
     checkoutBusy = true;
     capNhatNutCheckout();
@@ -1220,7 +1332,9 @@ async function thuTienMatDonDangCho() {
             currentOrderId = null;
             pendingCashOrderId = null;
             checkoutOperationId = null;
-            showToast(`${e.message}. Đơn không còn tồn tại, vui lòng tạo lại.`);
+            showToast(dich('pos.checkout.order_missing_recreate', {
+                message: e.message
+            }));
         } else {
             // Các 4xx khác vẫn có thể là đơn PENDING hợp lệ (ca đóng, chưa đủ
             // tiền...). Giữ order_id để người dùng thu hoặc hủy đúng đơn đó.
@@ -1228,7 +1342,7 @@ async function thuTienMatDonDangCho() {
             showToast(
                 laLoi4xx(e)
                     ? e.message
-                    : `${e.message}. Có thể bấm “Thử thu tiền lại”.`
+                    : dich('pos.checkout.retry_cash_hint', { message: e.message })
             );
         }
     } finally {
@@ -1241,17 +1355,19 @@ async function cancelOrder() {
     if(!currentOrderId) return;
     const idDon = currentOrderId;
     const dongY = await xacNhan(
-        `Hủy đơn #${idDon}?`,
-        'Hàng trong đơn sẽ được trả lại kho.'
+        dich('pos.order.cancel_title', { id: idDon }),
+        dich('pos.order.cancel_body')
     );
     if (!dongY) return;
     try {
         const res = await apiCall(`/orders/${idDon}/cancel`, 'POST');
         stopPaymentPolling();
         if(res.unrestored_items > 0) {
-            showToast(`Đã hủy đơn. Có ${res.unrestored_items} dòng không hoàn kho được, vui lòng kiểm tra lại tồn kho.`);
+            showToast(dich('pos.order.cancel_partial', {
+                count: res.unrestored_items
+            }));
         } else {
-            showToast("Đã hủy đơn và hoàn lại hàng vào kho.");
+            showToast(dich('pos.order.cancel_success'));
         }
         resetPOS();
     } catch (e) {
@@ -1265,7 +1381,9 @@ async function cancelOrder() {
             checkoutOperationId = null;
             document.getElementById('qrSection').style.display = 'none';
             capNhatNutCheckout();
-            return showToast(`${e.message}. Đơn không còn tồn tại.`);
+            return showToast(dich('pos.order.no_longer_exists', {
+                message: e.message
+            }));
         }
         showToast(e.message);
     }
@@ -1283,6 +1401,7 @@ async function kiemTraThanhToan() {
     try {
         const statusRes = await apiCall(`/orders/${idDon}`);
         if(idDon !== currentOrderId) return;
+        lastPaymentStatus = statusRes;
 
         if(statusRes.status === 'PAID') {
             stopPaymentPolling();
@@ -1294,18 +1413,20 @@ async function kiemTraThanhToan() {
                     statusRes.received_amount,
                     statusRes.refund_due_amount
                 );
-                showToast(`Đã thanh toán. Khách chuyển thừa ${dinhDangTien(statusRes.refund_due_amount)} — cần hoàn lại.`);
+                showToast(dich('pos.payment.overpaid', {
+                    amount: dinhDangTien(statusRes.refund_due_amount)
+                }));
             } else {
                 DocTien.thongBaoDaNhan(
                     idDon,
                     statusRes.received_amount || statusRes.total_amount
                 );
-                showToast('Thanh toán chuyển khoản thành công!');
+                showToast(dich('pos.payment.transfer_success'));
             }
             await hienHoaDon(idDon);
         } else if(statusRes.status === 'CANCELLED') {
             stopPaymentPolling();
-            showToast('Đơn đã bị hủy, hàng đã được hoàn về kho.');
+            showToast(dich('pos.payment.cancelled'));
             resetPOS();
         } else if(statusRes.status === 'UNRECONCILED') {
             renderPaymentStatus(statusRes);
@@ -1320,11 +1441,13 @@ async function kiemTraThanhToan() {
                         statusRes.received_amount,
                         statusRes.remaining_amount
                     );
-                    showToast(`Chưa đủ tiền: còn thiếu ${dinhDangTien(statusRes.remaining_amount)}. Chưa xuất hóa đơn.`);
+                    showToast(dich('pos.payment.underpaid', {
+                        amount: dinhDangTien(statusRes.remaining_amount)
+                    }));
                 }
             } else {
                 stopPaymentPolling();
-                showToast('Khoản tiền này cần đối soát riêng. Không giao hàng và không xuất hóa đơn.');
+                showToast(dich('pos.payment.review_required'));
             }
         }
     } catch (err) {
@@ -1333,10 +1456,14 @@ async function kiemTraThanhToan() {
 }
 
 function dinhDangTien(value) {
+    if (window.FSellingI18n?.formatMoney) {
+        return window.FSellingI18n.formatMoney(Math.round(Number(value) || 0));
+    }
     return `${Math.round(Number(value) || 0).toLocaleString('vi-VN')} ₫`;
 }
 
 function renderPaymentStatus(statusRes) {
+    lastPaymentStatus = statusRes;
     const box = document.getElementById('paymentStatusBox');
     const title = document.getElementById('paymentStatusTitle');
     const cashButton = document.getElementById('btnCashTopup');
@@ -1348,14 +1475,20 @@ function renderPaymentStatus(statusRes) {
     document.getElementById('paymentRemaining').innerText = dinhDangTien(statusRes.remaining_amount);
 
     if(statusRes.reconciliation_reason === 'UNDERPAID') {
-        title.innerText = 'Đã nhận thiếu tiền — chưa xuất hóa đơn';
+        title.innerText = dich('pos.payment.underpaid_title');
         cashButton.style.display = 'block';
-        cashButton.innerHTML = `<i class="ph ph-money"></i> Thu bù ${dinhDangTien(statusRes.remaining_amount)} bằng tiền mặt`;
+        cashButton.innerHTML = htmlNut(
+            'ph-money',
+            'pos.payment.cash_topup_amount',
+            { amount: dinhDangTien(statusRes.remaining_amount) }
+        );
     } else if(statusRes.reconciliation_reason === 'LATE_PAYMENT') {
-        title.innerText = `Tiền về sau khi đơn đã hủy — cần hoàn ${dinhDangTien(statusRes.refund_due_amount)}`;
+        title.innerText = dich('pos.payment.late_title', {
+            amount: dinhDangTien(statusRes.refund_due_amount)
+        });
         cashButton.style.display = 'none';
     } else {
-        title.innerText = 'Đơn cần kiểm tra đối soát';
+        title.innerText = dich('pos.payment.review_title');
         cashButton.style.display = 'none';
     }
 
@@ -1375,22 +1508,27 @@ async function buTienMatPhanThieu() {
             statusRes.status !== 'UNRECONCILED'
             || statusRes.reconciliation_reason !== 'UNDERPAID'
         ) {
-            return showToast('Đơn không còn ở trạng thái thiếu tiền. Đang tải lại...');
+            return showToast(dich('pos.payment.no_longer_underpaid'));
         }
         const remaining = Number(statusRes.remaining_amount || 0);
         const dongY = await xacNhan(
-            `Thu bù ${dinhDangTien(remaining)} bằng tiền mặt?`,
-            `Đơn #${idDon} đã nhận ${dinhDangTien(statusRes.received_amount)} qua ngân hàng.\n\nSau khi xác nhận, hóa đơn sẽ được xuất ngay.`
+            dich('pos.payment.topup_confirm_title', {
+                amount: dinhDangTien(remaining)
+            }),
+            dich('pos.payment.topup_confirm_body', {
+                id: idDon,
+                received: dinhDangTien(statusRes.received_amount)
+            })
         );
         if(!dongY) return;
         const result = await apiCall(
             `/orders/${idDon}/cash-topup`,
             'POST',
-            { amount: remaining, note: 'Thu bù tại quầy POS' }
+            { amount: remaining, note: 'SYSTEM_POS_CASH_TOPUP' }
         );
         if(result.status === 'PAID') {
             stopPaymentPolling();
-            showToast('Đã thu đủ phần thiếu bằng tiền mặt.');
+            showToast(dich('pos.payment.topup_success'));
             await hienHoaDon(idDon);
         } else {
             renderPaymentStatus(result);
@@ -1424,11 +1562,38 @@ async function hienHoaDon(orderId) {
         d = await apiCall(`/orders/${orderId}/detail`);
     } catch (e) {
         resetPOS();
-        return showToast(`Đã thanh toán đơn #${orderId}, nhưng không tải được hóa đơn: ${e.message}`);
+        return showToast(dich('pos.order.paid_receipt_error', {
+            id: orderId,
+            message: e.message
+        }));
     }
     resetPOS();
     veHoaDon(d);
     document.getElementById('hoaDonSection').style.display = 'block';
+}
+
+// Hóa đơn là tài liệu giao cho khách tại Việt Nam nên luôn giữ tiếng Việt,
+// kể cả khi nhân viên đang vận hành POS bằng English.
+function dinhDangSoHoaDon(value) {
+    return Math.round(Number(value) || 0).toLocaleString('vi-VN');
+}
+
+function dinhDangTienHoaDon(value) {
+    return `${dinhDangSoHoaDon(value)} ₫`;
+}
+
+function dinhDangNgayGioHoaDon(value) {
+    const date = window.FSellingI18n?.parseServerDate
+        ? window.FSellingI18n.parseServerDate(value)
+        : null;
+    if (date) return date.toLocaleString('vi-VN');
+    if (!value) return '';
+    let normalized = String(value);
+    if (!/(Z|[+-]\d{2}:?\d{2})$/.test(normalized)) normalized += 'Z';
+    const fallbackDate = new Date(normalized);
+    return Number.isNaN(fallbackDate.getTime())
+        ? String(value)
+        : fallbackDate.toLocaleString('vi-VN');
 }
 
 function veHoaDon(d) {
@@ -1446,34 +1611,34 @@ function veHoaDon(d) {
     const dongHang = (d.items || []).map(i => `
         <tr>
             <td style="padding:0.25rem 0;">${escapeHtml(i.product_name)}<br>
-                <span style="color:#64748B; font-size:0.8rem;">${(i.price || 0).toLocaleString()} × ${i.quantity}</span></td>
-            <td style="padding:0.25rem 0; text-align:right; white-space:nowrap; font-weight:600;">${(i.line_total || 0).toLocaleString()} ₫</td>
+                <span style="color:#64748B; font-size:0.8rem;">${dinhDangSoHoaDon(i.price)} × ${i.quantity}</span></td>
+            <td style="padding:0.25rem 0; text-align:right; white-space:nowrap; font-weight:600;">${dinhDangTienHoaDon(i.line_total)}</td>
         </tr>`).join('');
 
-    let tongKet = `<div style="display:flex; justify-content:space-between;"><span>Tạm tính</span><span>${(d.subtotal || 0).toLocaleString()} ₫</span></div>`;
+    let tongKet = `<div style="display:flex; justify-content:space-between;"><span>Tạm tính</span><span>${dinhDangTienHoaDon(d.subtotal)}</span></div>`;
     if (d.discount_amount > 0) {
         const ma = d.voucher_code ? ` (${escapeHtml(d.voucher_code)})` : '';
-        tongKet += `<div style="display:flex; justify-content:space-between; color:#B45309;"><span>Giảm giá${ma}</span><span>- ${d.discount_amount.toLocaleString()} ₫</span></div>`;
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#B45309;"><span>Giảm giá${ma}</span><span>- ${dinhDangTienHoaDon(d.discount_amount)}</span></div>`;
     }
-    tongKet += `<div style="display:flex; justify-content:space-between; font-size:1.15rem; font-weight:700; margin-top:0.4rem; padding-top:0.4rem; border-top:2px solid #0F172A;"><span>TỔNG CỘNG</span><span>${(d.total_amount || 0).toLocaleString()} ₫</span></div>`;
+    tongKet += `<div style="display:flex; justify-content:space-between; font-size:1.15rem; font-weight:700; margin-top:0.4rem; padding-top:0.4rem; border-top:2px solid #0F172A;"><span>TỔNG CỘNG</span><span>${dinhDangTienHoaDon(d.total_amount)}</span></div>`;
     if (coChuyenKhoan && coTienMat) {
-        tongKet += `<div style="display:flex; justify-content:space-between; margin-top:0.35rem;"><span>Qua ngân hàng</span><span>${dinhDangTien(d.bank_paid_amount)}</span></div>`;
-        tongKet += `<div style="display:flex; justify-content:space-between;"><span>Bù tiền mặt</span><span>${dinhDangTien(d.cash_paid_amount)}</span></div>`;
+        tongKet += `<div style="display:flex; justify-content:space-between; margin-top:0.35rem;"><span>Qua ngân hàng</span><span>${dinhDangTienHoaDon(d.bank_paid_amount)}</span></div>`;
+        tongKet += `<div style="display:flex; justify-content:space-between;"><span>Bù tiền mặt</span><span>${dinhDangTienHoaDon(d.cash_paid_amount)}</span></div>`;
     }
     if (coTienKhachDua) {
-        tongKet += `<div style="display:flex; justify-content:space-between; margin-top:0.35rem;"><span>Khách đưa</span><span>${dinhDangTien(d.cash_tendered_amount)}</span></div>`;
-        tongKet += `<div style="display:flex; justify-content:space-between; color:#047857; font-weight:700;"><span>Tiền thối</span><span>${dinhDangTien(d.cash_change_amount || 0)}</span></div>`;
+        tongKet += `<div style="display:flex; justify-content:space-between; margin-top:0.35rem;"><span>Khách đưa</span><span>${dinhDangTienHoaDon(d.cash_tendered_amount)}</span></div>`;
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#047857; font-weight:700;"><span>Tiền thối</span><span>${dinhDangTienHoaDon(d.cash_change_amount || 0)}</span></div>`;
     }
     if (d.refund_pending) {
-        tongKet += `<div style="display:flex; justify-content:space-between; color:#B91C1C; font-weight:700; margin-top:0.35rem;"><span>Thực nhận</span><span>${dinhDangTien(d.received_amount)}</span></div>`;
-        tongKet += `<div style="display:flex; justify-content:space-between; color:#B91C1C; font-weight:700;"><span>CẦN HOÀN KHÁCH</span><span>${dinhDangTien(d.refund_due_amount)}</span></div>`;
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#B91C1C; font-weight:700; margin-top:0.35rem;"><span>Thực nhận</span><span>${dinhDangTienHoaDon(d.received_amount)}</span></div>`;
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#B91C1C; font-weight:700;"><span>CẦN HOÀN KHÁCH</span><span>${dinhDangTienHoaDon(d.refund_due_amount)}</span></div>`;
     }
 
     const warning = document.getElementById('hoaDonCanhBao');
     if (warning) {
         if (d.refund_pending) {
             warning.style.display = 'block';
-            warning.innerText = `ĐÃ XUẤT HÓA ĐƠN — CẦN HOÀN KHÁCH ${dinhDangTien(d.refund_due_amount)}`;
+            warning.innerText = `ĐÃ XUẤT HÓA ĐƠN — CẦN HOÀN KHÁCH ${dinhDangTienHoaDon(d.refund_due_amount)}`;
         } else {
             warning.style.display = 'none';
             warning.innerText = '';
@@ -1487,7 +1652,7 @@ function veHoaDon(d) {
         </div>
         <div style="font-size:0.85rem; line-height:1.7; margin-bottom:0.6rem;">
             <div><b>Số đơn:</b> #${d.id}</div>
-            <div><b>Thời gian:</b> ${dinhDangNgayGio(d.created_at)}</div>
+            <div><b>Thời gian:</b> ${dinhDangNgayGioHoaDon(d.created_at)}</div>
             <div><b>Nhân viên:</b> ${escapeHtml(nhanVien)}</div>
             <div><b>Thanh toán:</b> ${pttt}</div>
             ${d.customer ? `<div><b>Khách hàng:</b> ${escapeHtml(d.customer.name)} (${escapeHtml(d.customer.phone)})</div>` : ''}
@@ -1509,6 +1674,8 @@ function resetPOS() {
     xoaCheckoutDangDo();
     cart = [];
     currentVoucher = null;
+    voucherMessageKey = null;
+    voucherMessageRaw = '';
     document.getElementById('voucherInput').value = '';
     document.getElementById('voucherMsg').innerText = '';
     document.getElementById('qrSection').style.display = 'none';
@@ -1528,6 +1695,7 @@ function resetPOS() {
     const cashInput = document.getElementById('cashTenderedInput');
     if (cashInput) cashInput.value = '';
     lastPaymentNoticeKey = null;
+    lastPaymentStatus = null;
     boChonKhach();  // trả về khách vãng lai cho đơn tiếp theo
     calcCart();
     loadProducts(); // refresh stock
@@ -1538,7 +1706,10 @@ function boChonKhach() {
     if (dangKhoaChinhSuaDon()) return;
     selectedCustomerId = null;
     const el = id => document.getElementById(id);
-    if (el('khachDaChon')) el('khachDaChon').innerText = 'Khách vãng lai';
+    if (el('khachDaChon')) {
+        el('khachDaChon').setAttribute('data-i18n', 'pos.customer.walk_in');
+        el('khachDaChon').innerText = dich('pos.customer.walk_in');
+    }
     if (el('khachChuaChon')) el('khachChuaChon').style.display = 'block';
     if (el('khachBoChon')) el('khachBoChon').style.display = 'none';
     if (el('posCustResults')) el('posCustResults').innerHTML = '';
@@ -1549,7 +1720,9 @@ function boChonKhach() {
 function chonKhach(id, ten, sdt) {
     if (dangKhoaChinhSuaDon()) return;
     selectedCustomerId = id;
-    document.getElementById('khachDaChon').innerText = `${ten} (${sdt})`;
+    const selected = document.getElementById('khachDaChon');
+    selected.removeAttribute('data-i18n');
+    selected.innerText = `${ten} (${sdt})`;
     document.getElementById('khachChuaChon').style.display = 'none';
     document.getElementById('khachBoChon').style.display = 'block';
 }
@@ -1562,12 +1735,21 @@ async function timKhachPOS() {
         const list = await apiCall(`/customers/${currentShopId}?q=${encodeURIComponent(q)}`);
         const box = document.getElementById('posCustResults');
         if (!list.length) {
-            box.innerHTML = `<div style="color:#94A3B8; font-size:0.8rem;">Không tìm thấy. Bấm <i class="ph ph-user-plus"></i> để thêm mới.</div>`;
+            box.innerHTML = `<div style="color:#94A3B8; font-size:0.8rem;">${dichHtml('pos.customer.not_found')}</div>`;
             return;
         }
-        box.innerHTML = list.slice(0, 5).map(c =>
-            `<button class="btn-outline" style="width:100%; text-align:left; padding:0.35rem 0.5rem; margin-bottom:0.25rem; font-size:0.85rem;" onclick="chonKhach(${c.id}, '${escapeHtml(c.name)}', '${escapeHtml(c.phone)}')">${escapeHtml(c.name)} — ${escapeHtml(c.phone)}</button>`
-        ).join('');
+        box.innerHTML = '';
+        list.slice(0, 5).forEach(customer => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn-outline';
+            button.style.cssText = 'width:100%; text-align:left; padding:0.35rem 0.5rem; margin-bottom:0.25rem; font-size:0.85rem;';
+            button.textContent = `${customer.name} — ${customer.phone}`;
+            button.addEventListener('click', () => {
+                chonKhach(customer.id, customer.name, customer.phone);
+            });
+            box.appendChild(button);
+        });
     } catch (e) { showToast(e.message); }
 }
 
@@ -1586,14 +1768,14 @@ async function taoKhachPOS() {
     if (dangKhoaChinhSuaDon()) return;
     const name = document.getElementById('posCustNewName').value.trim();
     const phone = document.getElementById('posCustNewPhone').value.trim();
-    if (!name) return showToast('Vui lòng nhập tên khách');
-    if (!phone) return showToast('Vui lòng nhập số điện thoại');
+    if (!name) return showToast(dich('pos.customer.name_required'));
+    if (!phone) return showToast(dich('pos.customer.phone_required'));
     try {
         const kh = await apiCall(`/customers/${currentShopId}`, 'POST', { name, phone });
         document.getElementById('posCustNewName').value = '';
         document.getElementById('posCustNewPhone').value = '';
         chonKhach(kh.id, kh.name, kh.phone);
-        showToast('Đã thêm và chọn khách');
+        showToast(dich('pos.customer.created'));
     } catch (e) { showToast(e.message); }
 }
 
@@ -1630,6 +1812,87 @@ document.addEventListener('keydown', event => {
     if (modalMo) dongModalCa(modalMo.id);
 });
 
+function capNhatNgonNguPOS() {
+    // Chỉ vẽ lại từ state hiện có. Không gọi resetPOS(), không tạo request và
+    // không thay operation_id/create_payload của các thao tác đang chờ retry.
+    renderCategories();
+    filterAndRenderProducts();
+    updateUI();
+    const shopPlaceholder = document.querySelector('#shopSelect option[value=""]');
+    if (shopPlaceholder) shopPlaceholder.textContent = dich('pos.shop.select');
+    // Thông báo lỗi API thuộc locale của request cũ. Khi đổi ngôn ngữ,
+    // dùng lại hướng dẫn kết nối từ catalog hiện tại thay vì giữ câu cũ.
+    capNhatThanhCa(
+        shiftBarState,
+        shiftBarState === 'error' ? '' : shiftBarMessage
+    );
+    chonLoaiThuChi(movementType, false);
+    khoaFormMovement(Boolean(pendingMovementState?.submitted));
+
+    const voucherMessage = document.getElementById('voucherMsg');
+    if (voucherMessage) {
+        // Lỗi API dạng text thuộc ngôn ngữ của request cũ; xóa khi đổi locale
+        // thay vì giữ một câu sai ngôn ngữ trên màn hình.
+        if (voucherMessageRaw) {
+            voucherMessageRaw = '';
+            voucherMessageKey = null;
+        }
+        voucherMessage.innerText = voucherMessageKey
+            ? dich(voucherMessageKey)
+            : voucherMessageRaw;
+    }
+
+    if (selectedCustomerId === null) {
+        const selected = document.getElementById('khachDaChon');
+        if (selected) selected.innerText = dich('pos.customer.walk_in');
+    }
+
+    document.querySelectorAll('[data-money-quick]').forEach(button => {
+        button.innerText = dinhDangTien(Number(button.dataset.moneyQuick) || 0);
+    });
+    [
+        'cashTenderedInput',
+        'openingCashInput',
+        'movementAmountInput',
+        'actualCashInput'
+    ].forEach(id => {
+        const input = document.getElementById(id);
+        if (input && /\d/.test(input.value)) {
+            input.value = dinhDangSoPOS(docGiaTriTien(input.value));
+        }
+    });
+
+    document.querySelectorAll('[data-processing-key]').forEach(button => {
+        button.innerHTML = htmlNut(
+            'ph-spinner-gap ph-spin',
+            button.dataset.processingKey
+        );
+    });
+
+    if (lastPaymentStatus && document.getElementById('paymentStatusBox')?.style.display !== 'none') {
+        renderPaymentStatus(lastPaymentStatus);
+    }
+    if (pendingCheckoutState?.phase === 'transfer_pending') {
+        document.getElementById('qrTotalTxt').innerText = dinhDangTien(
+            pendingCheckoutState.server_total ?? total
+        );
+    }
+    if (document.getElementById('closeShiftModal')?.style.display === 'flex') {
+        document.getElementById('closeOpeningCash').innerText =
+            dinhDangTien(activeShift?.opening_cash_amount || 0);
+        document.getElementById('closeExpectedCash').innerText =
+            Number.isFinite(Number(activeShift?.expected_cash_amount))
+                ? dinhDangTien(activeShift.expected_cash_amount)
+                : '—';
+        capNhatChenhLechKetCa();
+    }
+}
+
+document.addEventListener('fselling:localechange', capNhatNgonNguPOS);
+
 capNhatThanhCa('loading');
 setMethod(paymentMethod);
+// Đồng bộ cả các giá trị tiền tĩnh ban đầu (0 ₫, nút tiền nhanh...) với
+// ngôn ngữ đã lưu ngay lần mở trang, không cần chờ người dùng đổi locale.
+capNhatNgonNguPOS();
 loadShop();

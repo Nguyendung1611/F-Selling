@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core.i18n import tr
 from ..dependencies import (
     PERMISSION_CUSTOMER,
     require_shop_access,
@@ -35,9 +36,15 @@ def _clean(name: str, phone: str) -> tuple:
     name_s = (name or "").strip()
     phone_s = (phone or "").strip()
     if not name_s:
-        raise HTTPException(status_code=400, detail="Tên khách hàng không được để trống")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Tên khách hàng không được để trống"),
+        )
     if not phone_s:
-        raise HTTPException(status_code=400, detail="Số điện thoại không được để trống")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Số điện thoại không được để trống"),
+        )
     return name_s, phone_s
 
 
@@ -55,7 +62,8 @@ def create_customer(
     )
     if trung:
         raise HTTPException(
-            status_code=400, detail="Số điện thoại này đã có trong danh sách khách hàng"
+            status_code=400,
+            detail=tr("Số điện thoại này đã có trong danh sách khách hàng"),
         )
 
     kh = models.Customer(
@@ -94,7 +102,7 @@ def _get_owned_customer(
 ) -> models.Customer:
     kh = db.query(models.Customer).filter(models.Customer.id == customer_id).first()
     if not kh:
-        raise HTTPException(status_code=404, detail="Không tìm thấy khách hàng")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy khách hàng"))
     require_shop_access(db, kh.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_CUSTOMER)
     return kh
@@ -121,7 +129,8 @@ def update_customer(
     )
     if trung:
         raise HTTPException(
-            status_code=400, detail="Số điện thoại này đã có trong danh sách khách hàng"
+            status_code=400,
+            detail=tr("Số điện thoại này đã có trong danh sách khách hàng"),
         )
 
     kh.name = name

@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core.i18n import tr
 from ..core.security import hash_password, is_strong_password, new_session_id
 from ..dependencies import effective_staff_role, require_own_shop
 from ..schemas.staff import StaffCreate, StaffRoleUpdate
@@ -39,12 +40,15 @@ def create_staff(
 
     username = (data.username or "").strip()
     if not username:
-        raise HTTPException(status_code=400, detail="Tên đăng nhập không được để trống")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Tên đăng nhập không được để trống"),
+        )
     if not is_strong_password(data.password):
-        raise HTTPException(status_code=400, detail=PASSWORD_POLICY_MSG)
+        raise HTTPException(status_code=400, detail=tr(PASSWORD_POLICY_MSG))
 
     if db.query(models.User).filter(models.User.username == username).first():
-        raise HTTPException(status_code=400, detail="Tên đăng nhập đã tồn tại")
+        raise HTTPException(status_code=400, detail=tr("Tên đăng nhập đã tồn tại"))
 
     staff = models.User(
         username=username,
@@ -91,7 +95,7 @@ def delete_staff(db: Session, current_user: models.User, staff_id: int) -> Dict[
         .first()
     )
     if not staff:
-        raise HTTPException(status_code=404, detail="Không tìm thấy nhân viên")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy nhân viên"))
 
     # Chỉ chủ của đúng shop mà nhân viên này thuộc về mới được xóa.
     require_own_shop(db, staff.staff_shop_id, current_user)
@@ -107,7 +111,9 @@ def delete_staff(db: Session, current_user: models.User, staff_id: int) -> Dict[
     if open_shift:
         raise HTTPException(
             status_code=409,
-            detail="Nhân viên còn ca đang mở; hãy kết ca trước khi ngừng tài khoản",
+            detail=tr(
+                "Nhân viên còn ca đang mở; hãy kết ca trước khi ngừng tài khoản"
+            ),
         )
 
     username = staff.username
@@ -131,11 +137,11 @@ def reset_staff_password(
         .first()
     )
     if not staff:
-        raise HTTPException(status_code=404, detail="Không tìm thấy nhân viên")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy nhân viên"))
     require_own_shop(db, staff.staff_shop_id, current_user)
 
     if not is_strong_password(new_password):
-        raise HTTPException(status_code=400, detail=PASSWORD_POLICY_MSG)
+        raise HTTPException(status_code=400, detail=tr(PASSWORD_POLICY_MSG))
 
     staff.hashed_password = hash_password(new_password)
     # Vô hiệu mọi phiên đăng nhập cũ của nhân viên này.
@@ -147,7 +153,7 @@ def reset_staff_password(
         "RESET_STAFF_PASSWORD",
         f"Đặt lại mật khẩu nhân viên '{staff.username}'",
     )
-    return {"msg": "Đã đặt lại mật khẩu nhân viên"}
+    return {"msg": tr("Đã đặt lại mật khẩu nhân viên")}
 
 
 def update_staff_role(
@@ -162,7 +168,7 @@ def update_staff_role(
         .first()
     )
     if not staff:
-        raise HTTPException(status_code=404, detail="Không tìm thấy nhân viên")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy nhân viên"))
     require_own_shop(db, staff.staff_shop_id, current_user)
 
     old_role = effective_staff_role(staff)

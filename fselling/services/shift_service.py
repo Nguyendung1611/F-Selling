@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core.i18n import tr
 from ..dependencies import (
     PERMISSION_SALE,
     STAFF_ROLE_MANAGER,
@@ -46,7 +47,7 @@ MAX_PAGE_SIZE = 100
 def _note(value: Optional[str], *, required: bool = False) -> Optional[str]:
     cleaned = (value or "").strip()[:500]
     if required and not cleaned:
-        raise HTTPException(status_code=400, detail="Vui lòng nhập lý do thu/chi")
+        raise HTTPException(status_code=400, detail=tr("Vui lòng nhập lý do thu/chi"))
     return cleaned or None
 
 
@@ -81,7 +82,7 @@ def _get_shift(db: Session, shift_id: int) -> models.CashShift:
         .first()
     )
     if not shift:
-        raise HTTPException(status_code=404, detail="Không tìm thấy ca làm việc")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy ca làm việc"))
     return shift
 
 
@@ -98,7 +99,10 @@ def _authorize_shift(
         return shop
     if allow_manager and _is_manager(shop, current_user):
         return shop
-    raise HTTPException(status_code=403, detail="Bạn không có quyền thao tác ca này")
+    raise HTTPException(
+        status_code=403,
+        detail=tr("Bạn không có quyền thao tác ca này"),
+    )
 
 
 def _cash_totals(db: Session, shift_id: int) -> Dict[str, float]:
@@ -278,7 +282,7 @@ def open_shift(
     require_staff_permission(current_user, PERMISSION_SALE)
     opening_amount = float(request.opening_cash_amount)
     if not math.isfinite(opening_amount) or opening_amount < 0:
-        raise HTTPException(status_code=400, detail="Tiền đầu ca không hợp lệ")
+        raise HTTPException(status_code=400, detail=tr("Tiền đầu ca không hợp lệ"))
 
     existing = (
         db.query(models.CashShift)
@@ -340,11 +344,11 @@ def list_shift_history(
     shop = require_shop_access(db, shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_SALE)
     if page < 1:
-        raise HTTPException(status_code=400, detail="page phải >= 1")
+        raise HTTPException(status_code=400, detail=tr("page phải >= 1"))
     if per_page < 1 or per_page > MAX_PAGE_SIZE:
         raise HTTPException(
             status_code=400,
-            detail=f"per_page phải từ 1 đến {MAX_PAGE_SIZE}",
+            detail=tr("per_page phải từ 1 đến {maximum}", maximum=MAX_PAGE_SIZE),
         )
 
     query = db.query(models.CashShift).filter(models.CashShift.shop_id == shop_id)
@@ -410,12 +414,15 @@ def create_movement(
 
     amount = float(request.amount)
     if not math.isfinite(amount) or amount <= MONEY_EPSILON:
-        raise HTTPException(status_code=400, detail="Số tiền thu/chi phải lớn hơn 0")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Số tiền thu/chi phải lớn hơn 0"),
+        )
     note = _note(request.note, required=True)
     assert note is not None
     operation_id = request.operation_id.strip()
     if len(operation_id) < 8:
-        raise HTTPException(status_code=400, detail="Mã thao tác không hợp lệ")
+        raise HTTPException(status_code=400, detail=tr("Mã thao tác không hợp lệ"))
 
     existing = (
         db.query(models.CashMovement)
@@ -428,7 +435,7 @@ def create_movement(
         ):
             raise HTTPException(
                 status_code=409,
-                detail="Mã thao tác đã được dùng cho một khoản thu/chi khác",
+                detail=tr("Mã thao tác đã được dùng cho một khoản thu/chi khác"),
             )
         return {
             "movement": _serialize_movement(existing),
@@ -437,7 +444,7 @@ def create_movement(
 
     if not _lock_open_shift(db, shift_id):
         db.rollback()
-        raise HTTPException(status_code=409, detail="Ca làm việc đã đóng")
+        raise HTTPException(status_code=409, detail=tr("Ca làm việc đã đóng"))
 
     direction = (
         DIRECTION_IN
@@ -451,7 +458,10 @@ def create_movement(
             db.rollback()
             raise HTTPException(
                 status_code=409,
-                detail=f"Tiền chi không được vượt tiền dự kiến trong ca ({expected:,.0f}đ)",
+                detail=tr(
+                    "Tiền chi không được vượt tiền dự kiến trong ca ({amount}đ)",
+                    amount=f"{expected:,.0f}",
+                ),
             )
 
     movement = models.CashMovement(
@@ -489,7 +499,7 @@ def create_movement(
             }
         raise HTTPException(
             status_code=409,
-            detail="Mã thao tác đã được dùng cho một khoản thu/chi khác",
+            detail=tr("Mã thao tác đã được dùng cho một khoản thu/chi khác"),
         )
 
     db.refresh(movement)
@@ -513,14 +523,17 @@ def close_shift(
 
     counted = float(request.counted_cash_amount)
     if not math.isfinite(counted) or counted < 0:
-        raise HTTPException(status_code=400, detail="Tiền thực đếm không hợp lệ")
+        raise HTTPException(status_code=400, detail=tr("Tiền thực đếm không hợp lệ"))
 
     if not _lock_open_shift(db, shift_id):
         db.rollback()
         refreshed = _get_shift(db, shift_id)
         if refreshed.status == STATUS_CLOSED:
             return _serialize_shift(db, refreshed)
-        raise HTTPException(status_code=409, detail="Không thể đóng ca ở trạng thái hiện tại")
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Không thể đóng ca ở trạng thái hiện tại"),
+        )
 
     # Không chốt khi còn đơn tiền mặt chưa xác nhận: nếu đóng trước rồi mới thu,
     # khoản tiền sẽ không thuộc một ca OPEN nào.
@@ -537,9 +550,10 @@ def close_shift(
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail=(
-                f"Ca còn {pending_cash_orders} đơn tiền mặt chưa thanh toán; "
-                "hãy thanh toán hoặc hủy trước khi đóng ca"
+            detail=tr(
+                "Ca còn {count} đơn tiền mặt chưa thanh toán; "
+                "hãy thanh toán hoặc hủy trước khi đóng ca",
+                count=pending_cash_orders,
             ),
         )
 
@@ -551,7 +565,7 @@ def close_shift(
         db.rollback()
         raise HTTPException(
             status_code=400,
-            detail="Ca lệch tiền; vui lòng nhập ghi chú giải trình",
+            detail=tr("Ca lệch tiền; vui lòng nhập ghi chú giải trình"),
         )
     closed_at = datetime.utcnow()
     shift.status = STATUS_CLOSED

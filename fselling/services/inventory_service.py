@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core.i18n import tr
 from ..schemas.order import OrderItemCreate
 
 # Cách định danh một dòng hàng: ("id", 7) hoặc ("name", "Sữa tươi").
@@ -22,7 +23,7 @@ def _khoa_cua(item: OrderItemCreate) -> KhoaSanPham:
     if not ten:
         raise HTTPException(
             status_code=400,
-            detail="Dòng hàng phải có product_id hoặc product_name",
+            detail=tr("Dòng hàng phải có product_id hoặc product_name"),
         )
     return ("name", ten)
 
@@ -32,7 +33,10 @@ def collect_quantities(items: Iterable[OrderItemCreate]) -> Dict[KhoaSanPham, in
     wanted: Dict[KhoaSanPham, int] = {}
     for item in items:
         if item.quantity is None or item.quantity <= 0:
-            raise HTTPException(status_code=400, detail="Số lượng sản phẩm không hợp lệ")
+            raise HTTPException(
+                status_code=400,
+                detail=tr("Số lượng sản phẩm không hợp lệ"),
+            )
         khoa = _khoa_cua(item)
         wanted[khoa] = wanted.get(khoa, 0) + item.quantity
     return wanted
@@ -63,11 +67,19 @@ def resolve_items(
         prod = query.first()
         if not prod:
             raise HTTPException(
-                status_code=404, detail=f"Sản phẩm {nhan} không tồn tại hoặc đã ẩn"
+                status_code=404,
+                detail=tr(
+                    "Sản phẩm {label} không tồn tại hoặc đã ẩn",
+                    label=nhan,
+                ),
             )
         if prod.stock < qty:
             raise HTTPException(
-                status_code=400, detail=f"Sản phẩm '{prod.name}' không đủ tồn kho"
+                status_code=400,
+                detail=tr(
+                    "Sản phẩm '{name}' không đủ tồn kho",
+                    name=prod.name,
+                ),
             )
         subtotal += prod.price * qty
         resolved.append((prod, qty))

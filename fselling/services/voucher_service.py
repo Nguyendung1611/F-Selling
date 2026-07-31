@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core.i18n import tr
 from ..dependencies import (
     PERMISSION_VOUCHER,
     has_shop_operator_access,
@@ -39,13 +40,19 @@ def is_usage_exhausted(voucher: models.Voucher) -> bool:
 def _validate(v: VoucherCreate) -> str:
     code_stripped = v.code.strip() if v.code else ""
     if not code_stripped:
-        raise HTTPException(status_code=400, detail="Mã voucher không được để trống")
+        raise HTTPException(status_code=400, detail=tr("Mã voucher không được để trống"))
     if v.discount_value < 1:
-        raise HTTPException(status_code=400, detail="Giá trị giảm tối thiểu phải là 1")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Giá trị giảm tối thiểu phải là 1"),
+        )
     if v.discount_type == "percentage" and (v.discount_value <= 0 or v.discount_value > 100):
-        raise HTTPException(status_code=400, detail="Giá trị giảm phần trăm phải từ 1% đến 100%")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Giá trị giảm phần trăm phải từ 1% đến 100%"),
+        )
     if v.min_order_value < 0:
-        raise HTTPException(status_code=400, detail="Đơn tối thiểu không được âm")
+        raise HTTPException(status_code=400, detail=tr("Đơn tối thiểu không được âm"))
     return code_stripped
 
 
@@ -72,7 +79,10 @@ def create_voucher(
         .first()
     )
     if existing:
-        raise HTTPException(status_code=400, detail="Mã voucher này đã tồn tại trong cửa hàng")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Mã voucher này đã tồn tại trong cửa hàng"),
+        )
 
     db_v = models.Voucher(
         code=code_stripped,
@@ -103,13 +113,14 @@ def update_voucher(
 ) -> models.Voucher:
     db_v = db.query(models.Voucher).filter(models.Voucher.id == voucher_id).first()
     if not db_v:
-        raise HTTPException(status_code=404, detail="Voucher không tồn tại")
+        raise HTTPException(status_code=404, detail=tr("Voucher không tồn tại"))
 
     # Chỉ đúng chủ shop mới được sửa (giữ nguyên hành vi cũ: ADMIN cũng nhận 403)
     shop = db.query(models.Shop).filter(models.Shop.id == db_v.shop_id).first()
     if not shop or not has_shop_operator_access(shop, current_user):
         raise HTTPException(
-            status_code=403, detail="Không có quyền chỉnh sửa voucher của cửa hàng này"
+            status_code=403,
+            detail=tr("Không có quyền chỉnh sửa voucher của cửa hàng này"),
         )
     require_staff_permission(current_user, PERMISSION_VOUCHER)
 
@@ -124,7 +135,10 @@ def update_voucher(
         .first()
     )
     if existing:
-        raise HTTPException(status_code=400, detail="Mã voucher này đã tồn tại trong cửa hàng")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Mã voucher này đã tồn tại trong cửa hàng"),
+        )
 
     db_v.code = code_stripped
     db_v.discount_type = v.discount_type
@@ -148,7 +162,7 @@ def update_voucher(
 def delete_voucher(db: Session, current_user: models.User, voucher_id: int) -> Dict[str, str]:
     db_v = db.query(models.Voucher).filter(models.Voucher.id == voucher_id).first()
     if not db_v:
-        raise HTTPException(status_code=404, detail="Voucher không tồn tại")
+        raise HTTPException(status_code=404, detail=tr("Voucher không tồn tại"))
     require_shop_access(db, db_v.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_VOUCHER)
     code = db_v.code
@@ -171,19 +185,29 @@ def apply_voucher(
         .first()
     )
     if not voucher:
-        raise HTTPException(status_code=404, detail="Mã giảm giá không tồn tại")
+        raise HTTPException(status_code=404, detail=tr("Mã giảm giá không tồn tại"))
 
     if voucher.min_order_value > subtotal:
         raise HTTPException(
-            status_code=400, detail=f"Đơn hàng phải từ {voucher.min_order_value} ₫ để áp dụng"
+            status_code=400,
+            detail=tr(
+                "Đơn hàng phải từ {amount} ₫ để áp dụng",
+                amount=f"{voucher.min_order_value:,.0f}",
+            ),
         )
 
     if is_usage_exhausted(voucher):
-        raise HTTPException(status_code=400, detail="Mã giảm giá đã hết lượt sử dụng")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Mã giảm giá đã hết lượt sử dụng"),
+        )
 
     # BEHAVIOR FIX: trước đây expires_at không bao giờ được kiểm tra.
     if is_expired(voucher):
-        raise HTTPException(status_code=400, detail="Mã giảm giá đã hết hạn sử dụng")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Mã giảm giá đã hết hạn sử dụng"),
+        )
 
     discount_amount = compute_discount(voucher, subtotal)
     return {"discount_amount": discount_amount, "new_total": max(0, subtotal - discount_amount)}

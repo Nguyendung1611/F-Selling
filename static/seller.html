@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bảng điều khiển Người bán | F-Selling</title>
+    <title data-i18n="seller.page_title">Bảng điều khiển Người bán | F-Selling</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link rel="stylesheet" href="/css/seller.css">
-    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/seller.css?v=20260731-i18n4">
+    <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
     <style>
         .doi-soat-badge {
             display: none;
@@ -245,9 +245,16 @@
     <div class="nav-bar">
         <img class="logo" src="img/logo.png" alt="Logo FSelling">   
         <div class="flex-row" style="gap: 1rem; align-items: center;">
-            <button id="btnOpenPos" onclick="openPosShopSelector()" style="display: flex; align-items: center; gap: 0.3rem; background: var(--primary);"><i class="ph ph-shopping-cart"></i> Mở POS Bán Hàng</button>
-            <button class="btn-outline" onclick="showChangePasswordModal()" style="display: flex; align-items: center; gap: 0.3rem;"><i class="ph ph-key"></i> Đổi mật khẩu</button>
-            <button class="btn-outline" onclick="logout()" style="display: flex; align-items: center; gap: 0.3rem;"><i class="ph ph-sign-out"></i> Đăng xuất</button>
+            <label class="language-switcher">
+                <span data-i18n="common.language">Ngôn ngữ</span>
+                <select data-language-selector data-i18n-aria-label="common.language">
+                    <option value="vi" data-i18n="common.language.vi">Tiếng Việt</option>
+                    <option value="en" data-i18n="common.language.en">English</option>
+                </select>
+            </label>
+            <button id="btnOpenPos" onclick="openPosShopSelector()" style="display: flex; align-items: center; gap: 0.3rem; background: var(--primary);"><i class="ph ph-shopping-cart"></i> <span data-i18n="seller.nav.open_pos">Mở POS Bán Hàng</span></button>
+            <button class="btn-outline" onclick="showChangePasswordModal()" style="display: flex; align-items: center; gap: 0.3rem;"><i class="ph ph-key"></i> <span data-i18n="common.change_password">Đổi mật khẩu</span></button>
+            <button class="btn-outline" onclick="logout()" style="display: flex; align-items: center; gap: 0.3rem;"><i class="ph ph-sign-out"></i> <span data-i18n="common.logout">Đăng xuất</span></button>
         </div>
     </div>
 
@@ -255,41 +262,41 @@
         
         <!-- Tabs Header -->
         <div class="tabs-wrapper">
-            <button class="tab-btn active" data-main-tab="dashboard" onclick="switchTab('dashboard', this)"><i class="ph ph-chart-bar"></i> Thống Kê</button>
+            <button class="tab-btn active" data-main-tab="dashboard" onclick="switchTab('dashboard', this)"><i class="ph ph-chart-bar"></i> <span data-i18n="seller.tabs.dashboard">Thống Kê</span></button>
             <button class="tab-btn" id="tabDoiSoat" data-main-tab="reconciliation" onclick="switchTab('reconciliation', this)">
-                <i class="ph ph-warning-diamond"></i> Cần Đối Soát
-                <span id="doiSoatBadge" class="doi-soat-badge" aria-label="Số đơn cần đối soát">0</span>
+                <i class="ph ph-warning-diamond"></i> <span data-i18n="seller.tabs.reconciliation">Cần Đối Soát</span>
+                <span id="doiSoatBadge" class="doi-soat-badge" data-i18n-aria-label="seller.reconciliation.badge_aria">0</span>
             </button>
-            <button class="tab-btn" data-main-tab="warehouse" onclick="switchTab('warehouse', this)"><i class="ph ph-package"></i> Kho Hàng</button>
-            <button class="tab-btn" data-main-tab="kiemke" onclick="switchTab('kiemke', this)"><i class="ph ph-clipboard-text"></i> Kiểm Kê</button>
-            <button class="tab-btn" data-main-tab="voucher" onclick="switchTab('voucher', this)"><i class="ph ph-ticket"></i> Khuyến Mãi</button>
-            <button class="tab-btn" data-main-tab="customers" onclick="switchTab('customers', this)"><i class="ph ph-users"></i> Khách Hàng</button>
-            <button class="tab-btn" data-main-tab="settings" onclick="switchTab('settings', this)"><i class="ph ph-sliders"></i> Cài Đặt</button>
+            <button class="tab-btn" data-main-tab="warehouse" onclick="switchTab('warehouse', this)"><i class="ph ph-package"></i> <span data-i18n="seller.tabs.warehouse">Kho Hàng</span></button>
+            <button class="tab-btn" data-main-tab="kiemke" onclick="switchTab('kiemke', this)"><i class="ph ph-clipboard-text"></i> <span data-i18n="seller.tabs.stocktake">Kiểm Kê</span></button>
+            <button class="tab-btn" data-main-tab="voucher" onclick="switchTab('voucher', this)"><i class="ph ph-ticket"></i> <span data-i18n="seller.tabs.vouchers">Khuyến Mãi</span></button>
+            <button class="tab-btn" data-main-tab="customers" onclick="switchTab('customers', this)"><i class="ph ph-users"></i> <span data-i18n="seller.tabs.customers">Khách Hàng</span></button>
+            <button class="tab-btn" data-main-tab="settings" onclick="switchTab('settings', this)"><i class="ph ph-sliders"></i> <span data-i18n="seller.tabs.settings">Cài Đặt</span></button>
         </div>
 
         <!-- TAB 1: THỐNG KÊ (DASHBOARD) -->
         <div id="dashboard" class="tab-content active glass-card">
             <div id="dashboardShopSelector" style="margin-bottom: 2rem;">
-                <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> Chọn Cửa Hàng Xem Thống Kê</h3>
+                <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> <span data-i18n="seller.dashboard.choose_shop">Chọn Cửa Hàng Xem Thống Kê</span></h3>
                 <div id="dashShopList" style="display: flex; gap: 1rem; flex-wrap: wrap;"></div>
             </div>
             
             <div id="dashboardContent" style="display: none;">
-                <h3>Tổng quan <span id="currentShopName" class="text-gradient"></span></h3>
+                <h3><span data-i18n="seller.dashboard.overview">Tổng quan</span> <span id="currentShopName" class="text-gradient"></span></h3>
             
                 <div class="stats-grid">
                     <div class="stat-card">
-                        <h4>TỔNG DOANH THU</h4>
+                        <h4 data-i18n="seller.dashboard.total_revenue">TỔNG DOANH THU</h4>
                         <strong id="statRev" class="stat-value revenue">0 ₫</strong>
                     </div>
 
                     <div class="stat-card">
-                        <h4>TỔNG SỐ ĐƠN</h4>
+                        <h4 data-i18n="seller.dashboard.total_orders">TỔNG SỐ ĐƠN</h4>
                         <strong id="statOrders" class="stat-value">0</strong>
                     </div>
 
                     <div class="stat-card">
-                        <h4>SẢN PHẨM ĐÃ BÁN</h4>
+                        <h4 data-i18n="seller.dashboard.products_sold">SẢN PHẨM ĐÃ BÁN</h4>
                         <strong id="statSold" class="stat-value">0</strong>
                     </div>
             </div>
@@ -307,14 +314,14 @@
 
                 <div class="chart-grid">
                     <div class="chart-card">
-                        <h4>Xu hướng doanh thu (7 ngày)</h4>
+                        <h4 data-i18n="seller.dashboard.revenue_trend">Xu hướng doanh thu (7 ngày)</h4>
                         <div class="chart-container">
                             <canvas id="revenueChart"></canvas>
                         </div>
                     </div>
 
                     <div class="chart-card">
-                        <h4>Tỷ trọng Top 5 SP</h4>
+                        <h4 data-i18n="seller.dashboard.top_products">Tỷ trọng Top 5 SP</h4>
                         <div class="chart-container chart-center">
                             <canvas id="productPieChart"></canvas>
                         </div>
@@ -322,27 +329,27 @@
                 </div>
 
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2rem; flex-wrap: wrap; gap: 0.5rem;">
-                    <h4>Đơn hàng gần đây</h4>
-                    <button class="btn-outline" onclick="downloadExcel()"><i class="ph ph-file-xls"></i> Xuất Excel</button>
+                    <h4 data-i18n="seller.dashboard.recent_orders">Đơn hàng gần đây</h4>
+                    <button class="btn-outline" onclick="downloadExcel()"><i class="ph ph-file-xls"></i> <span data-i18n="common.export_excel">Xuất Excel</span></button>
                 </div>
 
                 <div style="display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: 1rem;">
                     <div>
-                        <label style="font-size: 0.8rem; color: var(--text-muted);">Từ ngày</label>
+                        <label style="font-size: 0.8rem; color: var(--text-muted);" data-i18n="seller.dashboard.from_date">Từ ngày</label>
                         <input type="date" id="filterTuNgay" style="margin-bottom: 0;">
                     </div>
                     <div>
-                        <label style="font-size: 0.8rem; color: var(--text-muted);">Đến ngày</label>
+                        <label style="font-size: 0.8rem; color: var(--text-muted);" data-i18n="seller.dashboard.to_date">Đến ngày</label>
                         <input type="date" id="filterDenNgay" style="margin-bottom: 0;">
                     </div>
-                    <button onclick="apDungLocNgay()"><i class="ph ph-funnel"></i> Lọc</button>
-                    <button class="btn-outline" onclick="xoaLocNgay()">Bỏ lọc</button>
+                    <button onclick="apDungLocNgay()"><i class="ph ph-funnel"></i> <span data-i18n="seller.dashboard.filter">Lọc</span></button>
+                    <button class="btn-outline" onclick="xoaLocNgay()" data-i18n="seller.dashboard.clear_filter">Bỏ lọc</button>
                 </div>
 
                 <div class="table-responsive">
                     <table class="db-table">
                         <thead>
-                            <tr><th>Mã ĐH</th><th>Ngày</th><th>Thu ngân</th><th>Tổng tiền</th><th>Trạng thái</th><th></th></tr>
+                            <tr><th data-i18n="seller.table.order_id">Mã ĐH</th><th data-i18n="seller.table.date">Ngày</th><th data-i18n="seller.table.cashier">Thu ngân</th><th data-i18n="seller.table.total">Tổng tiền</th><th data-i18n="seller.table.status">Trạng thái</th><th></th></tr>
                         </thead>
                         <tbody id="orderList"></tbody>
                     </table>
@@ -351,27 +358,27 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1rem; flex-wrap: wrap; gap: 0.5rem;">
                     <small id="thongTinTrang" style="color: var(--text-muted);"></small>
                     <div style="display: flex; gap: 0.5rem;">
-                        <button class="btn-outline" id="btnTrangTruoc" onclick="doiTrang(-1)">← Trước</button>
-                        <button class="btn-outline" id="btnTrangSau" onclick="doiTrang(1)">Sau →</button>
+                        <button class="btn-outline" id="btnTrangTruoc" onclick="doiTrang(-1)" data-i18n="seller.pagination.previous">← Trước</button>
+                        <button class="btn-outline" id="btnTrangSau" onclick="doiTrang(1)" data-i18n="seller.pagination.next">Sau →</button>
                     </div>
                 </div>
 
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2rem; gap:0.75rem; flex-wrap:wrap;">
                     <div>
-                        <h4 style="margin:0;"><i class="ph ph-clock-counter-clockwise"></i> Ca làm việc gần đây</h4>
-                        <small style="color:var(--text-muted);">Số tiền theo sổ và chênh lệch được chốt ở server.</small>
+                        <h4 style="margin:0;"><i class="ph ph-clock-counter-clockwise"></i> <span data-i18n="seller.shifts.recent">Ca làm việc gần đây</span></h4>
+                        <small style="color:var(--text-muted);" data-i18n="seller.shifts.server_note">Số tiền theo sổ và chênh lệch được chốt ở server.</small>
                     </div>
                     <button class="btn-outline" onclick="loadShiftHistory(dashboardShopId)" style="padding:0.45rem 0.8rem;">
-                        <i class="ph ph-arrow-clockwise"></i> Làm mới
+                        <i class="ph ph-arrow-clockwise"></i> <span data-i18n="seller.actions.refresh">Làm mới</span>
                     </button>
                 </div>
                 <div class="table-responsive" style="margin-top:0.8rem;">
                     <table class="db-table">
                         <thead>
-                            <tr><th>Ca</th><th>Thu ngân</th><th>Mở ca</th><th>Đóng ca</th><th>Theo sổ</th><th>Thực đếm</th><th>Chênh lệch</th></tr>
+                            <tr><th data-i18n="seller.shifts.shift">Ca</th><th data-i18n="seller.table.cashier">Thu ngân</th><th data-i18n="seller.shifts.opened_at">Mở ca</th><th data-i18n="seller.shifts.closed_at">Đóng ca</th><th data-i18n="seller.shifts.expected">Theo sổ</th><th data-i18n="seller.shifts.counted">Thực đếm</th><th data-i18n="seller.shifts.variance">Chênh lệch</th></tr>
                         </thead>
                         <tbody id="shiftHistoryList">
-                            <tr><td colspan="7" style="color:var(--text-muted);">Đang tải...</td></tr>
+                            <tr><td colspan="7" style="color:var(--text-muted);" data-i18n="common.loading">Đang tải...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -379,9 +386,9 @@
 
             <div id="noShopMsg" style="text-align: center; padding: 3rem;">
                 <i class="ph ph-storefront" style="font-size: 3rem; color: var(--text-muted);"></i>
-                <h3 style="margin-top: 1rem;">Bạn chưa có cửa hàng nào</h3>
-                <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Vui lòng vào mục Cài đặt để tạo cửa hàng đầu tiên.</p>
-                <button onclick="switchTab('settings')">Đi tới Cài Đặt</button>
+                <h3 style="margin-top: 1rem;" data-i18n="seller.shops.none_title">Bạn chưa có cửa hàng nào</h3>
+                <p style="color: var(--text-muted); margin-bottom: 1.5rem;" data-i18n="seller.shops.none_help">Vui lòng vào mục Cài đặt để tạo cửa hàng đầu tiên.</p>
+                <button onclick="switchTab('settings')" data-i18n="seller.shops.go_settings">Đi tới Cài Đặt</button>
             </div>
         </div>
 
@@ -389,41 +396,41 @@
         <div id="reconciliation" class="tab-content glass-card">
             <div class="doi-soat-toolbar">
                 <div>
-                    <h3 style="margin-bottom: 0.35rem;"><i class="ph ph-warning-diamond"></i> Cần đối soát</h3>
-                    <p style="margin: 0; color: var(--text-muted); font-size: 0.88rem; line-height: 1.55;">
+                    <h3 style="margin-bottom: 0.35rem;"><i class="ph ph-warning-diamond"></i> <span data-i18n="seller.reconciliation.title">Cần đối soát</span></h3>
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.88rem; line-height: 1.55;" data-i18n="seller.reconciliation.description">
                         Theo dõi đơn chuyển thiếu, tiền về sau khi hủy và khoản chuyển thừa đang chờ hoàn.
                     </p>
                 </div>
                 <div class="doi-soat-toolbar-actions">
                     <div class="doi-soat-shop-field">
-                        <label for="doiSoatShopSelect">Cửa hàng</label>
+                        <label for="doiSoatShopSelect" data-i18n="seller.fields.shop">Cửa hàng</label>
                         <select id="doiSoatShopSelect" onchange="chonShopDoiSoat(this.value)"></select>
                     </div>
                     <button class="btn-outline" id="btnTaiLaiDoiSoat" onclick="loadDoiSoat()" style="min-height: 2.65rem;">
-                        <i class="ph ph-arrows-clockwise"></i> Tải lại
+                        <i class="ph ph-arrows-clockwise"></i> <span data-i18n="seller.actions.reload">Tải lại</span>
                     </button>
                 </div>
             </div>
 
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-bottom: 0.85rem; flex-wrap: wrap;">
                 <strong id="doiSoatCount">0 trường hợp đang chờ</strong>
-                <small style="color: var(--text-muted);">Mọi thao tác đều được lưu người thực hiện và thời gian.</small>
+                <small style="color: var(--text-muted);" data-i18n="seller.reconciliation.audit_note">Mọi thao tác đều được lưu người thực hiện và thời gian.</small>
             </div>
 
             <div id="doiSoatLoading" class="doi-soat-loading" style="display: none;">
-                <i class="ph ph-spinner-gap"></i> Đang tải danh sách đối soát...
+                <i class="ph ph-spinner-gap"></i> <span data-i18n="seller.reconciliation.loading">Đang tải danh sách đối soát...</span>
             </div>
             <div id="doiSoatEmpty" class="doi-soat-empty" style="display: none;">
                 <i class="ph ph-check-circle" style="display: block; margin-bottom: 0.5rem; color: var(--success); font-size: 2.2rem;"></i>
-                Không có đơn nào đang chờ đối soát.
+                <span data-i18n="seller.reconciliation.empty">Không có đơn nào đang chờ đối soát.</span>
             </div>
             <div id="doiSoatList" class="doi-soat-list"></div>
 
             <div id="doiSoatPagination" style="display: none; justify-content: space-between; align-items: center; margin-top: 1rem; gap: 0.75rem; flex-wrap: wrap;">
                 <small id="doiSoatThongTinTrang" style="color: var(--text-muted);"></small>
                 <div style="display: flex; gap: 0.5rem;">
-                    <button class="btn-outline" id="doiSoatTrangTruoc" onclick="doiTrangDoiSoat(-1)">← Trước</button>
-                    <button class="btn-outline" id="doiSoatTrangSau" onclick="doiTrangDoiSoat(1)">Sau →</button>
+                    <button class="btn-outline" id="doiSoatTrangTruoc" onclick="doiTrangDoiSoat(-1)" data-i18n="seller.pagination.previous">← Trước</button>
+                    <button class="btn-outline" id="doiSoatTrangSau" onclick="doiTrangDoiSoat(1)" data-i18n="seller.pagination.next">Sau →</button>
                 </div>
             </div>
         </div>
@@ -431,7 +438,7 @@
         <!-- TAB 2: WAREHOUSE -->
         <div id="warehouse" class="tab-content glass-card">
             <div id="warehouseShopSelector" style="margin-bottom: 2rem;">
-                <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> Chọn Cửa Hàng Để Quản Lý Kho</h3>
+                <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> <span data-i18n="seller.warehouse.choose_shop">Chọn Cửa Hàng Để Quản Lý Kho</span></h3>
                 <div id="whShopList" style="display: flex; gap: 1rem; flex-wrap: wrap;"></div>
             </div>
             
@@ -448,7 +455,7 @@
                         id="whSubTabProds"
                         onclick="switchWarehouseSubTab('products')">
                         <i class="ph ph-package"></i>
-                        Quản lý Sản Phẩm
+                        <span data-i18n="seller.warehouse.products">Quản lý Sản Phẩm</span>
                     </button>
 
                     <button
@@ -456,7 +463,7 @@
                         id="whSubTabCats"
                         onclick="switchWarehouseSubTab('categories')">
                         <i class="ph ph-list"></i>
-                        Quản lý Danh Mục
+                        <span data-i18n="seller.warehouse.categories">Quản lý Danh Mục</span>
                     </button>
                 </div>
 
@@ -464,58 +471,58 @@
                 <div class="modal-body-split" id="warehouseProductsSection">
                     <!-- Add Product Form (Left) -->
                     <div class="modal-col-form" style="border-right: 1px solid var(--border-color); padding-right: 2rem;">
-                        <h3 style="color: var(--primary);">Kho hàng: <span id="whShopName"></span></h3>
+                        <h3 style="color: var(--primary);"><span data-i18n="seller.warehouse.inventory_for">Kho hàng:</span> <span id="whShopName"></span></h3>
                         <h3 id="productFormTitle" style="margin-top: 1.5rem;">Thêm sản phẩm mới</h3>
                         <div class="form-group">
-                            <label>Danh mục</label>
+                            <label data-i18n="seller.fields.category">Danh mục</label>
                             <select class="cate-selection" id="catSelect"></select>
                         </div>
                         <div class="form-group">
-                            <label>Mã sản phẩm (Tùy chọn - Tự động sinh nếu để trống)</label>
-                            <div class="input-wrapper"><i class="ph ph-hash"></i><input type="text" id="prodCode" placeholder="Để trống để tự tạo mã"></div>
+                            <label data-i18n="seller.products.code_label">Mã sản phẩm (Tùy chọn - Tự động sinh nếu để trống)</label>
+                            <div class="input-wrapper"><i class="ph ph-hash"></i><input type="text" id="prodCode" placeholder="Để trống để tự tạo mã" data-i18n-placeholder="seller.products.code_placeholder"></div>
                         </div>
                         <div class="form-group">
-                            <label>Mã vạch (Tùy chọn - bấm vào ô rồi quét để điền)</label>
+                            <label data-i18n="seller.products.barcode_label">Mã vạch (Tùy chọn - bấm vào ô rồi quét để điền)</label>
                             <div style="display: flex; gap: 0.5rem; align-items: center;">
-                                <div class="input-wrapper" style="flex: 1; margin: 0;"><i class="ph ph-barcode"></i><input type="text" id="prodBarcode" placeholder="Quét mã trên bao bì, hoặc gõ tay"></div>
-                                <button type="button" class="btn-outline" onclick="quetMaVachBangCamera()" title="Quét mã vạch bằng camera" style="padding: 0.5rem 0.8rem;"><i class="ph ph-camera"></i></button>
+                                <div class="input-wrapper" style="flex: 1; margin: 0;"><i class="ph ph-barcode"></i><input type="text" id="prodBarcode" placeholder="Quét mã trên bao bì, hoặc gõ tay" data-i18n-placeholder="seller.products.barcode_placeholder"></div>
+                                <button type="button" class="btn-outline" onclick="quetMaVachBangCamera()" title="Quét mã vạch bằng camera" data-i18n-title="seller.products.scan_camera" data-i18n-aria-label="seller.products.scan_camera" style="padding: 0.5rem 0.8rem;"><i class="ph ph-camera"></i></button>
                             </div>
                         </div>
                         <div class="form-group">
-                            <label>Tên sản phẩm *</label>
-                            <div class="input-wrapper"><i class="ph ph-package"></i><input type="text" id="prodName" placeholder="Tên SP"></div>
+                            <label data-i18n="seller.products.name_required">Tên sản phẩm *</label>
+                            <div class="input-wrapper"><i class="ph ph-package"></i><input type="text" id="prodName" placeholder="Tên SP" data-i18n-placeholder="seller.products.name_placeholder"></div>
                         </div>
                         <div class="form-group">
-                            <label>Giá bán (VNĐ) *</label>
-                            <div class="input-wrapper"><i class="ph ph-money"></i><input type="number" id="prodPrice" placeholder="Giá tiền"></div>
+                            <label data-i18n="seller.products.price_required">Giá bán (VNĐ) *</label>
+                            <div class="input-wrapper"><i class="ph ph-money"></i><input type="number" id="prodPrice" placeholder="Giá tiền" data-i18n-placeholder="seller.products.price_placeholder"></div>
                         </div>
                         <div class="form-group">
-                            <label>Số lượng tồn kho *</label>
-                            <div class="input-wrapper"><i class="ph ph-stack"></i><input type="number" id="prodStock" placeholder="Tồn kho" value="100"></div>
+                            <label data-i18n="seller.products.stock_required">Số lượng tồn kho *</label>
+                            <div class="input-wrapper"><i class="ph ph-stack"></i><input type="number" id="prodStock" placeholder="Tồn kho" data-i18n-placeholder="seller.products.stock_placeholder" value="100"></div>
                         </div>
                         <div class="form-group">
-                            <label>Hình ảnh *</label>
+                            <label data-i18n="seller.products.image_required">Hình ảnh *</label>
                             <input class="product_img-input" type="file" id="prodImage" accept="image/*">
                         </div>
-                        <button id="btnSaveProduct" class="create-product_btn" onclick="createProduct()"><i class="ph ph-plus"></i> Lưu vào kho</button>
-                        <button id="btnCancelEditProduct" class="btn-outline" onclick="cancelEditProduct()" style="display: none; width: 100%; margin-top: 0.5rem;">Hủy chỉnh sửa</button>
+                        <button id="btnSaveProduct" class="create-product_btn" onclick="createProduct()"><i class="ph ph-plus"></i> <span data-seller-action-label="product-save">Lưu vào kho</span></button>
+                        <button id="btnCancelEditProduct" class="btn-outline" onclick="cancelEditProduct()" style="display: none; width: 100%; margin-top: 0.5rem;" data-i18n="seller.actions.cancel_edit">Hủy chỉnh sửa</button>
                     </div>
                     <!-- Product List (Right) -->
                     <div class="modal-col-list">
                         <div style=" justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
-                            <h3 style="margin-bottom: 0;">Sản phẩm trong kho</h3>
-                            <button type="button" class="btn-outline" onclick="quetNhapXuatBangCamera()" title="Quét mã vạch để nhập/xuất kho" style="padding: 0.4rem 0.9rem; white-space: nowrap;"><i class="ph ph-camera"></i> Quét nhập/xuất</button>
+                            <h3 style="margin-bottom: 0;" data-i18n="seller.products.in_stock">Sản phẩm trong kho</h3>
+                            <button type="button" class="btn-outline" onclick="quetNhapXuatBangCamera()" title="Quét mã vạch để nhập/xuất kho" data-i18n-title="seller.products.scan_stock_title" style="padding: 0.4rem 0.9rem; white-space: nowrap;"><i class="ph ph-camera"></i> <span data-i18n="seller.products.scan_stock">Quét nhập/xuất</span></button>
                             <!-- Category Filter! -->
                             <div class="cate-filter">
-                                <label style="font-size: 0.85rem; font-weight: 600; white-space: nowrap;">Lọc:</label>
+                                <label style="font-size: 0.85rem; font-weight: 600; white-space: nowrap;" data-i18n="seller.dashboard.filter_label">Lọc:</label>
                                 <select id="filterCatSelect" onchange="filterProducts()" style="margin-bottom: 0; padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border-color); font-size: 0.9rem; background: #F1F5F9; max-width: 200px; margin-top: 1em;">
-                                    <option value="">-- Tất cả --</option>
+                                    <option value="" data-i18n="seller.filters.all">-- Tất cả --</option>
                                 </select>
                             </div>
                         </div>
                         <div class="table-responsive-product" style="max-height: 500px; overflow-y: auto;">
                             <table class="db-table">
-                                <thead><tr><th>Mã SP</th><th>Tên</th><th>Giá</th><th>Tồn</th><th>Hành động</th></tr></thead>
+                                <thead><tr><th data-i18n="seller.table.product_code">Mã SP</th><th data-i18n="seller.table.name">Tên</th><th data-i18n="seller.table.price">Giá</th><th data-i18n="seller.table.stock">Tồn</th><th data-i18n="seller.table.actions">Hành động</th></tr></thead>
                                 <tbody class="prod-list" id="prodList"></tbody>
                             </table>
                         </div>
@@ -529,25 +536,25 @@
                         <h3 style="color: var(--primary);" id="catFormTitle">Thêm danh mục mới</h3>
                         <input type="hidden" id="editingCatId" value="">
                         <div class="form-group">
-                            <label>Tên danh mục *</label>
-                            <div class="input-wrapper"><i class="ph ph-list"></i><input type="text" id="catNameInput" placeholder="Tên danh mục"></div>
+                            <label data-i18n="seller.categories.name_required">Tên danh mục *</label>
+                            <div class="input-wrapper"><i class="ph ph-list"></i><input type="text" id="catNameInput" placeholder="Tên danh mục" data-i18n-placeholder="seller.categories.name_placeholder"></div>
                         </div>
                         <div class="form-group">
-                            <label>Trạng thái</label>
+                            <label data-i18n="seller.table.status">Trạng thái</label>
                             <select  id="catStatusSelect" style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 1rem;">
-                                <option value="active">Hoạt động (Active)</option>
-                                <option value="inactive">Không hoạt động (Inactive)</option>
+                                <option value="active" data-i18n="seller.status.active_long">Hoạt động (Active)</option>
+                                <option value="inactive" data-i18n="seller.status.inactive_long">Không hoạt động (Inactive)</option>
                             </select>
                         </div>
-                        <button id="btnSaveCategory" onclick="saveCategory()" style="width: 100%;"><i class="ph ph-plus-circle"></i> Lưu Danh Mục</button>
-                        <button id="btnCancelEditCategory" class="ph ph-power" onclick="cancelEditCategory()" style="width: 100%; display: none; margin-top: 0.5rem;">Hủy chỉnh sửa</button>
+                        <button id="btnSaveCategory" onclick="saveCategory()" style="width: 100%;"><i class="ph ph-plus-circle"></i> <span data-seller-action-label="category-save">Lưu Danh Mục</span></button>
+                        <button id="btnCancelEditCategory" class="ph ph-power" onclick="cancelEditCategory()" style="width: 100%; display: none; margin-top: 0.5rem;" data-i18n="seller.actions.cancel_edit">Hủy chỉnh sửa</button>
                     </div>
                     <!-- Category List (Right) -->
                     <div class="modal-col-list">
-                        <h3>Danh mục của cửa hàng</h3>
+                        <h3 data-i18n="seller.categories.shop_categories">Danh mục của cửa hàng</h3>
                         <div class="table-responsive" style="max-height: 500px; overflow-y: auto;">
                             <table class="db-table">
-                                <thead><tr><th>ID</th><th>Tên danh mục</th><th>Trạng thái</th><th>Hành động</th></tr></thead>
+                                <thead><tr><th>ID</th><th data-i18n="seller.categories.name">Tên danh mục</th><th data-i18n="seller.table.status">Trạng thái</th><th data-i18n="seller.table.actions">Hành động</th></tr></thead>
                                 <tbody id="categoryTableBody"></tbody>
                             </table>
                         </div>
@@ -560,92 +567,92 @@
         <!-- ========== KIỂM KÊ ========== -->
         <div id="kiemke" class="tab-content glass-card">
             <div id="kkShopSelector" style="margin-bottom: 2rem;">
-                <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> Chọn Cửa Hàng Để Kiểm Kê</h3>
+                <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> <span data-i18n="seller.stocktake.choose_shop">Chọn Cửa Hàng Để Kiểm Kê</span></h3>
                 <div id="kkShopList" style="display: flex; gap: 1rem; flex-wrap: wrap;"></div>
             </div>
 
             <div id="kkContent" style="display: none;">
-                <h3 style="color: var(--primary);">Kiểm kê: <span id="kkShopName"></span></h3>
+                <h3 style="color: var(--primary);"><span data-i18n="seller.stocktake.for_shop">Kiểm kê:</span> <span id="kkShopName"></span></h3>
 
                 <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin: 1.25rem 0;">
-                    <button class="btn-outline" onclick="kkQuetCamera()" style="padding: 0.5rem 1rem;"><i class="ph ph-camera"></i> Quét bằng camera</button>
+                    <button class="btn-outline" onclick="kkQuetCamera()" style="padding: 0.5rem 1rem;"><i class="ph ph-camera"></i> <span data-i18n="seller.stocktake.scan_camera">Quét bằng camera</span></button>
                     <div class="input-wrapper" style="margin: 0; min-width: 240px;">
                         <i class="ph ph-barcode"></i>
-                        <input type="text" id="kkNhapTay" placeholder="Hoặc gõ mã rồi Enter" onkeydown="if(event.key==='Enter'){kkNhapMaTay();event.preventDefault();}">
+                        <input type="text" id="kkNhapTay" placeholder="Hoặc gõ mã rồi Enter" data-i18n-placeholder="seller.stocktake.manual_placeholder" onkeydown="if(event.key==='Enter'){kkNhapMaTay();event.preventDefault();}">
                     </div>
-                    <button class="btn-outline" onclick="kkXoaHet()" style="padding: 0.5rem 1rem; color:#ef4444;"><i class="ph ph-trash"></i> Xóa phiếu</button>
+                    <button class="btn-outline" onclick="kkXoaHet()" style="padding: 0.5rem 1rem; color:#ef4444;"><i class="ph ph-trash"></i> <span data-i18n="seller.stocktake.clear_sheet">Xóa phiếu</span></button>
                 </div>
 
                 <div style="background:#0F172A; border:1px solid var(--border-color); border-radius:10px; padding:0.85rem 1rem; margin-bottom:1rem; color:#CBD5E1; font-size:0.87rem; line-height:1.55;">
-                    Quét mã vạch để đếm — mỗi lần quét cộng 1. Máy quét USB dùng được ngay, không cần bấm gì.
-                    <br>Sản phẩm <b>không có trong phiếu sẽ được giữ nguyên tồn kho</b>, không bị coi là hết hàng.
+                    <span data-i18n="seller.stocktake.scan_help">Quét mã vạch để đếm — mỗi lần quét cộng 1. Máy quét USB dùng được ngay, không cần bấm gì.</span>
+                    <br><span data-i18n="seller.stocktake.unscanned_help">Sản phẩm không có trong phiếu sẽ được giữ nguyên tồn kho, không bị coi là hết hàng.</span>
                 </div>
 
                 <div style="display:flex; gap:1.5rem; flex-wrap:wrap; margin-bottom:1rem; font-size:0.9rem;">
-                    <span>Đã đếm: <b id="kkSoSP">0</b> sản phẩm</span>
-                    <span style="color:#ef4444;">Thiếu: <b id="kkSoThieu">0</b></span>
-                    <span style="color:var(--success);">Thừa: <b id="kkSoThua">0</b></span>
-                    <span>Khớp: <b id="kkSoKhop">0</b></span>
+                    <span><span data-i18n="seller.stocktake.counted">Đã đếm:</span> <b id="kkSoSP">0</b> <span data-i18n="seller.stocktake.products_unit">sản phẩm</span></span>
+                    <span style="color:#ef4444;"><span data-i18n="seller.stocktake.shortage">Thiếu:</span> <b id="kkSoThieu">0</b></span>
+                    <span style="color:var(--success);"><span data-i18n="seller.stocktake.surplus">Thừa:</span> <b id="kkSoThua">0</b></span>
+                    <span><span data-i18n="seller.stocktake.match">Khớp:</span> <b id="kkSoKhop">0</b></span>
                 </div>
 
                 <div class="table-responsive-product" style="max-height: 420px; overflow-y: auto;">
                     <table class="db-table">
-                        <thead><tr><th>Sản phẩm</th><th>Tồn hệ thống</th><th>Đếm thực tế</th><th>Lệch</th><th>Bỏ</th></tr></thead>
+                        <thead><tr><th data-i18n="seller.table.product">Sản phẩm</th><th data-i18n="seller.stocktake.system_stock">Tồn hệ thống</th><th data-i18n="seller.stocktake.actual_count">Đếm thực tế</th><th data-i18n="seller.stocktake.difference">Lệch</th><th data-i18n="seller.stocktake.remove">Bỏ</th></tr></thead>
                         <tbody id="kkList"></tbody>
                     </table>
                 </div>
 
                 <div id="kkKetQua" style="display:none; margin-top:1rem; padding:0.85rem 1rem; border-radius:10px; font-size:0.88rem; line-height:1.6;"></div>
 
-                <button id="kkBtnApDung" onclick="kkApDung()" style="width:100%; margin-top:1rem;" disabled><i class="ph ph-check-circle"></i> Áp dụng điều chỉnh tồn kho</button>
+                <button id="kkBtnApDung" onclick="kkApDung()" style="width:100%; margin-top:1rem;" disabled><i class="ph ph-check-circle"></i> <span data-i18n="seller.stocktake.apply_adjustment">Áp dụng điều chỉnh tồn kho</span></button>
             </div>
         </div>
 
         <div id="voucher" class="tab-content glass-card">
             <div id="voucherShopSelector" style="margin-bottom: 2rem;">
-                <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> Chọn Cửa Hàng Quản Lý Khuyến Mãi</h3>
+                <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> <span data-i18n="seller.vouchers.choose_shop">Chọn Cửa Hàng Quản Lý Khuyến Mãi</span></h3>
                 <div id="vcShopList" style="display: flex; gap: 1rem; flex-wrap: wrap;"></div>
             </div>
             
             <div class="modal-body-split" id="voucherContent" style="display: none;">
                 <div class="modal-col-form" style="border-right: 1px solid var(--border-color); padding-right: 2rem;">
-                    <h3 style="color: var(--primary);">Khuyến Mãi: <span id="vcShopName"></span></h3>
-                    <h3 style="margin-top: 1.5rem;">Tạo Voucher mới</h3>
+                    <h3 style="color: var(--primary);"><span data-i18n="seller.vouchers.for_shop">Khuyến Mãi:</span> <span id="vcShopName"></span></h3>
+                    <h3 style="margin-top: 1.5rem;" data-i18n="seller.vouchers.create_new">Tạo Voucher mới</h3>
                     <div class="form-group">
-                        <label>Mã Voucher *</label>
-                        <div class="input-wrapper input-wrapper-voucher"><i class="ph ph-ticket"></i><input type="text" id="vCode" required style="text-transform: uppercase;" placeholder="VD: SUMMER2024"></div>
+                        <label data-i18n="seller.vouchers.code_required">Mã Voucher *</label>
+                        <div class="input-wrapper input-wrapper-voucher"><i class="ph ph-ticket"></i><input type="text" id="vCode" required style="text-transform: uppercase;" placeholder="VD: SUMMER2024" data-i18n-placeholder="seller.vouchers.code_placeholder"></div>
                     </div>
                     <div class="form-group">
-                        <label>Loại giảm giá</label>
+                        <label data-i18n="seller.vouchers.discount_type">Loại giảm giá</label>
                         <select class="voucher-type" id="vType">
-                            <option value="flat">Giảm trực tiếp (VNĐ)</option>
-                            <option value="percentage">Giảm theo phần trăm (%)</option>
+                            <option value="flat" data-i18n="seller.vouchers.flat">Giảm trực tiếp (VNĐ)</option>
+                            <option value="percentage" data-i18n="seller.vouchers.percentage">Giảm theo phần trăm (%)</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Giá trị giảm *</label>
-                        <div class="input-wrapper input-wrapper-voucher"><i class="ph ph-money"></i><input type="number" id="vVal" placeholder="VD: 50000 hoặc 10"></div>
+                        <label data-i18n="seller.vouchers.value_required">Giá trị giảm *</label>
+                        <div class="input-wrapper input-wrapper-voucher"><i class="ph ph-money"></i><input type="number" id="vVal" placeholder="VD: 50000 hoặc 10" data-i18n-placeholder="seller.vouchers.value_placeholder"></div>
                     </div>
                     <div class="form-group">
-                        <label>Đơn tối thiểu</label>
-                        <div class="input-wrapper input-wrapper-voucher"><i class="ph ph-shopping-cart"></i><input type="number" id="vMin" value="0" placeholder="VD: 200000"></div>
+                        <label data-i18n="seller.vouchers.minimum_order">Đơn tối thiểu</label>
+                        <div class="input-wrapper input-wrapper-voucher"><i class="ph ph-shopping-cart"></i><input type="number" id="vMin" value="0" placeholder="VD: 200000" data-i18n-placeholder="seller.vouchers.minimum_placeholder"></div>
                     </div>
                     <!-- <div class="form-group">
                         <label>Giảm tối đa (Nếu chọn %)</label>
                         <div class="input-wrapper"><i class="ph ph-arrows-down-up"></i><input type="number" id="vMax" value="0" placeholder="VD: Tối đa 20000"></div>
                     </div> -->
                     <div class="form-group">
-                        <label>Số lượt dùng (-1 là vô hạn)</label>
-                        <div class="input-wrapper input-wrapper-voucher"><i class="ph ph-users"></i><input type="number" id="vLimit" value="-1" placeholder="VD: 100"></div>
+                        <label data-i18n="seller.vouchers.usage_limit">Số lượt dùng (-1 là vô hạn)</label>
+                        <div class="input-wrapper input-wrapper-voucher"><i class="ph ph-users"></i><input type="number" id="vLimit" value="-1" placeholder="VD: 100" data-i18n-placeholder="seller.vouchers.usage_placeholder"></div>
                     </div>
-                    <button class="save-voucher-btn" id="btnSaveVoucher" onclick="createOrUpdateVoucher()"><i class="ph ph-plus-circle"></i> Lưu Khuyến Mãi</button>
-                    <button id="btnCancelEditVoucher" class="btn-outline" onclick="cancelEditVoucher()" style="width: 100%; display: none; margin-top: 0.5rem;">Hủy chỉnh sửa</button>
+                    <button class="save-voucher-btn" id="btnSaveVoucher" onclick="createOrUpdateVoucher()"><i class="ph ph-plus-circle"></i> <span data-seller-action-label="voucher-save">Lưu Khuyến Mãi</span></button>
+                    <button id="btnCancelEditVoucher" class="btn-outline" onclick="cancelEditVoucher()" style="width: 100%; display: none; margin-top: 0.5rem;" data-i18n="seller.actions.cancel_edit">Hủy chỉnh sửa</button>
                 </div>
                 <div class="modal-col-list">
-                    <h3>Danh sách Voucher</h3>
+                    <h3 data-i18n="seller.vouchers.list">Danh sách Voucher</h3>
                     <div style="max-height: 500px; overflow-y: auto;" class="table-responsive-voucher">
                         <table class="db-table">
-                            <thead><tr><th>Mã</th><th>Loại</th><th>Giá trị</th><th>Đã dùng</th><th>Hành động</th></tr></thead>
+                            <thead><tr><th data-i18n="seller.table.code">Mã</th><th data-i18n="seller.table.type">Loại</th><th data-i18n="seller.table.value">Giá trị</th><th data-i18n="seller.vouchers.used">Đã dùng</th><th data-i18n="seller.table.actions">Hành động</th></tr></thead>
                             <tbody id="voucherList"></tbody>
                         </table>
                     </div>
@@ -655,10 +662,10 @@
 
         <!-- TAB: KHÁCH HÀNG (CRM) -->
         <div id="customers" class="tab-content glass-card">
-            <h3 style="margin-bottom: 1rem;"><i class="ph ph-users" style="color: var(--primary);"></i> Khách Hàng</h3>
+            <h3 style="margin-bottom: 1rem;"><i class="ph ph-users" style="color: var(--primary);"></i> <span data-i18n="seller.customers.title">Khách Hàng</span></h3>
 
             <div style="margin-bottom: 1rem;">
-                <label style="font-size: 0.85rem; color: var(--text-muted);">Chọn cửa hàng</label>
+                <label style="font-size: 0.85rem; color: var(--text-muted);" data-i18n="seller.fields.choose_shop">Chọn cửa hàng</label>
                 <select id="custShopSelect" onchange="loadCustomers()" style="margin-bottom: 0;"></select>
             </div>
 
@@ -666,22 +673,22 @@
                 <!-- Form thêm/sửa khách -->
                 <div class="modal-col-form" style="border-right: 1px solid var(--border-color); padding-right: 2rem;">
                     <h3 style="font-size: 1.05rem; margin-bottom: 1rem;" id="custFormTitle">Thêm khách hàng</h3>
-                    <div class="form-group"><label>Tên khách *</label><div class="input-wrapper"><i class="ph ph-user"></i><input type="text" id="custName" placeholder="Tên khách"></div></div>
-                    <div class="form-group"><label>Số điện thoại *</label><div class="input-wrapper"><i class="ph ph-phone"></i><input type="text" id="custPhone" placeholder="SĐT"></div></div>
-                    <div class="form-group"><label>Địa chỉ</label><div class="input-wrapper"><i class="ph ph-map-pin"></i><input type="text" id="custAddress" placeholder="Địa chỉ (tùy chọn)"></div></div>
-                    <div class="form-group"><label>Ghi chú</label><div class="input-wrapper"><i class="ph ph-note"></i><input type="text" id="custNote" placeholder="Ghi chú (tùy chọn)"></div></div>
-                    <button id="btnSaveCustomer" onclick="saveCustomer()" style="width: 100%;"><i class="ph ph-plus"></i> Lưu khách</button>
-                    <button id="btnCancelEditCustomer" class="btn-outline" onclick="cancelEditCustomer()" style="width: 100%; margin-top: 0.5rem; display: none;">Hủy</button>
+                    <div class="form-group"><label data-i18n="seller.customers.name_required">Tên khách *</label><div class="input-wrapper"><i class="ph ph-user"></i><input type="text" id="custName" placeholder="Tên khách" data-i18n-placeholder="seller.customers.name_placeholder"></div></div>
+                    <div class="form-group"><label data-i18n="seller.fields.phone_required">Số điện thoại *</label><div class="input-wrapper"><i class="ph ph-phone"></i><input type="text" id="custPhone" placeholder="SĐT" data-i18n-placeholder="seller.fields.phone_short"></div></div>
+                    <div class="form-group"><label data-i18n="seller.fields.address">Địa chỉ</label><div class="input-wrapper"><i class="ph ph-map-pin"></i><input type="text" id="custAddress" placeholder="Địa chỉ (tùy chọn)" data-i18n-placeholder="seller.customers.address_placeholder"></div></div>
+                    <div class="form-group"><label data-i18n="seller.fields.note">Ghi chú</label><div class="input-wrapper"><i class="ph ph-note"></i><input type="text" id="custNote" placeholder="Ghi chú (tùy chọn)" data-i18n-placeholder="seller.customers.note_placeholder"></div></div>
+                    <button id="btnSaveCustomer" onclick="saveCustomer()" style="width: 100%;"><i class="ph ph-plus"></i> <span data-seller-action-label="customer-save">Lưu khách</span></button>
+                    <button id="btnCancelEditCustomer" class="btn-outline" onclick="cancelEditCustomer()" style="width: 100%; margin-top: 0.5rem; display: none;" data-i18n="common.cancel">Hủy</button>
                 </div>
 
                 <!-- Danh sách khách -->
                 <div class="modal-col-list">
                     <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
-                        <input type="text" id="custSearch" placeholder="Tìm theo tên / SĐT" style="flex: 1; margin-bottom: 0;" oninput="loadCustomers()">
+                        <input type="text" id="custSearch" placeholder="Tìm theo tên / SĐT" data-i18n-placeholder="seller.customers.search_placeholder" style="flex: 1; margin-bottom: 0;" oninput="loadCustomers()">
                     </div>
                     <div class="table-responsive" style="max-height: 480px; overflow-y: auto;">
                         <table class="db-table">
-                            <thead><tr><th>Tên</th><th>SĐT</th><th></th></tr></thead>
+                            <thead><tr><th data-i18n="seller.table.name">Tên</th><th data-i18n="seller.fields.phone_short">SĐT</th><th></th></tr></thead>
                             <tbody id="customerList"></tbody>
                         </table>
                     </div>
@@ -695,81 +702,80 @@
             <!-- Đọc tiền: nhân viên đứng quầy cũng chỉnh được (xem applyRoleUI). -->
             <div id="khoiDocTien" style="border: 1px solid var(--border-color); border-radius: 10px; padding: 1.25rem; margin-bottom: 2rem;">
                 <h4 style="font-size: 1.1rem; font-weight: 700; margin: 0 0 1rem; display: flex; align-items: center; gap: 0.5rem;">
-                    <i class="ph ph-speaker-high" style="color: var(--primary);"></i> Đọc to khi nhận tiền chuyển khoản
+                    <i class="ph ph-speaker-high" style="color: var(--primary);"></i> <span data-i18n="seller.voice.title">Đọc to khi nhận tiền chuyển khoản</span>
                 </h4>
-                <p style="color: var(--text-muted); font-size: 0.88rem; margin: 0 0 1rem; line-height: 1.6;">
-                    Nhận đủ, thiếu hoặc thừa tiền đều được cảnh báo bằng giọng tiếng Việt có sẵn,
-                    không dùng giọng tiếng Anh. Cài đặt này áp dụng cho <b>máy này</b>.
+                <p style="color: var(--text-muted); font-size: 0.88rem; margin: 0 0 1rem; line-height: 1.6;" data-i18n="seller.voice.description">
+                    Nhận đủ, thiếu hoặc thừa tiền đều được cảnh báo bằng giọng tiếng Việt có sẵn, không dùng giọng tiếng Anh. Cài đặt này áp dụng cho máy này.
                 </p>
 
                 <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; margin-bottom: 1rem;">
                     <input type="checkbox" id="dtBat" onchange="dtLuuBat()" style="width: 18px; height: 18px; margin: 0;">
-                    <span style="font-weight: 600;">Bật đọc to</span>
+                    <span style="font-weight: 600;" data-i18n="seller.voice.enable">Bật đọc to</span>
                 </label>
 
                 <div id="dtChiTiet">
-                    <p style="color: var(--text-muted); font-size: 0.86rem; margin: 0 0 0.8rem;">
+                    <p style="color: var(--text-muted); font-size: 0.86rem; margin: 0 0 0.8rem;" data-i18n="seller.voice.sample_help">
                         Giọng nữ Hoài My: chọn nút bên dưới để nghe thử từng trường hợp.
                     </p>
                     <div style="display: flex; flex-wrap: wrap; gap: 0.65rem;">
                         <button class="btn-outline" onclick="DocTien.thuDuTien()" style="padding: 0.5rem 1.1rem;">
-                            <i class="ph ph-play"></i> Thử đủ tiền
+                            <i class="ph ph-play"></i> <span data-i18n="seller.voice.test_paid">Thử đủ tiền</span>
                         </button>
                         <button class="btn-outline" onclick="DocTien.thuThieuTien()" style="padding: 0.5rem 1.1rem;">
-                            <i class="ph ph-warning"></i> Thử thiếu tiền
+                            <i class="ph ph-warning"></i> <span data-i18n="seller.voice.test_underpaid">Thử thiếu tiền</span>
                         </button>
                         <button class="btn-outline" onclick="DocTien.thuThuaTien()" style="padding: 0.5rem 1.1rem;">
-                            <i class="ph ph-warning-diamond"></i> Thử thừa tiền
+                            <i class="ph ph-warning-diamond"></i> <span data-i18n="seller.voice.test_overpaid">Thử thừa tiền</span>
                         </button>
                     </div>
                 </div>
             </div>
 
             <div id="khoiCauHinhShop" style="display: flex; justify-content: space-between; margin-bottom: 1.5rem; align-items: center;">
-                <h4 style="font-size: 1.25rem; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 0.5rem;"><i class="ph ph-sliders" style="color: var(--primary);"></i> Cấu hình Cửa hàng</h4>
-                <button onclick="openCreateShopForm()"><i class="ph ph-plus"></i> Tạo cửa hàng mới</button>
+                <h4 style="font-size: 1.25rem; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 0.5rem;"><i class="ph ph-sliders" style="color: var(--primary);"></i> <span data-i18n="seller.settings.shop_config">Cấu hình Cửa hàng</span></h4>
+                <button onclick="openCreateShopForm()"><i class="ph ph-plus"></i> <span data-i18n="seller.shops.create_new">Tạo cửa hàng mới</span></button>
             </div>
 
             <!-- Danh sách Cửa hàng -->
             <div id="shopsListContainer" style="margin-bottom: 2rem;">
-                <h4 style="margin-bottom: 1rem; color: var(--text-muted);">Danh sách các cửa hàng (Tối đa 3)</h4>
+                <h4 style="margin-bottom: 1rem; color: var(--text-muted);" data-i18n="seller.shops.list_limit">Danh sách các cửa hàng (Tối đa 3)</h4>
                 <div id="myShopsList"></div>
             </div>
 
             <!-- Quản lý nhân viên (chỉ chủ shop) -->
             <div id="staffContainer" style="margin-bottom: 2rem;">
                 <hr style="border-color: var(--border-color); margin-bottom: 1.5rem;">
-                <h4 style="margin-bottom: 0.5rem; color: var(--text-muted);"><i class="ph ph-users"></i> Nhân viên bán hàng</h4>
-                <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">Thu ngân bán hàng và chăm sóc khách; nhân viên kho quản lý sản phẩm/tồn; quản lý được toàn bộ nghiệp vụ vận hành. Không vai trò nào được sửa thông tin cửa hàng hay quản lý nhân viên khác.</p>
+                <h4 style="margin-bottom: 0.5rem; color: var(--text-muted);"><i class="ph ph-users"></i> <span data-i18n="seller.staff.title">Nhân viên bán hàng</span></h4>
+                <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;" data-i18n="seller.staff.role_help">Thu ngân bán hàng và chăm sóc khách; nhân viên kho quản lý sản phẩm/tồn; quản lý được toàn bộ nghiệp vụ vận hành. Không vai trò nào được sửa thông tin cửa hàng hay quản lý nhân viên khác.</p>
 
                 <div style="margin-bottom: 1rem;">
-                    <label style="font-size: 0.85rem; color: var(--text-muted);">Chọn cửa hàng</label>
+                    <label style="font-size: 0.85rem; color: var(--text-muted);" data-i18n="seller.fields.choose_shop">Chọn cửa hàng</label>
                     <select id="staffShopSelect" onchange="loadStaff()" style="margin-bottom: 0;"></select>
                 </div>
 
                 <div style="display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: 1rem;">
                     <div>
-                        <label style="font-size: 0.85rem; color: var(--text-muted);">Tên đăng nhập</label>
-                        <input type="text" id="staffUsername" placeholder="vd: nhanvien_an" style="margin-bottom: 0;">
+                        <label style="font-size: 0.85rem; color: var(--text-muted);" data-i18n="seller.staff.username">Tên đăng nhập</label>
+                        <input type="text" id="staffUsername" placeholder="vd: nhanvien_an" data-i18n-placeholder="seller.staff.username_placeholder" style="margin-bottom: 0;">
                     </div>
                     <div>
-                        <label style="font-size: 0.85rem; color: var(--text-muted);">Mật khẩu</label>
-                        <input type="password" id="staffPassword" placeholder="Chữ hoa, thường, số, ký tự đặc biệt" style="margin-bottom: 0;">
+                        <label style="font-size: 0.85rem; color: var(--text-muted);" data-i18n="seller.staff.password">Mật khẩu</label>
+                        <input type="password" id="staffPassword" placeholder="Chữ hoa, thường, số, ký tự đặc biệt" data-i18n-placeholder="seller.staff.password_placeholder" style="margin-bottom: 0;">
                     </div>
                     <div>
-                        <label style="font-size: 0.85rem; color: var(--text-muted);">Vai trò</label>
+                        <label style="font-size: 0.85rem; color: var(--text-muted);" data-i18n="seller.staff.role">Vai trò</label>
                         <select id="staffRole" style="margin-bottom: 0;">
-                            <option value="CASHIER">Thu ngân</option>
-                            <option value="WAREHOUSE">Kho</option>
-                            <option value="MANAGER">Quản lý</option>
+                            <option value="CASHIER" data-i18n="common.role.cashier">Thu ngân</option>
+                            <option value="WAREHOUSE" data-i18n="common.role.warehouse">Kho</option>
+                            <option value="MANAGER" data-i18n="common.role.manager">Quản lý</option>
                         </select>
                     </div>
-                    <button onclick="taoNhanVien()"><i class="ph ph-user-plus"></i> Thêm nhân viên</button>
+                    <button onclick="taoNhanVien()"><i class="ph ph-user-plus"></i> <span data-i18n="seller.staff.add">Thêm nhân viên</span></button>
                 </div>
 
                 <div class="table-responsive">
                     <table class="db-table">
-                        <thead><tr><th>Tên đăng nhập</th><th>Vai trò</th><th></th></tr></thead>
+                        <thead><tr><th data-i18n="seller.staff.username">Tên đăng nhập</th><th data-i18n="seller.staff.role">Vai trò</th><th></th></tr></thead>
                         <tbody id="staffList"></tbody>
                     </table>
                 </div>
@@ -782,7 +788,7 @@
                 <!-- Left Column -->
                 <div class="modal-col-form" style="border-right: 1px solid var(--border-color); padding-right: 2rem;">
                     <h3 style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1.25rem; color: var(--text-main); display: flex; align-items: center; gap: 0.3rem;" id="formTitle">
-                        <i class="ph ph-storefront" style="color: var(--primary);"></i> Thông tin doanh nghiệp
+                        <i class="ph ph-storefront" style="color: var(--primary);"></i> <span data-seller-action-label="shop-form-title">Thông tin doanh nghiệp</span>
                     </h3>
                     
                     <!-- Live Preview -->
@@ -790,61 +796,61 @@
                         <div class="store-card-preview-card">
                             <div class="store-card-header">
                                 <div class="store-card-title"><i class="ph ph-shield-check" style="color: #fbbf24;"></i> SMARTPOS STORE</div>
-                                <div class="store-card-badge verified"><i class="ph ph-check-circle"></i> Hoạt động</div>
+                                <div class="store-card-badge verified"><i class="ph ph-check-circle"></i> <span data-i18n="seller.status.active">Hoạt động</span></div>
                             </div>
                             <div id="previewCardName" class="store-card-name">Tên cửa hàng</div>
-                            <div class="store-card-info-row"><i class="ph ph-identification-card"></i><span>MST: &nbsp;</span><strong id="previewCardTaxCode">Chưa có</strong></div>
-                            <div class="store-card-info-row"><i class="ph ph-map-pin"></i><span>Địa chỉ: &nbsp;</span><span id="previewCardAddress">Chưa có</span></div>
+                            <div class="store-card-info-row"><i class="ph ph-identification-card"></i><span data-i18n="seller.shops.tax_code_short">MST:</span>&nbsp;<strong id="previewCardTaxCode">Chưa có</strong></div>
+                            <div class="store-card-info-row"><i class="ph ph-map-pin"></i><span data-i18n="seller.fields.address_colon">Địa chỉ:</span>&nbsp;<span id="previewCardAddress">Chưa có</span></div>
                         </div>
                     </div>
                     
                     <div class="form-group">
-                        <label>Tên Doanh nghiệp/Cửa hàng *</label>
-                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-storefront"></i><input type="text" id="shopName" placeholder="VD: Hộ Kinh Doanh F-Selling" required></div>
+                        <label data-i18n="seller.shops.business_name_required">Tên Doanh nghiệp/Cửa hàng *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-storefront"></i><input type="text" id="shopName" placeholder="VD: Hộ Kinh Doanh F-Selling" data-i18n-placeholder="seller.shops.business_name_placeholder" required></div>
                     </div>
                     <div class="form-group">
-                        <label>Địa chỉ kinh doanh *</label>
-                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-map-pin"></i><input type="text" id="shopAddress" placeholder="VD: 123 Nguyễn Văn Cừ, Quận 5, TP.HCM" required></div>
+                        <label data-i18n="seller.shops.business_address_required">Địa chỉ kinh doanh *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-map-pin"></i><input type="text" id="shopAddress" placeholder="VD: 123 Nguyễn Văn Cừ, Quận 5, TP.HCM" data-i18n-placeholder="seller.shops.business_address_placeholder" required></div>
                     </div>
                     <div class="form-group">
-                        <label>Mã số thuế *</label>
-                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-identification-card"></i><input type="text" id="shopTaxCode" placeholder="VD: 0312345678" required></div>
+                        <label data-i18n="seller.shops.tax_code_required">Mã số thuế *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-identification-card"></i><input type="text" id="shopTaxCode" placeholder="VD: 0312345678" data-i18n-placeholder="seller.shops.tax_code_placeholder" required></div>
                     </div>
                     <div class="form-group">
-                        <label>Số điện thoại *</label>
-                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-phone"></i><input type="text" id="shopPhone" placeholder="VD: 0901234567" required></div>
+                        <label data-i18n="seller.fields.phone_required">Số điện thoại *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-phone"></i><input type="text" id="shopPhone" placeholder="VD: 0901234567" data-i18n-placeholder="seller.shops.phone_placeholder" required></div>
                     </div>
                     <div class="form-group">
-                        <label>Email *</label>
-                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-envelope"></i><input type="email" id="shopEmail" placeholder="VD: lienhe@cuahang.com" required></div>
+                        <label data-i18n="seller.fields.email_required">Email *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-envelope"></i><input type="email" id="shopEmail" placeholder="VD: lienhe@cuahang.com" data-i18n-placeholder="seller.shops.email_placeholder" required></div>
                     </div>
                 </div>
 
                 <!-- Right Column -->
                 <div class="modal-col-form" style="padding-left: 0.5rem;">
                     <h3 style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1.25rem; color: var(--text-main); display: flex; align-items: center; gap: 0.3rem;">
-                        <i class="ph ph-bank" style="color: var(--success);"></i> Cấu hình Thanh toán
+                        <i class="ph ph-bank" style="color: var(--success);"></i> <span data-i18n="seller.shops.payment_config">Cấu hình Thanh toán</span>
                     </h3>
                     
                     <div class="form-group">
-                        <label>Ngân hàng *</label>
+                        <label data-i18n="seller.shops.bank_required">Ngân hàng *</label>
                         <div class="input-wrapper input-wrapper-shop"><i class="ph ph-buildings"></i>
                             <select id="bankCode" style="width: 100%; border: none; outline: none; padding-left: 2.5rem;" required></select>
                         </div>
                     </div>
                     <div class="form-group">
-                        <label>Số tài khoản nhận tiền *</label>
-                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-list-numbers"></i><input type="text" id="bankAcc" placeholder="VD: 10123456789" required></div>
+                        <label data-i18n="seller.shops.bank_account_required">Số tài khoản nhận tiền *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-list-numbers"></i><input type="text" id="bankAcc" placeholder="VD: 10123456789" data-i18n-placeholder="seller.shops.bank_account_placeholder" required></div>
                     </div>
                     <div class="form-group">
-                        <label>Tên chủ tài khoản *</label>
-                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-user"></i><input type="text" id="bankAccName" placeholder="VD: NGUYEN VAN A" required></div>
+                        <label data-i18n="seller.shops.account_name_required">Tên chủ tài khoản *</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-user"></i><input type="text" id="bankAccName" placeholder="VD: NGUYEN VAN A" data-i18n-placeholder="seller.shops.account_name_placeholder" required></div>
                     </div>
                     
                     <button id="btnSaveShop" onclick="saveShop()" style="width: 100%; margin-top: 1.5rem; font-size: 1.05rem;">
-                        <i class="ph ph-check-circle"></i> Lưu Cài Đặt Cửa Hàng
+                        <i class="ph ph-check-circle"></i> <span data-seller-action-label="shop-save">Lưu Cài Đặt Cửa Hàng</span>
                     </button>
-                    <button class="btn-outline" onclick="closeShopForm()" style="width: 100%; margin-top: 0.5rem;">Hủy</button>
+                    <button class="btn-outline" onclick="closeShopForm()" style="width: 100%; margin-top: 0.5rem;" data-i18n="common.cancel">Hủy</button>
                 </div>
             </div>
         </div>
@@ -853,91 +859,91 @@
     <!-- Modal Mở POS -->
     <div class="posModal" id="posModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center;">
         <div style="background: #ffffff; padding: 2rem; border-radius: 12px; width: 400px; max-width: 90%; border: 1px solid var(--border-color);">
-            <h3 style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem;"><i class="ph ph-desktop" style="color: var(--primary);"></i> Chọn Cửa Hàng Mở POS</h3>
+            <h3 style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem;"><i class="ph ph-desktop" style="color: var(--primary);"></i> <span data-i18n="seller.pos.choose_shop">Chọn Cửa Hàng Mở POS</span></h3>
             <div id="posShopList" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem;"></div>
-            <button class="btn-outline" onclick="document.getElementById('posModal').style.display='none'" style="width: 100%;">Hủy bỏ</button>
+            <button class="btn-outline" onclick="document.getElementById('posModal').style.display='none'" style="width: 100%;" data-i18n="common.cancel">Hủy bỏ</button>
         </div>
     </div>
 
     <!-- Modal lịch sử mua của khách -->
     <div id="customerHistoryModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.6); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
         <div style="background: #ffffff; padding: 2rem; border-radius: 16px; width: 560px; max-width: 92%; border: 1px solid var(--border-color); box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);">
-            <h3 style="margin-bottom: 0.25rem;">Lịch sử mua — <span id="chTen" class="text-gradient"></span></h3>
+            <h3 style="margin-bottom: 0.25rem;"><span data-i18n="seller.customers.purchase_history">Lịch sử mua</span> — <span id="chTen" class="text-gradient"></span></h3>
             <small id="chTongKet" style="color: var(--text-muted); display: block; margin-bottom: 1rem;"></small>
             <div class="table-responsive" style="max-height: 340px; overflow-y: auto;">
                 <table class="db-table">
-                    <thead><tr><th>Mã ĐH</th><th>Ngày</th><th>Tổng</th><th>Trạng thái</th></tr></thead>
+                    <thead><tr><th data-i18n="seller.table.order_id">Mã ĐH</th><th data-i18n="seller.table.date">Ngày</th><th data-i18n="seller.table.total_short">Tổng</th><th data-i18n="seller.table.status">Trạng thái</th></tr></thead>
                     <tbody id="chDanhSach"></tbody>
                 </table>
             </div>
-            <button class="btn-outline" style="width: 100%; margin-top: 1rem;" onclick="dongLichSuKhach()">Đóng</button>
+            <button class="btn-outline" style="width: 100%; margin-top: 1rem;" onclick="dongLichSuKhach()" data-i18n="common.close">Đóng</button>
         </div>
     </div>
 
     <!-- Modal xem chi tiết đơn hàng -->
     <div id="orderDetailModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.6); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
         <div class="doi-soat-modal-card" style="background: #ffffff; padding: 2rem; border-radius: 16px; width: min(720px, 92vw); border: 1px solid var(--border-color); box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);">
-            <h3 style="margin-bottom: 0.25rem;">Chi tiết đơn <span id="odMaDon" class="text-gradient"></span></h3>
+            <h3 style="margin-bottom: 0.25rem;"><span data-i18n="seller.order_detail.title">Chi tiết đơn</span> <span id="odMaDon" class="text-gradient"></span></h3>
             <small id="odThongTin" style="color: var(--text-muted); display: block; margin-bottom: 1rem;"></small>
             <small id="odKhachHang" style="color: var(--text-muted); display: none; margin-bottom: 1rem;"></small>
             <div id="odDoiSoat" class="doi-soat-detail">
                 <div id="odDoiSoatTomTat"></div>
                 <div id="odThanhToanSection" style="display: none; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #FED7AA;">
-                    <strong style="font-size: 0.85rem;">Lịch sử tiền vào / hoàn tiền</strong>
+                    <strong style="font-size: 0.85rem;" data-i18n="seller.order_detail.payment_history">Lịch sử tiền vào / hoàn tiền</strong>
                     <div id="odThanhToanList" style="margin-top: 0.35rem;"></div>
                 </div>
             </div>
             <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
                 <table class="db-table">
                     <thead>
-                        <tr><th>Sản phẩm</th><th style="text-align:right;">Đơn giá</th><th style="text-align:right;">SL</th><th style="text-align:right;">Thành tiền</th></tr>
+                        <tr><th data-i18n="seller.table.product">Sản phẩm</th><th style="text-align:right;" data-i18n="seller.table.unit_price">Đơn giá</th><th style="text-align:right;" data-i18n="seller.table.quantity_short">SL</th><th style="text-align:right;" data-i18n="seller.table.line_total">Thành tiền</th></tr>
                     </thead>
                     <tbody id="odDanhSach"></tbody>
                 </table>
             </div>
             <div id="odTongKet" style="margin-top: 1rem; text-align: right;"></div>
-            <button class="btn-outline" style="width: 100%; margin-top: 1rem;" onclick="dongChiTietDon()">Đóng</button>
+            <button class="btn-outline" style="width: 100%; margin-top: 1rem;" onclick="dongChiTietDon()" data-i18n="common.close">Đóng</button>
         </div>
     </div>
 
     <!-- Modal ghi nhận đã hoàn tiền -->
     <div id="refundModal" style="display: none; position: fixed; inset: 0; z-index: 10000; background: rgba(15, 23, 42, 0.68); align-items: center; justify-content: center; padding: 1rem; backdrop-filter: blur(4px);">
         <div class="glass-card doi-soat-modal-card" style="background: #fff; position: relative;">
-            <button class="btn-outline" type="button" onclick="dongModalHoanTien()" aria-label="Đóng" style="position: absolute; top: 0.75rem; right: 0.75rem; width: 2.2rem; height: 2.2rem; padding: 0; border-radius: 999px;">&times;</button>
-            <h3 style="margin-bottom: 0.3rem;">Ghi nhận đã hoàn tiền</h3>
+            <button class="btn-outline" type="button" onclick="dongModalHoanTien()" aria-label="Đóng" data-i18n-aria-label="common.close" style="position: absolute; top: 0.75rem; right: 0.75rem; width: 2.2rem; height: 2.2rem; padding: 0; border-radius: 999px;">&times;</button>
+            <h3 style="margin-bottom: 0.3rem;" data-i18n="seller.refund.title">Ghi nhận đã hoàn tiền</h3>
             <p id="refundOrderLabel" style="margin: 0 0 1rem; color: var(--text-muted);"></p>
 
             <div style="padding: 0.85rem 1rem; margin-bottom: 1rem; border: 1px solid #FECACA; border-radius: 10px; background: #FEF2F2;">
-                <span style="display: block; color: #991B1B; font-size: 0.8rem;">Số tiền cần hoàn</span>
+                <span style="display: block; color: #991B1B; font-size: 0.8rem;" data-i18n="seller.refund.amount_due">Số tiền cần hoàn</span>
                 <strong id="refundAmount" style="display: block; margin-top: 0.15rem; color: #B91C1C; font-size: 1.35rem;">0 ₫</strong>
             </div>
 
-            <p style="margin: 0 0 1rem; color: var(--text-muted); font-size: 0.84rem; line-height: 1.55;">
+            <p style="margin: 0 0 1rem; color: var(--text-muted); font-size: 0.84rem; line-height: 1.55;" data-i18n="seller.refund.warning">
                 Chỉ bấm ghi nhận sau khi cửa hàng đã thực sự trả tiền cho khách. Thao tác này không tự chuyển tiền qua ngân hàng.
             </p>
 
             <div class="form-group">
-                <label for="refundMethod">Phương thức hoàn</label>
+                <label for="refundMethod" data-i18n="seller.refund.method">Phương thức hoàn</label>
                 <select id="refundMethod" onchange="capNhatFormHoanTien()" style="width: 100%;">
-                    <option value="cash">Tiền mặt</option>
-                    <option value="transfer">Chuyển khoản</option>
+                    <option value="cash" data-i18n="common.payment.cash">Tiền mặt</option>
+                    <option value="transfer" data-i18n="common.payment.transfer">Chuyển khoản</option>
                 </select>
             </div>
 
             <div class="form-group" id="refundReferenceGroup" style="display: none;">
-                <label for="refundReference">Mã giao dịch hoàn</label>
-                <input type="text" id="refundReference" maxlength="128" placeholder="Ví dụ: FT260731123456">
+                <label for="refundReference" data-i18n="seller.refund.reference">Mã giao dịch hoàn</label>
+                <input type="text" id="refundReference" maxlength="128" placeholder="Ví dụ: FT260731123456" data-i18n-placeholder="seller.refund.reference_placeholder">
             </div>
 
             <div class="form-group">
-                <label for="refundNote">Ghi chú (không bắt buộc)</label>
-                <textarea id="refundNote" maxlength="500" rows="3" placeholder="Ghi chú để người đối soát sau này dễ kiểm tra" style="width: 100%; resize: vertical;"></textarea>
+                <label for="refundNote" data-i18n="seller.refund.note">Ghi chú (không bắt buộc)</label>
+                <textarea id="refundNote" maxlength="500" rows="3" placeholder="Ghi chú để người đối soát sau này dễ kiểm tra" data-i18n-placeholder="seller.refund.note_placeholder" style="width: 100%; resize: vertical;"></textarea>
             </div>
 
             <div style="display: flex; gap: 0.65rem; margin-top: 1.15rem;">
-                <button class="btn-outline" type="button" onclick="dongModalHoanTien()" style="flex: 1;">Để sau</button>
+                <button class="btn-outline" type="button" onclick="dongModalHoanTien()" style="flex: 1;" data-i18n="seller.refund.later">Để sau</button>
                 <button id="btnSubmitRefund" type="button" onclick="xacNhanDaHoanTien()" style="flex: 1;">
-                    <i class="ph ph-check-circle"></i> Ghi nhận đã hoàn
+                    <i class="ph ph-check-circle"></i> <span data-seller-action-label="refund-submit">Ghi nhận đã hoàn</span>
                 </button>
             </div>
         </div>
@@ -948,24 +954,24 @@
     <!-- Modal Đổi Mật Khẩu -->
     <div id="changePasswordModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center;">
         <div class="glass-card" style="max-width: 400px; width: 90%; background: var(--card-bg); text-align: center; position: relative;">
-            <button onclick="closeChangePasswordModal()" style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; box-shadow: none; padding: 0;">&times;</button>
+            <button onclick="closeChangePasswordModal()" data-i18n-aria-label="common.close" style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; box-shadow: none; padding: 0;">&times;</button>
             
-            <h3 class="text-gradient" style="margin-top: 1rem;">Đổi mật khẩu</h3>
+            <h3 class="text-gradient" style="margin-top: 1rem;" data-i18n="common.change_password">Đổi mật khẩu</h3>
             
             <form id="changePasswordForm">
                 <div style="text-align: left;">
-                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mật khẩu hiện tại</label>
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;" data-i18n="seller.password.current">Mật khẩu hiện tại</label>
                     <input type="password" id="oldPassword" required>
                 </div>
                 <div style="text-align: left;">
-                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mật khẩu mới</label>
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;" data-i18n="seller.password.new">Mật khẩu mới</label>
                     <input type="password" id="newPassword" required>
                 </div>
                 <div style="text-align: left;">
-                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Xác nhận mật khẩu mới</label>
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;" data-i18n="seller.password.confirm_new">Xác nhận mật khẩu mới</label>
                     <input type="password" id="confirmNewPassword" required>
                 </div>
-                <button type="submit" style="width: 100%; margin-top: 0.5rem;">Cập nhật mật khẩu</button>
+                <button type="submit" style="width: 100%; margin-top: 0.5rem;" data-i18n="seller.password.update">Cập nhật mật khẩu</button>
             </form>
             
             <div id="changePasswordErrorMsg" style="color: #ef4444; margin-top: 1rem; text-align: center; font-size: 0.9rem;"></div>
@@ -982,19 +988,23 @@
             <h3 style="margin-bottom: 0.75rem; font-size: 1.3rem; font-weight: 700; color: var(--text-main);" id="confirmTitle">Xác nhận xóa</h3>
             <p style="margin-bottom: 2rem; color: var(--text-muted); font-size: 0.95rem; line-height: 1.5;" id="confirmMessage">Bạn có chắc chắn muốn thực hiện hành động này?</p>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
-                <button class="btn-outline" id="btnConfirmCancel" style="width: 100%; padding: 0.75rem; font-size: 0.95rem; border-radius: 8px;">Hủy bỏ</button>
+                <button class="btn-outline" id="btnConfirmCancel" style="width: 100%; padding: 0.75rem; font-size: 0.95rem; border-radius: 8px;" data-i18n="common.cancel">Hủy bỏ</button>
                 <button id="btnConfirmOk" style="width: 100%; padding: 0.75rem; font-size: 0.95rem; background: #ef4444; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 0.3rem;">
-                    <i class="ph ph-check-circle"></i> Đồng ý xóa
+                    <i class="ph ph-check-circle"></i> <span data-seller-action-label="confirm-ok">Đồng ý xóa</span>
                 </button>
             </div>
         </div>
     </div>
 
-    <script src="/js/api.js"></script>
+    <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
+    <script src="/js/locales/common.js?v=20260731-i18n4"></script>
+    <script src="/js/locales/seller.js?v=20260731-i18n4"></script>
+    <script src="/js/i18n.js?v=20260731-i18n4"></script>
+    <script src="/js/api.js?v=20260731-i18n4"></script>
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
-    <script src="/js/barcode.js"></script>
-    <script src="/js/barcode-camera.js"></script>
-    <script src="/js/doc-tien.js?v=20260731-reconciliation"></script>
-    <script src="/js/seller.js?v=20260731-cash-ledger-fix"></script>
+    <script src="/js/barcode.js?v=20260731-i18n4"></script>
+    <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
+    <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
+    <script src="/js/seller.js?v=20260731-i18n4"></script>
 </body>
 </html>

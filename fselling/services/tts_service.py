@@ -33,6 +33,7 @@ from ..core.config import (
     TTS_VOICE,
     log_to_file,
 )
+from ..core.i18n import tr
 
 _TIMEOUT = 15
 
@@ -45,11 +46,14 @@ def _kiem_tra_cau_hinh() -> None:
     if not dang_bat():
         raise HTTPException(
             status_code=503,
-            detail="Server chưa cấu hình giọng đọc (thiếu TTS_PROVIDER/TTS_API_KEY)",
+            detail=tr(
+                "Server chưa cấu hình giọng đọc (thiếu TTS_PROVIDER/TTS_API_KEY)"
+            ),
         )
     if TTS_PROVIDER == "azure" and not TTS_AZURE_REGION:
         raise HTTPException(
-            status_code=503, detail="Azure cần TTS_AZURE_REGION (ví dụ: southeastasia)"
+            status_code=503,
+            detail=tr("Azure cần TTS_AZURE_REGION (ví dụ: southeastasia)"),
         )
 
 
@@ -89,7 +93,10 @@ def _goi_google(text: str) -> bytes:
         payload = json.loads(r.read().decode("utf-8"))
     am_thanh = payload.get("audioContent")
     if not am_thanh:
-        raise HTTPException(status_code=502, detail="Google không trả về dữ liệu âm thanh")
+        raise HTTPException(
+            status_code=502,
+            detail=tr("Google không trả về dữ liệu âm thanh"),
+        )
     return base64.b64decode(am_thanh)
 
 
@@ -139,13 +146,17 @@ def tao_audio(text: str) -> Tuple[bytes, bool]:
     """
     text = (text or "").strip()
     if not text:
-        raise HTTPException(status_code=400, detail="Thiếu nội dung cần đọc")
+        raise HTTPException(status_code=400, detail=tr("Thiếu nội dung cần đọc"))
     if len(text) > TTS_MAX_CHARS:
         # Endpoint này tốn tiền theo ký tự. Câu thông báo dài nhất cũng chỉ
         # khoảng 80 ký tự, nên chặn ở đây để không ai biến nó thành dịch vụ
         # đọc sách miễn phí bằng hạn mức của chủ shop.
         raise HTTPException(
-            status_code=400, detail=f"Nội dung quá dài (tối đa {TTS_MAX_CHARS} ký tự)"
+            status_code=400,
+            detail=tr(
+                "Nội dung quá dài (tối đa {maximum} ký tự)",
+                maximum=TTS_MAX_CHARS,
+            ),
         )
 
     _kiem_tra_cau_hinh()
@@ -162,7 +173,10 @@ def tao_audio(text: str) -> Tuple[bytes, bool]:
     if ham is None:
         raise HTTPException(
             status_code=503,
-            detail=f"TTS_PROVIDER='{TTS_PROVIDER}' không hỗ trợ. Dùng 'google' hoặc 'azure'.",
+            detail=tr(
+                "TTS_PROVIDER='{provider}' không hỗ trợ. Dùng 'google' hoặc 'azure'.",
+                provider=TTS_PROVIDER,
+            ),
         )
 
     try:
@@ -170,13 +184,22 @@ def tao_audio(text: str) -> Tuple[bytes, bool]:
     except urllib.error.HTTPError as e:
         chi_tiet = e.read().decode("utf-8", "replace")[:200]
         log_to_file(f"TTS {TTS_PROVIDER} lỗi {e.code}: {chi_tiet}")
-        raise HTTPException(status_code=502, detail=f"Nhà cung cấp giọng đọc lỗi {e.code}")
+        raise HTTPException(
+            status_code=502,
+            detail=tr("Nhà cung cấp giọng đọc lỗi {code}", code=e.code),
+        )
     except urllib.error.URLError as e:
         log_to_file(f"TTS {TTS_PROVIDER} không kết nối được: {e}")
-        raise HTTPException(status_code=502, detail="Không kết nối được nhà cung cấp giọng đọc")
+        raise HTTPException(
+            status_code=502,
+            detail=tr("Không kết nối được nhà cung cấp giọng đọc"),
+        )
 
     if not du_lieu:
-        raise HTTPException(status_code=502, detail="Nhà cung cấp trả về dữ liệu rỗng")
+        raise HTTPException(
+            status_code=502,
+            detail=tr("Nhà cung cấp trả về dữ liệu rỗng"),
+        )
 
     try:
         os.makedirs(TTS_CACHE_DIR, exist_ok=True)

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from . import models
 from .core.config import log_to_file
 from .core.database import SessionLocal
+from .core.i18n import tr
 from .core.security import decode_access_token, extract_bearer_token
 
 STAFF_ROLE_CASHIER = "CASHIER"
@@ -65,32 +66,34 @@ def get_current_user(
     token = extract_bearer_token(authorization)
     if not token:
         log_to_file("Auth failed: Token missing")
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail=tr("Phiên đăng nhập không hợp lệ"))
     try:
         payload = decode_access_token(token)
         username = payload.get("sub")
         sid = payload.get("sid")
         if username is None:
             log_to_file("Auth failed: sub is None")
-            raise HTTPException(status_code=401, detail="Invalid token")
+            raise HTTPException(status_code=401, detail=tr("Phiên đăng nhập không hợp lệ"))
     except jwt.PyJWTError as e:
         log_to_file(f"Auth failed: PyJWTError: {e}")
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail=tr("Phiên đăng nhập không hợp lệ"))
 
     user = db.query(models.User).filter(models.User.username == username).first()
     if user is None:
         log_to_file(f"Auth failed: User not found: '{username}'")
-        raise HTTPException(status_code=401, detail="User not found")
+        raise HTTPException(status_code=401, detail=tr("Không tìm thấy người dùng"))
     if user.is_active is False:
         log_to_file(f"Auth failed: User disabled: '{username}'")
-        raise HTTPException(status_code=401, detail="Tài khoản đã ngừng hoạt động")
+        raise HTTPException(status_code=401, detail=tr("Tài khoản đã ngừng hoạt động"))
 
     # Kiểm tra Session ID để đảm bảo đăng xuất thiết bị cũ
     if user.session_id and sid != user.session_id:
         log_to_file(f"Auth failed: session_id mismatch for user '{username}'")
         raise HTTPException(
             status_code=401,
-            detail="Tài khoản đã được đăng nhập ở thiết bị khác. Vui lòng đăng nhập lại.",
+            detail=tr(
+                "Tài khoản đã được đăng nhập ở thiết bị khác. Vui lòng đăng nhập lại."
+            ),
         )
 
     log_to_file(f"Auth success: user='{username}' (ID={user.id})")
@@ -99,7 +102,10 @@ def get_current_user(
 
 def require_admin(current_user: models.User = Depends(get_current_user)) -> models.User:
     if current_user.role != "ADMIN":
-        raise HTTPException(status_code=403, detail="Admin only")
+        raise HTTPException(
+            status_code=403,
+            detail=tr("Chỉ quản trị viên được thực hiện thao tác này"),
+        )
     return current_user
 
 
@@ -131,7 +137,7 @@ def require_staff_permission(
     if not has_staff_permission(current_user, permission):
         raise HTTPException(
             status_code=403,
-            detail="Vai trò nhân viên không có quyền thực hiện thao tác này",
+            detail=tr("Vai trò nhân viên không có quyền thực hiện thao tác này"),
         )
     return current_user
 
@@ -142,7 +148,7 @@ def require_any_staff_permission(
     if not any(has_staff_permission(current_user, p) for p in permissions):
         raise HTTPException(
             status_code=403,
-            detail="Vai trò nhân viên không có quyền thực hiện thao tác này",
+            detail=tr("Vai trò nhân viên không có quyền thực hiện thao tác này"),
         )
     return current_user
 
@@ -169,9 +175,12 @@ def require_shop_access(
     được gán vào shop). Nếu không -> 403/404."""
     shop = db.query(models.Shop).filter(models.Shop.id == shop_id).first()
     if not shop:
-        raise HTTPException(status_code=404, detail="Không tìm thấy cửa hàng")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy cửa hàng"))
     if not has_shop_operator_access(shop, current_user):
-        raise HTTPException(status_code=403, detail="Bạn không có quyền truy cập cửa hàng này")
+        raise HTTPException(
+            status_code=403,
+            detail=tr("Bạn không có quyền truy cập cửa hàng này"),
+        )
     return shop
 
 
@@ -186,5 +195,5 @@ def require_own_shop(
         .first()
     )
     if not shop:
-        raise HTTPException(status_code=404, detail="Không tìm thấy cửa hàng")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy cửa hàng"))
     return shop

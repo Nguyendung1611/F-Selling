@@ -157,6 +157,10 @@ def test_trang_html_va_redirect(client):
 def test_trang_chu_va_static_file(client):
     assert client.get("/").status_code == 200
     assert client.get("/js/api.js").status_code == 200
+    assert client.get("/js/i18n.js").status_code == 200
+    assert client.get("/js/vendor/i18next-26.3.6.min.js").status_code == 200
+    for catalog in ("common", "auth-admin", "seller", "pos"):
+        assert client.get(f"/js/locales/{catalog}.js").status_code == 200
     assert client.get("/css/style.css").status_code == 200
 
 

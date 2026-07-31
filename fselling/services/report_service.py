@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from .. import models
 from ..core.config import log_to_file
+from ..core.i18n import tr
 from ..dependencies import (
     PERMISSION_REPORT,
     require_shop_access,
@@ -43,7 +44,11 @@ def _parse_ngay(chuoi: Optional[str], ten_truong: str) -> Optional[datetime]:
         return datetime.strptime(chuoi.strip(), "%Y-%m-%d")
     except ValueError:
         raise HTTPException(
-            status_code=400, detail=f"{ten_truong} phải theo định dạng YYYY-MM-DD"
+            status_code=400,
+            detail=tr(
+                "{field} phải theo định dạng YYYY-MM-DD",
+                field=ten_truong,
+            ),
         )
 
 
@@ -52,7 +57,10 @@ def _loc_khoang_ngay(query, tu_ngay: Optional[str], den_ngay: Optional[str]):
     bat_dau = _parse_ngay(tu_ngay, "tu_ngay")
     ket_thuc = _parse_ngay(den_ngay, "den_ngay")
     if bat_dau and ket_thuc and bat_dau > ket_thuc:
-        raise HTTPException(status_code=400, detail="tu_ngay không được lớn hơn den_ngay")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("tu_ngay không được lớn hơn den_ngay"),
+        )
     if bat_dau:
         query = query.filter(models.Order.created_at >= bat_dau)
     if ket_thuc:
@@ -79,10 +87,11 @@ def seller_dashboard(
     require_staff_permission(current_user, PERMISSION_REPORT)
 
     if page < 1:
-        raise HTTPException(status_code=400, detail="page phải >= 1")
+        raise HTTPException(status_code=400, detail=tr("page phải >= 1"))
     if per_page < 1 or per_page > MAX_PAGE_SIZE:
         raise HTTPException(
-            status_code=400, detail=f"per_page phải từ 1 đến {MAX_PAGE_SIZE}"
+            status_code=400,
+            detail=tr("per_page phải từ 1 đến {maximum}", maximum=MAX_PAGE_SIZE),
         )
 
     open_reconciliation = or_(
@@ -264,8 +273,8 @@ def _workbook_to_stream(wb: "openpyxl.Workbook") -> io.BytesIO:
 def admin_excel(db: Session) -> io.BytesIO:
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Doanh thu Shops"
-    ws.append(["Tên Shop", "Tổng Doanh Thu"])
+    ws.title = tr("Doanh thu Shops")
+    ws.append([tr("Tên Shop"), tr("Tổng Doanh Thu")])
     for s in db.query(models.Shop).all():
         ws.append([s.name, _paid_revenue(db, s.id)])
     return _workbook_to_stream(wb)
@@ -276,8 +285,15 @@ def seller_excel(db: Session, current_user: models.User, shop_id: int) -> io.Byt
     require_staff_permission(current_user, PERMISSION_REPORT)
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Lịch sử giao dịch"
-    ws.append(["Mã đơn", "Ngày tạo", "Thu ngân", "Mã ca", "Trạng thái", "Thành tiền"])
+    ws.title = tr("Lịch sử giao dịch")
+    ws.append([
+        tr("Mã đơn"),
+        tr("Ngày tạo"),
+        tr("Thu ngân"),
+        tr("Mã ca"),
+        tr("Trạng thái"),
+        tr("Thành tiền"),
+    ])
 
     orders = (
         db.query(models.Order)
@@ -292,12 +308,17 @@ def seller_excel(db: Session, current_user: models.User, shop_id: int) -> io.Byt
             str(o.created_at),
             o.created_by.username if o.created_by else "",
             o.shift_id or "",
-            o.status,
+            tr({
+                "PENDING": "Chờ thanh toán",
+                "PAID": "Đã thanh toán",
+                "CANCELLED": "Đã hủy",
+                "UNRECONCILED": "Cần đối soát",
+            }.get(o.status, o.status)),
             o.total_amount,
         ])
         if o.status == "PAID":
             total_rev += o.total_amount
 
     ws.append([])
-    ws.append(["Tổng Doanh Thu (Đã thanh toán)", total_rev])
+    ws.append([tr("Tổng Doanh Thu (Đã thanh toán)"), total_rev])
     return _workbook_to_stream(wb)

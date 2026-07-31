@@ -17,6 +17,12 @@
 (function (global) {
     'use strict';
 
+    function dich(key, vi, en) {
+        const locale = global.getCurrentLocale?.() || 'vi';
+        const defaultValue = locale === 'en' ? en : vi;
+        return global.t ? global.t(key, { defaultValue }) : defaultValue;
+    }
+
     // Khoảng cách tối đa giữa hai phím để còn được coi là cùng một lượt quét.
     // 50ms nằm giữa hai vùng an toàn: máy quét (5-20ms) và người gõ (>80ms).
     const NGUONG_MS = 50;
@@ -90,7 +96,11 @@
         try {
             xuLyHienTai(sach);
         } catch (e) {
-            console.error('Lỗi xử lý mã vạch:', e);
+            console.error(dich(
+                'barcode.scanner.handle_error',
+                'Lỗi xử lý mã vạch:',
+                'Barcode handling error:'
+            ), e);
             bipLoi();
         }
     }

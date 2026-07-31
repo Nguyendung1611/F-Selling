@@ -35,6 +35,7 @@ def doc_thanh_tieng(
         media_type="audio/mpeg",
         headers={
             "Cache-Control": "public, max-age=86400",
+            "Content-Language": "vi",
             "X-TTS-Cache": "hit" if tu_cache else "miss",
         },
     )

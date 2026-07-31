@@ -83,10 +83,14 @@ def nha_cung_cap_gia(monkeypatch, tmp_path):
 
 
 def test_tra_ve_mp3(client, nha_cung_cap_gia):
-    res = client.post("/api/tts", json={"text": "Đã nhận năm nghìn đồng"},
-                      headers=auth(_token(client)))
+    res = client.post(
+        "/api/tts",
+        json={"text": "Đã nhận năm nghìn đồng"},
+        headers={**auth(_token(client)), "Accept-Language": "en"},
+    )
     assert res.status_code == 200, res.text
     assert res.headers["content-type"] == "audio/mpeg"
+    assert res.headers["content-language"] == "vi"
     assert res.content.startswith(b"ID3-mp3-gia-")
     assert nha_cung_cap_gia["so_lan"] == 1
 

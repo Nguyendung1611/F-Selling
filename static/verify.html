@@ -1,50 +1,65 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Xác thực Email | F-Selling</title>
+    <title data-i18n="verify.page_title">Xác thực Email | F-Selling</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
     <link rel="stylesheet" href="/css/verify.css">
 
 </head>
 <body>
+    <div class="language-switcher language-switcher--floating language-switcher--auth">
+        <label for="languageSelector" data-i18n="common.language">Ngôn ngữ</label>
+        <select id="languageSelector"
+                data-language-selector
+                data-i18n-aria-label="auth.language_selector_aria"
+                data-i18n-title="auth.language_selector_aria">
+            <option value="vi" data-i18n="common.language.vi">Tiếng Việt</option>
+            <option value="en" data-i18n="common.language.en">English</option>
+        </select>
+    </div>
+
     <div class="verify-container">
         <div class="glass-card verify-box">
-            <h1 class="text-gradient">Xác thực tài khoản</h1>
-            <p style="color: var(--text-muted); margin-bottom: 1rem;">
+            <h1 class="text-gradient" data-i18n="verify.title">Xác thực tài khoản</h1>
+            <p data-i18n="verify.instructions" style="color: var(--text-muted); margin-bottom: 1rem;">
                 Chúng tôi đã gửi mã xác thực gồm 6 chữ số vào địa chỉ email của bạn:
             </p>
             <p id="targetEmail" style="font-weight: 600; color: var(--text-main); margin-bottom: 1.5rem; word-break: break-all;"></p>
             
             <div class="timer-card">
-                <p class="timer-label">Thời gian xác thực còn lại:</p>
+                <p class="timer-label" data-i18n="verify.timer_label">Thời gian xác thực còn lại:</p>
                 <p id="timerDisplay" class="timer-value">05:00</p>
             </div>
 
-            <form id="verifyForm">
+            <form id="verifyForm" data-i18n-aria-label="verify.form_aria">
                 <div class="otp-inputs">
-                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" required>
-                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" required>
-                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" required>
-                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" required>
-                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" required>
-                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" required>
+                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" inputmode="numeric" autocomplete="one-time-code" data-i18n-aria-label="verify.otp_digit_1" data-i18n-title="verify.otp_input_hint" required>
+                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" inputmode="numeric" data-i18n-aria-label="verify.otp_digit_2" data-i18n-title="verify.otp_input_hint" required>
+                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" inputmode="numeric" data-i18n-aria-label="verify.otp_digit_3" data-i18n-title="verify.otp_input_hint" required>
+                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" inputmode="numeric" data-i18n-aria-label="verify.otp_digit_4" data-i18n-title="verify.otp_input_hint" required>
+                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" inputmode="numeric" data-i18n-aria-label="verify.otp_digit_5" data-i18n-title="verify.otp_input_hint" required>
+                    <input type="text" class="otp-field" maxlength="1" pattern="[0-9]" inputmode="numeric" data-i18n-aria-label="verify.otp_digit_6" data-i18n-title="verify.otp_input_hint" required>
                 </div>
                 
-                <button type="submit">Xác thực tài khoản</button>
-                <div id="errorMsg" class="feedback error"></div>
-                <div id="successMsg" class="feedback success"></div>
+                <button type="submit" data-i18n="verify.submit">Xác thực tài khoản</button>
+                <div id="errorMsg" class="feedback error" aria-live="polite"></div>
+                <div id="successMsg" class="feedback success" aria-live="polite"></div>
             </form>
             
             <div style="text-align: center; margin-top: 2rem; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
-                <p style="font-size: 0.9rem; color: var(--text-muted);">
-                    Không nhận được mã? 
-                    <a href="#" id="resendBtn" style="color: var(--primary); font-weight: 600; text-decoration: none;">Gửi lại mã mới</a>
+                <p id="verifyHelpActive" style="font-size: 0.9rem; color: var(--text-muted);">
+                    <span data-i18n="verify.did_not_receive">Không nhận được mã?</span>
+                    <a href="#" id="resendBtn" data-i18n="verify.resend" style="color: var(--primary); font-weight: 600; text-decoration: none;">Gửi lại mã mới</a>
+                </p>
+                <p id="verifyHelpExpired" style="display: none; font-size: 0.9rem; color: var(--text-muted);">
+                    <span data-i18n="verify.expired">Mã xác thực đã hết hạn.</span>
+                    <a href="/register" data-i18n="verify.register_again" style="color: var(--primary); font-weight: 600;">Đăng ký lại</a>
                 </p>
                 <p style="font-size: 0.9rem; margin-top: 0.75rem;">
-                    <a href="/" style="color: var(--text-muted); text-decoration: none;"><i class="ph ph-arrow-left"></i> Quay về Đăng nhập</a>
+                    <a href="/" data-i18n-title="verify.back_to_login" style="color: var(--text-muted); text-decoration: none;"><i class="ph ph-arrow-left" aria-hidden="true"></i> <span data-i18n="verify.back_to_login">Quay về Đăng nhập</span></a>
                 </p>
             </div>
         </div>
@@ -52,7 +67,11 @@
 
     <!-- Phosphor Icons for arrow icon -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
-    <script src="/js/api.js"></script> 
-    <script src="/js/verify.js"></script> 
+    <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
+    <script src="/js/locales/common.js?v=20260731-i18n4"></script>
+    <script src="/js/locales/auth-admin.js?v=20260731-i18n4"></script>
+    <script src="/js/i18n.js?v=20260731-i18n4"></script>
+    <script src="/js/api.js?v=20260731-i18n4"></script>
+    <script src="/js/verify.js?v=20260731-i18n4"></script>
 </body>
 </html>

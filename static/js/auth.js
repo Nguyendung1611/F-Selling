@@ -1,9 +1,48 @@
+function clearRuntimeMessage(element) {
+    element.textContent = '';
+    delete element.dataset.messageKey;
+    delete element.dataset.apiMessage;
+}
+
+function showLocalizedMessage(element, key) {
+    element.dataset.messageKey = key;
+    delete element.dataset.apiMessage;
+    element.textContent = t(key);
+}
+
+function showApiMessage(element, message) {
+    delete element.dataset.messageKey;
+    element.dataset.apiMessage = '1';
+    element.textContent = message;
+}
+
+function setSubmitState(button, key, disabled) {
+    button.dataset.i18n = key;
+    button.textContent = t(key);
+    button.disabled = disabled;
+}
+
+function refreshRuntimeMessages() {
+    document.querySelectorAll('[data-message-key]').forEach(element => {
+        element.textContent = t(element.dataset.messageKey);
+    });
+
+    // Lỗi API cũ thuộc ngôn ngữ của lần gửi trước. Xóa nó để không giữ một
+    // thông báo sai ngôn ngữ sau khi người dùng chuyển lựa chọn.
+    document.querySelectorAll('[data-api-message="1"]').forEach(clearRuntimeMessage);
+}
+
+document.addEventListener('fselling:localechange', refreshRuntimeMessages);
+
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const username = document.getElementById('username').value;
     const password = document.getElementById('password').value;
     const errorMsg = document.getElementById('errorMsg');
+    const submitBtn = e.currentTarget.querySelector('button[type="submit"]');
 
+    clearRuntimeMessage(errorMsg);
+    setSubmitState(submitBtn, 'login.submitting', true);
 
     try {
         const data = await apiCall('/auth/login', 'POST', { username, password });
@@ -18,19 +57,18 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
         // giải mã token: chỉ dùng để hiển thị, không dùng để phân quyền.
         localStorage.setItem('username', username);
         if (data.role === 'ADMIN') {
-            window.location.href = '/admin';
+            navigateToPage('/admin');
         } else if (data.role === 'STAFF' && data.staff_role === 'CASHIER') {
-            window.location.href = '/pos';
+            navigateToPage('/pos');
         } else {
-            window.location.href = '/seller';
+            navigateToPage('/seller');
         }
     } catch (err) {
-        // Kiểm tra nếu là lỗi 401 hoặc lỗi xác thực, hiển thị message chung
-        if (err.message.includes('401') || err.message.includes('không chính xác') || err.message.includes('không đúng') || err.message.includes('Unauthorized')) {
-            errorMsg.innerText = "Tên đăng nhập hoặc mật khẩu không đúng";
-            console.log(errorMsg);
+        setSubmitState(submitBtn, 'login.submit', false);
+        if (err.status === 401) {
+            showLocalizedMessage(errorMsg, 'login.invalid_credentials');
         } else {
-            errorMsg.innerText = err.message;
+            showApiMessage(errorMsg, err.message);
         }
     }
 });
@@ -40,12 +78,23 @@ function showForgotModal() {
     document.getElementById('forgotModal').style.display = 'flex';
     document.getElementById('forgotStep1Form').style.display = 'block';
     document.getElementById('forgotStep2Form').style.display = 'none';
-    document.getElementById('forgotErrorMsg').innerText = '';
-    document.getElementById('forgotSuccessMsg').innerText = '';
+    clearRuntimeMessage(document.getElementById('forgotErrorMsg'));
+    clearRuntimeMessage(document.getElementById('forgotSuccessMsg'));
     document.getElementById('forgotEmail').value = '';
     document.getElementById('forgotOTP').value = '';
     document.getElementById('forgotNewPassword').value = '';
     document.getElementById('forgotConfirmPassword').value = '';
+    setSubmitState(
+        document.querySelector('#forgotStep1Form button[type="submit"]'),
+        'forgot.send_code',
+        false
+    );
+    setSubmitState(
+        document.querySelector('#forgotStep2Form button[type="submit"]'),
+        'forgot.reset_submit',
+        false
+    );
+    document.getElementById('forgotEmail').focus();
 }
 
 function closeForgotModal() {
@@ -57,19 +106,24 @@ document.getElementById('forgotStep1Form').addEventListener('submit', async (e) 
     const email = document.getElementById('forgotEmail').value;
     const errorMsg = document.getElementById('forgotErrorMsg');
     const successMsg = document.getElementById('forgotSuccessMsg');
-    errorMsg.innerText = '';
-    successMsg.innerText = '';
+    const submitBtn = e.currentTarget.querySelector('button[type="submit"]');
+    clearRuntimeMessage(errorMsg);
+    clearRuntimeMessage(successMsg);
+    setSubmitState(submitBtn, 'forgot.sending_code', true);
     
     try {
-        const res = await apiCall('/auth/forgot-password-request', 'POST', { email });
-        successMsg.innerText = res.msg;
+        await apiCall('/auth/forgot-password-request', 'POST', { email });
+        setSubmitState(submitBtn, 'forgot.send_code', false);
+        showLocalizedMessage(successMsg, 'forgot.code_sent');
         setTimeout(() => {
             document.getElementById('forgotStep1Form').style.display = 'none';
             document.getElementById('forgotStep2Form').style.display = 'block';
-            successMsg.innerText = '';
+            clearRuntimeMessage(successMsg);
+            document.getElementById('forgotOTP').focus();
         }, 1500);
     } catch (err) {
-        errorMsg.innerText = err.message;
+        setSubmitState(submitBtn, 'forgot.send_code', false);
+        showApiMessage(errorMsg, err.message);
     }
 });
 
@@ -81,26 +135,31 @@ document.getElementById('forgotStep2Form').addEventListener('submit', async (e) 
     const confirm = document.getElementById('forgotConfirmPassword').value;
     const errorMsg = document.getElementById('forgotErrorMsg');
     const successMsg = document.getElementById('forgotSuccessMsg');
-    errorMsg.innerText = '';
-    successMsg.innerText = '';
+    const submitBtn = e.currentTarget.querySelector('button[type="submit"]');
+    clearRuntimeMessage(errorMsg);
+    clearRuntimeMessage(successMsg);
     
     if (new_password !== confirm) {
-        errorMsg.innerText = "Mật khẩu xác nhận không khớp!";
+        showLocalizedMessage(errorMsg, 'auth.validation.password_mismatch');
         return;
     }
     
     const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?\":{}|<>_]).+$/;
     if (!regex.test(new_password)) {
-        errorMsg.innerText = "Mật khẩu phải bao gồm kí tự đặc biệt, chữ hoa, chữ thường và số!";
+        showLocalizedMessage(errorMsg, 'auth.validation.password_policy');
         return;
     }
+
+    setSubmitState(submitBtn, 'forgot.resetting', true);
     
     try {
-        const res = await apiCall('/auth/forgot-password-reset', 'POST', { email, code, new_password });
-        successMsg.innerText = res.msg;
-        alert(res.msg);
+        await apiCall('/auth/forgot-password-reset', 'POST', { email, code, new_password });
+        showLocalizedMessage(successMsg, 'forgot.reset_success');
+        alert(t('forgot.reset_success'));
         closeForgotModal();
+        setSubmitState(submitBtn, 'forgot.reset_submit', false);
     } catch (err) {
-        errorMsg.innerText = err.message;
+        setSubmitState(submitBtn, 'forgot.reset_submit', false);
+        showApiMessage(errorMsg, err.message);
     }
 });

@@ -21,6 +21,16 @@
 
     const ZXING_CDN = 'https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js';
 
+    function dich(key, vi, en, options = {}) {
+        const locale = global.getCurrentLocale?.() || 'vi';
+        const defaultValue = locale === 'en' ? en : vi;
+        if (global.t) return global.t(key, { ...options, defaultValue });
+        return String(defaultValue).replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, name) => {
+            const value = options[name];
+            return value === undefined || value === null ? '' : String(value);
+        });
+    }
+
     // Cùng một mã nằm trong khung ngắm sẽ được đọc lại ở MỌI khung hình. Nếu chỉ
     // chờ hết một khoảng thời gian rồi nhận lại, người bán để yên máy vài giây là
     // món hàng bị cộng thêm mấy lần - tính thừa tiền mà không ai để ý.
@@ -51,6 +61,7 @@
     let lanThayCuoi = 0;
     let dongSauKhiQuet = false;
     let xuLyRieng = null;
+    let trangThaiHienTai = null;
 
     // ----- Dựng giao diện (tự tạo, để hai trang không phải chép HTML) -----
 
@@ -84,8 +95,8 @@
                     <div id="bcCamNgam"></div>
                 </div>
                 <div id="bcCamDuoi">
-                    <div id="bcCamTrangThai">Đang mở camera...</div>
-                    <button id="bcCamDong" type="button">Đóng</button>
+                    <div id="bcCamTrangThai"></div>
+                    <button id="bcCamDong" type="button"></button>
                 </div>
             </div>
         `;
@@ -93,13 +104,32 @@
 
         video = modal.querySelector('#bcCamVideo');
         dongTrangThai = modal.querySelector('#bcCamTrangThai');
+        capNhatNgonNguCamera();
         modal.querySelector('#bcCamDong').addEventListener('click', dong);
         // Bấm ra ngoài hộp cũng đóng, nhưng bấm trong hộp thì không.
         modal.addEventListener('click', e => { if (e.target === modal) dong(); });
     }
 
-    function bao(text) {
-        if (dongTrangThai) dongTrangThai.innerText = text;
+    function bao(key, vi, en, options = {}) {
+        trangThaiHienTai = { key, vi, en, options };
+        if (dongTrangThai) dongTrangThai.innerText = dich(key, vi, en, options);
+    }
+
+    function capNhatNgonNguCamera() {
+        const closeButton = modal?.querySelector('#bcCamDong');
+        if (closeButton) {
+            closeButton.innerText = dich('barcode.camera.close', 'Đóng', 'Close');
+        }
+        if (trangThaiHienTai && dongTrangThai) {
+            const { key, vi, en, options } = trangThaiHienTai;
+            dongTrangThai.innerText = dich(key, vi, en, options);
+        } else if (dongTrangThai) {
+            bao(
+                'barcode.camera.opening',
+                'Đang mở camera...',
+                'Opening camera...'
+            );
+        }
     }
 
     // ----- Tải ZXing khi cần -----
@@ -111,8 +141,18 @@
         zxingDangTai = new Promise((ok, loi) => {
             const s = document.createElement('script');
             s.src = ZXING_CDN;
-            s.onload = () => global.ZXing ? ok(global.ZXing) : loi(new Error('ZXing nạp lỗi'));
-            s.onerror = () => loi(new Error('Không tải được thư viện quét'));
+            s.onload = () => global.ZXing
+                ? ok(global.ZXing)
+                : loi(new Error(dich(
+                    'barcode.camera.zxing_load_error',
+                    'ZXing nạp lỗi',
+                    'ZXing failed to load'
+                )));
+            s.onerror = () => loi(new Error(dich(
+                'barcode.camera.library_load_error',
+                'Không tải được thư viện quét',
+                'Could not load the scanning library'
+            )));
             document.head.appendChild(s);
         });
         return zxingDangTai;
@@ -140,7 +180,12 @@
             xuLy(ma);
             return;
         }
-        bao(`Đã quét: ${ma}`);
+        bao(
+            'barcode.camera.scanned',
+            'Đã quét: {{code}}',
+            'Scanned: {{code}}',
+            { code: ma }
+        );
         xuLy(ma);
     }
 
@@ -157,7 +202,11 @@
             dinhDang.length ? { formats: dinhDang } : undefined
         );
 
-        bao('Đưa mã vạch vào khung. Giữ máy cách khoảng 15-20cm.');
+        bao(
+            'barcode.camera.aim',
+            'Đưa mã vạch vào khung. Giữ máy cách khoảng 15-20cm.',
+            'Place the barcode inside the frame. Hold the device about 15–20 cm away.'
+        );
 
         let lanTruoc = 0;
         const vongLap = async (mocThoiGian) => {
@@ -176,10 +225,18 @@
     }
 
     async function chayZXing(stream) {
-        bao('Đang tải bộ giải mã...');
+        bao(
+            'barcode.camera.decoder_loading',
+            'Đang tải bộ giải mã...',
+            'Loading barcode decoder...'
+        );
         const ZXing = await taiZXing();
         zxingReader = new ZXing.BrowserMultiFormatReader();
-        bao('Đưa mã vạch vào khung. Giữ máy cách khoảng 15-20cm.');
+        bao(
+            'barcode.camera.aim',
+            'Đưa mã vạch vào khung. Giữ máy cách khoảng 15-20cm.',
+            'Place the barcode inside the frame. Hold the device about 15–20 cm away.'
+        );
 
         // PHẢI dùng decodeFromStream và để ZXing tự gắn stream rồi tự phát hình.
         // Hàm decodeFromVideoElementContinuously chờ sự kiện 'canplay'; nếu mình
@@ -197,15 +254,40 @@
     function loiCameraDeHieu(e) {
         const ten = e && e.name;
         if (ten === 'NotAllowedError' || ten === 'SecurityError') {
-            return 'Bạn đã từ chối quyền dùng camera. Vào phần cài đặt quyền của trình duyệt để bật lại.';
+            return {
+                key: 'barcode.camera.permission_denied',
+                vi: 'Bạn đã từ chối quyền dùng camera. Vào phần cài đặt quyền của trình duyệt để bật lại.',
+                en: 'Camera access was denied. Open your browser permissions and allow camera access.'
+            };
         }
         if (ten === 'NotFoundError' || ten === 'OverconstrainedError') {
-            return 'Không tìm thấy camera trên thiết bị này.';
+            return {
+                key: 'barcode.camera.not_found',
+                vi: 'Không tìm thấy camera trên thiết bị này.',
+                en: 'No camera was found on this device.'
+            };
         }
         if (ten === 'NotReadableError') {
-            return 'Camera đang được ứng dụng khác sử dụng. Hãy đóng ứng dụng đó rồi thử lại.';
+            return {
+                key: 'barcode.camera.in_use',
+                vi: 'Camera đang được ứng dụng khác sử dụng. Hãy đóng ứng dụng đó rồi thử lại.',
+                en: 'Another app is using the camera. Close it, then try again.'
+            };
         }
-        return 'Không mở được camera: ' + (e && e.message ? e.message : 'lỗi không rõ');
+        return {
+            key: 'barcode.camera.open_error',
+            vi: 'Không mở được camera: {{message}}',
+            en: 'Could not open the camera: {{message}}',
+            options: {
+                message: e && e.message
+                    ? e.message
+                    : dich(
+                        'barcode.camera.unknown_error',
+                        'lỗi không rõ',
+                        'unknown error'
+                    )
+            }
+        };
     }
 
     /**
@@ -222,17 +304,31 @@
         dungModal();
         modal.style.display = 'flex';
         maCuoi = '';
+        bao(
+            'barcode.camera.opening',
+            'Đang mở camera...',
+            'Opening camera...'
+        );
 
         // Kiểm trước hai điều kiện hay hỏng nhất, để báo đúng nguyên nhân thay
         // vì để getUserMedia ném ra lỗi khó hiểu.
         if (!global.isSecureContext) {
-            bao('Trình duyệt chỉ cho dùng camera trên kết nối HTTPS. '
-                + 'Hãy mở app qua địa chỉ https (ngrok hoặc bản đã deploy), '
-                + 'hoặc dùng máy quét USB.');
+            bao(
+                'barcode.camera.https_required',
+                'Trình duyệt chỉ cho dùng camera trên kết nối HTTPS. '
+                    + 'Hãy mở app qua địa chỉ https (ngrok hoặc bản đã deploy), '
+                    + 'hoặc dùng máy quét USB.',
+                'Camera access requires HTTPS. Open the app through an https address '
+                    + '(such as ngrok or the deployed app), or use a USB scanner.'
+            );
             return;
         }
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            bao('Trình duyệt này không hỗ trợ truy cập camera. Hãy dùng máy quét USB.');
+            bao(
+                'barcode.camera.unsupported',
+                'Trình duyệt này không hỗ trợ truy cập camera. Hãy dùng máy quét USB.',
+                'This browser does not support camera access. Use a USB scanner instead.'
+            );
             return;
         }
 
@@ -242,7 +338,8 @@
                 audio: false
             });
         } catch (e) {
-            bao(loiCameraDeHieu(e));
+            const loi = loiCameraDeHieu(e);
+            bao(loi.key, loi.vi, loi.en, loi.options);
             return;
         }
 
@@ -257,8 +354,19 @@
                 await chayZXing(stream);
             }
         } catch (e) {
-            bao((e && e.message ? e.message : 'Lỗi bộ giải mã')
-                + '. Nếu đang không có mạng, hãy dùng máy quét USB.');
+            const message = e && e.message
+                ? e.message
+                : dich(
+                    'barcode.camera.decoder_unknown',
+                    'Lỗi bộ giải mã',
+                    'Barcode decoder error'
+                );
+            bao(
+                'barcode.camera.decoder_error',
+                '{{message}}. Nếu đang không có mạng, hãy dùng máy quét USB.',
+                '{{message}}. If you are offline, use a USB scanner.',
+                { message }
+            );
             dangChay = false;
         }
     }
@@ -282,6 +390,8 @@
         if (video) video.srcObject = null;
         if (modal) modal.style.display = 'none';
     }
+
+    document.addEventListener('fselling:localechange', capNhatNgonNguCamera);
 
     global.BarcodeCamera = { mo: mo, dong: dong };
 })(window);

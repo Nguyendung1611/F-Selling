@@ -19,6 +19,7 @@ from ..core.config import (
     MAX_IMAGE_SIZE,
     UPLOAD_DIR,
 )
+from ..core.i18n import tr
 from ..dependencies import (
     PERMISSION_INVENTORY,
     PERMISSION_SALE,
@@ -52,7 +53,9 @@ def normalize_barcode(raw: Optional[str]) -> Optional[str]:
     if not _BARCODE_PATTERN.match(cleaned):
         raise HTTPException(
             status_code=400,
-            detail="Mã vạch chỉ gồm chữ, số và dấu gạch ngang, dài 4-64 ký tự",
+            detail=tr(
+                "Mã vạch chỉ gồm chữ, số và dấu gạch ngang, dài 4-64 ký tự"
+            ),
         )
     return cleaned
 
@@ -80,7 +83,11 @@ def _ensure_barcode_unique(
     if holder:
         raise HTTPException(
             status_code=400,
-            detail=f"Mã vạch '{barcode}' đã được dùng cho sản phẩm '{holder.name}'",
+            detail=tr(
+                "Mã vạch '{barcode}' đã được dùng cho sản phẩm '{name}'",
+                barcode=barcode,
+                name=holder.name,
+            ),
         )
 
 
@@ -120,7 +127,7 @@ def _ghi_bat_trung(db: Session, ghi) -> None:
         chi_tiet = str(getattr(e, "orig", e))
         for khoa, thong_bao in _RANG_BUOC_DUY_NHAT.items():
             if khoa in chi_tiet:
-                raise HTTPException(status_code=400, detail=thong_bao) from e
+                raise HTTPException(status_code=400, detail=tr(thong_bao)) from e
         raise
 
 
@@ -156,7 +163,11 @@ def _ensure_code_unique(
     if holder:
         raise HTTPException(
             status_code=400,
-            detail=f"Mã sản phẩm '{code}' đã được dùng cho sản phẩm '{holder.name}'",
+            detail=tr(
+                "Mã sản phẩm '{code}' đã được dùng cho sản phẩm '{name}'",
+                code=code,
+                name=holder.name,
+            ),
         )
 
 
@@ -205,7 +216,10 @@ def _require_shop_operator_403(
     (Giữ 403 'Not your shop' như hành vi cũ của các endpoint tạo SP/danh mục.)"""
     shop = db.query(models.Shop).filter(models.Shop.id == shop_id).first()
     if not shop or not has_shop_operator_access(shop, current_user):
-        raise HTTPException(status_code=403, detail="Not your shop")
+        raise HTTPException(
+            status_code=403,
+            detail=tr("Bạn không có quyền thao tác cửa hàng này"),
+        )
     if permission is not None:
         require_staff_permission(current_user, permission)
     return shop
@@ -219,7 +233,10 @@ def create_category(
 
     name_stripped = name.strip() if name else ""
     if not name_stripped:
-        raise HTTPException(status_code=400, detail="Tên danh mục không được để trống")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Tên danh mục không được để trống"),
+        )
 
     cat = models.Category(name=name_stripped, shop_id=shop_id, is_active=True)
     db.add(cat)
@@ -239,18 +256,22 @@ def update_category(
 ) -> models.Category:
     db_cat = db.query(models.Category).filter(models.Category.id == category_id).first()
     if not db_cat:
-        raise HTTPException(status_code=404, detail="Danh mục không tồn tại")
+        raise HTTPException(status_code=404, detail=tr("Danh mục không tồn tại"))
 
     shop = db.query(models.Shop).filter(models.Shop.id == db_cat.shop_id).first()
     if not shop or not has_shop_operator_access(shop, current_user):
         raise HTTPException(
-            status_code=403, detail="Không có quyền chỉnh sửa danh mục của cửa hàng này"
+            status_code=403,
+            detail=tr("Không có quyền chỉnh sửa danh mục của cửa hàng này"),
         )
     require_staff_permission(current_user, PERMISSION_INVENTORY)
 
     name_stripped = cat.name.strip() if cat.name else ""
     if not name_stripped:
-        raise HTTPException(status_code=400, detail="Tên danh mục không được để trống")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Tên danh mục không được để trống"),
+        )
 
     db_cat.name = name_stripped
     db_cat.is_active = cat.is_active
@@ -284,21 +305,28 @@ def save_product_image(image: UploadFile) -> str:
     tự sinh tên file bằng UUID (tránh path traversal). Trả về URL public."""
     if image.content_type not in ALLOWED_IMAGE_MIMES:
         raise HTTPException(
-            status_code=400, detail="Loại file không hợp lệ. Chỉ chấp nhận JPG, PNG, WEBP"
+            status_code=400,
+            detail=tr("Loại file không hợp lệ. Chỉ chấp nhận JPG, PNG, WEBP"),
         )
 
     ext = pathlib.Path(image.filename).suffix.lower()
     if ext not in ALLOWED_IMAGE_EXTS:
-        raise HTTPException(status_code=400, detail="Đuôi file không hợp lệ")
+        raise HTTPException(status_code=400, detail=tr("Đuôi file không hợp lệ"))
 
     contents = image.file.read()
     if len(contents) > MAX_IMAGE_SIZE:
-        raise HTTPException(status_code=400, detail="File quá lớn (tối đa 2MB)")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("File quá lớn (tối đa 2MB)"),
+        )
     if not contents:
-        raise HTTPException(status_code=400, detail="File rỗng")
+        raise HTTPException(status_code=400, detail=tr("File rỗng"))
 
     if not is_valid_image(contents):
-        raise HTTPException(status_code=400, detail="Nội dung file không phải ảnh hợp lệ")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Nội dung file không phải ảnh hợp lệ"),
+        )
 
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     filename = f"{uuid.uuid4().hex}{ext}"
@@ -325,7 +353,11 @@ def lookup_by_barcode(
     prod = find_by_barcode(db, shop_id, barcode)
     if not prod:
         raise HTTPException(
-            status_code=404, detail=f"Không tìm thấy sản phẩm có mã vạch '{barcode}'"
+            status_code=404,
+            detail=tr(
+                "Không tìm thấy sản phẩm có mã vạch '{barcode}'",
+                barcode=barcode,
+            ),
         )
     return {
         "id": prod.id,
@@ -362,13 +394,20 @@ def create_product(
     )
     if existing_prod:
         raise HTTPException(
-            status_code=400, detail="Sản phẩm với tên này đã tồn tại trong cửa hàng!"
+            status_code=400,
+            detail=tr("Sản phẩm với tên này đã tồn tại trong cửa hàng!"),
         )
 
     if price <= 0:
-        raise HTTPException(status_code=400, detail="Giá sản phẩm phải lớn hơn 0")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Giá sản phẩm phải lớn hơn 0"),
+        )
     if stock < 0:
-        raise HTTPException(status_code=400, detail="Số lượng tồn kho không được âm")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Số lượng tồn kho không được âm"),
+        )
 
     barcode_value = normalize_barcode(barcode)
     _ensure_barcode_unique(db, shop_id, barcode_value)
@@ -460,15 +499,21 @@ def update_product(
     """
     prod = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not prod:
-        raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
+        raise HTTPException(status_code=404, detail=tr("Sản phẩm không tồn tại"))
     require_shop_access(db, prod.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_INVENTORY)
 
     name_stripped = name.strip() if name else ""
     if not name_stripped:
-        raise HTTPException(status_code=400, detail="Tên sản phẩm không được để trống")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Tên sản phẩm không được để trống"),
+        )
     if price <= 0:
-        raise HTTPException(status_code=400, detail="Giá sản phẩm phải lớn hơn 0")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Giá sản phẩm phải lớn hơn 0"),
+        )
 
     category = (
         db.query(models.Category)
@@ -479,7 +524,10 @@ def update_product(
         .first()
     )
     if not category:
-        raise HTTPException(status_code=400, detail="Danh mục không thuộc cửa hàng này")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Danh mục không thuộc cửa hàng này"),
+        )
 
     duplicate = (
         db.query(models.Product)
@@ -493,7 +541,7 @@ def update_product(
     if duplicate:
         raise HTTPException(
             status_code=400,
-            detail="Sản phẩm với tên này đã tồn tại trong cửa hàng!",
+            detail=tr("Sản phẩm với tên này đã tồn tại trong cửa hàng!"),
         )
 
     if barcode is not None:
@@ -544,16 +592,20 @@ def apply_stocktake(
     _require_shop_operator_403(db, shop_id, current_user)
 
     if not items:
-        raise HTTPException(status_code=400, detail="Chưa có sản phẩm nào được đếm")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Chưa có sản phẩm nào được đếm"),
+        )
 
     ids = [it.product_id for it in items]
     if len(set(ids)) != len(ids):
         raise HTTPException(
-            status_code=400, detail="Một sản phẩm xuất hiện nhiều lần trong phiếu kiểm kê"
+            status_code=400,
+            detail=tr("Một sản phẩm xuất hiện nhiều lần trong phiếu kiểm kê"),
         )
     for it in items:
         if it.counted < 0:
-            raise HTTPException(status_code=400, detail="Số đếm không được âm")
+            raise HTTPException(status_code=400, detail=tr("Số đếm không được âm"))
 
     san_pham = {
         p.id: p
@@ -647,19 +699,26 @@ def adjust_stock(
     """
     prod = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not prod:
-        raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
+        raise HTTPException(status_code=404, detail=tr("Sản phẩm không tồn tại"))
     require_shop_access(db, prod.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_INVENTORY)
 
     if delta == 0:
-        raise HTTPException(status_code=400, detail="Số lượng thay đổi phải khác 0")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Số lượng thay đổi phải khác 0"),
+        )
 
     result = db.execute(_ADJUST_STOCK, {"delta": delta, "product_id": product_id})
     if result.rowcount != 1:
         db.rollback()
         raise HTTPException(
             status_code=400,
-            detail=f"Không đủ tồn kho để xuất {abs(delta)} (hiện còn {prod.stock})",
+            detail=tr(
+                "Không đủ tồn kho để xuất {quantity} (hiện còn {stock})",
+                quantity=abs(delta),
+                stock=prod.stock,
+            ),
         )
     db.commit()
     db.refresh(prod)
@@ -680,7 +739,7 @@ def toggle_product_status(
 ) -> Dict[str, bool]:
     prod = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not prod:
-        raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
+        raise HTTPException(status_code=404, detail=tr("Sản phẩm không tồn tại"))
     require_shop_access(db, prod.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_INVENTORY)
     prod.is_active = not prod.is_active
@@ -697,7 +756,7 @@ def toggle_product_status(
 def delete_product(db: Session, current_user: models.User, product_id: int) -> Dict[str, str]:
     prod = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not prod:
-        raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
+        raise HTTPException(status_code=404, detail=tr("Sản phẩm không tồn tại"))
     require_shop_access(db, prod.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_INVENTORY)
     name, code = prod.name, prod.code

@@ -3,21 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>POS Bán Hàng Chuyên Nghiệp | F-Selling</title>
+    <title data-i18n="pos.page_title">POS Bán Hàng Chuyên Nghiệp | F-Selling</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <link rel="stylesheet" href="/css/pos.css?v=20260731-cash-shift">
-    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
 
 </head>
 <body>
     <div class="nav-bar" style="padding: 0.5rem 1.5rem; background: #0F172A; border-bottom: 1px solid var(--border-color);">
-        <h2 class="text-gradient" style="font-size: 1.25rem;"><i class="ph ph-desktop"></i> POS BÁN HÀNG</h2>
+        <h2 class="text-gradient" style="font-size: 1.25rem;"><i class="ph ph-desktop"></i> <span data-i18n="pos.header.title">POS BÁN HÀNG</span></h2>
         <div class="flex-row">
             <select id="shopSelect" onchange="changeShopPOS()" style="padding: 0.4rem 1rem; border-radius: 8px; border: 1px solid #334155; background: #1E293B; color: white; margin-right: 1rem; font-weight: 600; margin-bottom: 0;">
-                <option value="">-- Chọn Cửa Hàng --</option>
+                <option value="" data-i18n="pos.shop.select">-- Chọn Cửa Hàng --</option>
             </select>
-            <button class="btn-outline" onclick="window.location.href='/seller'" style="padding: 0.4rem 1rem;"><i class="ph ph-arrow-left"></i> Quay lại Dashboard</button>
+            <label class="language-switcher" style="color:#CBD5E1;">
+                <span class="sr-only" data-i18n="common.language">Ngôn ngữ</span>
+                <select data-language-selector data-i18n-aria-label="common.language" aria-label="Ngôn ngữ" style="background:#1E293B; border-color:#334155; color:#F8FAFC;">
+                    <option value="vi" data-i18n="common.language.vi">Tiếng Việt</option>
+                    <option value="en" data-i18n="common.language.en">English</option>
+                </select>
+            </label>
+            <button class="btn-outline" onclick="navigateToPage('/seller')" style="padding: 0.4rem 1rem;"><i class="ph ph-arrow-left"></i> <span data-i18n="pos.header.back_dashboard">Quay lại Dashboard</span></button>
         </div>
     </div>
 
@@ -28,19 +35,19 @@
             <div class="shift-status">
                 <span class="shift-status-dot" aria-hidden="true"></span>
                 <div>
-                    <strong id="shiftStatusText">Đang kiểm tra ca làm việc...</strong>
-                    <small id="shiftStatusMeta">Vui lòng chờ trong giây lát</small>
+                    <strong id="shiftStatusText" data-i18n="pos.shift.checking">Đang kiểm tra ca làm việc...</strong>
+                    <small id="shiftStatusMeta" data-i18n="pos.shift.wait">Vui lòng chờ trong giây lát</small>
                 </div>
             </div>
             <div class="shift-actions">
                 <button id="btnOpenShift" type="button" onclick="moModalMoCa()" style="display:none;">
-                    <i class="ph ph-play-circle"></i> Mở ca
+                    <i class="ph ph-play-circle"></i> <span data-i18n="pos.shift.open">Mở ca</span>
                 </button>
                 <button id="btnCashMovement" type="button" class="btn-outline" onclick="moModalThuChi()" style="display:none;">
-                    <i class="ph ph-arrows-down-up"></i> Thu / chi
+                    <i class="ph ph-arrows-down-up"></i> <span data-i18n="pos.shift.cash_movement">Thu / chi</span>
                 </button>
                 <button id="btnCloseShift" type="button" class="btn-outline btn-shift-close" onclick="moModalKetCa()" style="display:none;">
-                    <i class="ph ph-stop-circle"></i> Kết ca
+                    <i class="ph ph-stop-circle"></i> <span data-i18n="pos.shift.close">Kết ca</span>
                 </button>
             </div>
         </section>
@@ -49,9 +56,9 @@
         <div class="pos-col pos-products">
             <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
                 <div class="input-wrapper" style="flex: 1; margin: 0;">
-                    <input type="text" id="searchProd" placeholder="Quét mã vạch, hoặc nhập tên sản phẩm để tìm..." style="background: #0F172A;">
+                    <input type="text" id="searchProd" placeholder="Quét mã vạch, hoặc nhập tên sản phẩm để tìm..." data-i18n-placeholder="pos.products.search_placeholder" style="background: #0F172A;">
                 </div>
-                <button class="btn-outline" onclick="BarcodeCamera.mo()" title="Quét mã vạch bằng camera" style="padding: 0.4rem 0.9rem; white-space: nowrap;"><i class="ph ph-camera"></i> Quét</button>
+                <button class="btn-outline" onclick="BarcodeCamera.mo()" title="Quét mã vạch bằng camera" data-i18n-title="pos.products.scan_camera" style="padding: 0.4rem 0.9rem; white-space: nowrap;"><i class="ph ph-camera"></i> <span data-i18n="pos.products.scan">Quét</span></button>
             </div>
             <div id="categoryFilter" style="display: flex; gap: 0.5rem; margin-bottom: 1rem; overflow-x: auto; padding-bottom: 0.5rem;">
                 <!-- Category buttons rendered here -->
@@ -85,7 +92,7 @@
 
         <!-- CỘT 2: GIỎ HÀNG -->
         <div class="pos-col pos-cart">
-            <h3 style="font-size: 1.1rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; margin-bottom: 0.5rem; color: white;"><i class="ph ph-shopping-cart"></i> Giỏ hàng</h3>
+            <h3 style="font-size: 1.1rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; margin-bottom: 0.5rem; color: white;"><i class="ph ph-shopping-cart"></i> <span data-i18n="pos.cart.title">Giỏ hàng</span></h3>
             <div class="scroll-area" id="cartContainer">
                 <!-- Cart items -->
             </div>
@@ -93,8 +100,8 @@
             <!-- Phần Voucher -->
             <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #334155;">
                 <div style="display: flex; gap: 0.5rem;">
-                    <input type="text" id="voucherInput" placeholder="Nhập mã Khuyến mãi" style="flex: 1; padding: 0.5rem; border-radius: 4px; border: 1px solid #334155; background: #0F172A; color: white; text-transform: uppercase;">
-                    <button onclick="applyVoucher()" style="padding: 0.5rem 1rem;"><i class="ph ph-check"></i> Áp dụng</button>
+                    <input type="text" id="voucherInput" placeholder="Nhập mã khuyến mãi" data-i18n-placeholder="pos.voucher.placeholder" style="flex: 1; padding: 0.5rem; border-radius: 4px; border: 1px solid #334155; background: #0F172A; color: white; text-transform: uppercase;">
+                    <button onclick="applyVoucher()" style="padding: 0.5rem 1rem;"><i class="ph ph-check"></i> <span data-i18n="pos.voucher.apply">Áp dụng</span></button>
                 </div>
                 <small id="voucherMsg" style="color: #EF4444; display: block; margin-top: 0.25rem;"></small>
             </div>
@@ -102,46 +109,46 @@
 
         <!-- CỘT 3: THANH TOÁN -->
         <div class="pos-col pos-payment" style="background: #0B1120; overflow-y: auto; padding-right: 0.5rem;">
-            <h3 style="font-size: 1.1rem; margin-bottom: 1rem; color: white;"><i class="ph ph-receipt"></i> Thanh Toán</h3>
+            <h3 style="font-size: 1.1rem; margin-bottom: 1rem; color: white;"><i class="ph ph-receipt"></i> <span data-i18n="pos.checkout.title">Thanh toán</span></h3>
 
             
             <div class="checkout-box">
-                <div class="summary-row"><span>Tạm tính:</span><span id="txtSubtotal">0 ₫</span></div>
-                <div class="summary-row" style="color: #F59E0B;"><span>Giảm giá (Voucher):</span><span id="txtDiscount">- 0 ₫</span></div>
-                <div class="summary-row total"><span>Tổng Cần Thu:</span><span id="txtTotal">0 ₫</span></div>
+                <div class="summary-row"><span data-i18n="pos.checkout.subtotal">Tạm tính:</span><span id="txtSubtotal">0 ₫</span></div>
+                <div class="summary-row" style="color: #F59E0B;"><span data-i18n="pos.checkout.discount">Giảm giá (Voucher):</span><span id="txtDiscount">- 0 ₫</span></div>
+                <div class="summary-row total"><span data-i18n="pos.checkout.total_due">Tổng cần thu:</span><span id="txtTotal">0 ₫</span></div>
             </div>
 
             <!-- Khách hàng (tùy chọn) -->
             <div style="margin-bottom: 1rem; padding: 0.75rem; background: #0F172A; border-radius: 8px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                    <span style="color: #94A3B8; font-size: 0.85rem;"><i class="ph ph-user"></i> Khách hàng (tùy chọn)</span>
-                    <span id="khachDaChon" style="color: var(--success); font-size: 0.85rem; font-weight: 600;">Khách vãng lai</span>
+                    <span style="color: #94A3B8; font-size: 0.85rem;"><i class="ph ph-user"></i> <span data-i18n="pos.customer.optional">Khách hàng (tùy chọn)</span></span>
+                    <span id="khachDaChon" style="color: var(--success); font-size: 0.85rem; font-weight: 600;" data-i18n="pos.customer.walk_in">Khách vãng lai</span>
                 </div>
                 <div id="khachChuaChon">
                     <div style="display: flex; gap: 0.4rem;">
-                        <input type="text" id="posCustSearch" placeholder="Tìm theo tên / SĐT" style="flex: 1; margin-bottom: 0; padding: 0.4rem; background: #1E293B; border: 1px solid #334155; color: white; border-radius: 4px;">
+                        <input type="text" id="posCustSearch" placeholder="Tìm theo tên / SĐT" data-i18n-placeholder="pos.customer.search_placeholder" style="flex: 1; margin-bottom: 0; padding: 0.4rem; background: #1E293B; border: 1px solid #334155; color: white; border-radius: 4px;">
                         <button onclick="timKhachPOS()" style="padding: 0.4rem 0.7rem;"><i class="ph ph-magnifying-glass"></i></button>
-                        <button class="btn-outline" onclick="hienFormKhachMoi()" style="padding: 0.4rem 0.7rem;" title="Thêm khách mới"><i class="ph ph-user-plus"></i></button>
+                        <button class="btn-outline" onclick="hienFormKhachMoi()" style="padding: 0.4rem 0.7rem;" title="Thêm khách mới" data-i18n-title="pos.customer.add_title"><i class="ph ph-user-plus"></i></button>
                     </div>
                     <div id="posCustResults" style="margin-top: 0.4rem;"></div>
                     <div id="posCustNewForm" style="display: none; margin-top: 0.5rem;">
-                        <input type="text" id="posCustNewName" placeholder="Tên khách" style="width: 100%; margin-bottom: 0.3rem; padding: 0.4rem; background: #1E293B; border: 1px solid #334155; color: white; border-radius: 4px;">
-                        <input type="text" id="posCustNewPhone" placeholder="Số điện thoại" style="width: 100%; margin-bottom: 0.3rem; padding: 0.4rem; background: #1E293B; border: 1px solid #334155; color: white; border-radius: 4px;">
-                        <button onclick="taoKhachPOS()" style="width: 100%; padding: 0.4rem;">Lưu khách</button>
+                        <input type="text" id="posCustNewName" placeholder="Tên khách" data-i18n-placeholder="pos.customer.name_placeholder" style="width: 100%; margin-bottom: 0.3rem; padding: 0.4rem; background: #1E293B; border: 1px solid #334155; color: white; border-radius: 4px;">
+                        <input type="text" id="posCustNewPhone" placeholder="Số điện thoại" data-i18n-placeholder="pos.customer.phone_placeholder" style="width: 100%; margin-bottom: 0.3rem; padding: 0.4rem; background: #1E293B; border: 1px solid #334155; color: white; border-radius: 4px;">
+                        <button onclick="taoKhachPOS()" style="width: 100%; padding: 0.4rem;" data-i18n="pos.customer.save">Lưu khách</button>
                     </div>
                 </div>
-                <button id="khachBoChon" onclick="boChonKhach()" class="btn-outline" style="display: none; width: 100%; padding: 0.3rem; font-size: 0.8rem;">Bỏ chọn khách</button>
+                <button id="khachBoChon" onclick="boChonKhach()" class="btn-outline" style="display: none; width: 100%; padding: 0.3rem; font-size: 0.8rem;" data-i18n="pos.customer.clear">Bỏ chọn khách</button>
             </div>
 
             <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
                 <button class="method-btn active" id="btnMethodQR" onclick="setMethod('transfer')"><i class="ph ph-qr-code"></i><br>VietQR</button>
-                <button class="method-btn" id="btnMethodCash" onclick="setMethod('cash')"><i class="ph ph-money"></i><br>Tiền mặt</button>
+                <button class="method-btn" id="btnMethodCash" onclick="setMethod('cash')"><i class="ph ph-money"></i><br><span data-i18n="pos.payment.cash">Tiền mặt</span></button>
             </div>
 
             <!-- Chỉ hiện khi chọn tiền mặt. inputmode=numeric mở bàn phím số trên
                  điện thoại nhưng vẫn cho JS định dạng dấu phân cách hàng nghìn. -->
             <div id="cashTenderSection" class="cash-tender" style="display:none;">
-                <label for="cashTenderedInput"><i class="ph ph-hand-coins"></i> Tiền khách đưa</label>
+                <label for="cashTenderedInput"><i class="ph ph-hand-coins"></i> <span data-i18n="pos.cash.tendered">Tiền khách đưa</span></label>
                 <div class="cash-input-wrap">
                     <input
                         id="cashTenderedInput"
@@ -154,26 +161,26 @@
                     >
                     <span>₫</span>
                 </div>
-                <div id="cashQuickAmounts" class="cash-quick-amounts" aria-label="Chọn nhanh số tiền khách đưa"></div>
+                <div id="cashQuickAmounts" class="cash-quick-amounts" aria-label="Chọn nhanh số tiền khách đưa" data-i18n-aria-label="pos.cash.quick_aria"></div>
                 <div id="cashChangeStatus" class="cash-change-status" aria-live="polite">
-                    <span>Tiền thối</span>
+                    <span data-i18n="pos.cash.change">Tiền thối</span>
                     <strong id="txtCashChange">0 ₫</strong>
                 </div>
                 <div id="cashPendingNotice" class="cash-pending-notice" style="display:none;">
-                    <span id="cashPendingText">Đơn đã tạo nhưng chưa ghi nhận thanh toán.</span>
+                    <span id="cashPendingText" data-i18n="pos.cash.pending">Đơn đã tạo nhưng chưa ghi nhận thanh toán.</span>
                     <button type="button" class="btn-outline" onclick="cancelOrder()">
-                        <i class="ph ph-x-circle"></i> Hủy đơn &amp; hoàn kho
+                        <i class="ph ph-x-circle"></i> <span data-i18n="pos.cash.cancel_restore">Hủy đơn &amp; hoàn kho</span>
                     </button>
                 </div>
             </div>
 
-            <button id="btnCheckout" onclick="checkout()" style="width: 100%; padding: 1rem; font-size: 1.1rem; margin-bottom: 1rem;"><i class="ph ph-check-circle"></i> Hoàn tất Đơn Hàng</button>
+            <button id="btnCheckout" onclick="checkout()" style="width: 100%; padding: 1rem; font-size: 1.1rem; margin-bottom: 1rem;"><i class="ph ph-check-circle"></i> <span data-i18n="pos.checkout.complete">Hoàn tất đơn hàng</span></button>
 
             <!-- Khối hiện QR sau khi chốt đơn -->
             <div id="qrSection" style="display: none;">
                 <hr style="border-color: #334155;">
                 <div class="qr-wrapper">
-                    <h4 style="color: #000; margin-bottom: 0.5rem;">Khách quét mã thanh toán</h4>
+                    <h4 style="color: #000; margin-bottom: 0.5rem;" data-i18n="pos.payment.qr_prompt">Khách quét mã thanh toán</h4>
                     <img id="qrImage" src="" alt="QR">
                     <h2 style="color: var(--success); margin: 0.5rem 0;" id="qrTotalTxt"></h2>
                 </div>
@@ -181,24 +188,24 @@
                     <div id="paymentStatusTitle" style="font-weight:700; color:#FDE68A; margin-bottom:0.55rem;"></div>
                     <div id="paymentStatusAmounts" style="display:grid; grid-template-columns:1fr 1fr; gap:0.5rem; font-size:0.86rem;">
                         <div style="background:#0F172A; border-radius:7px; padding:0.55rem;">
-                            <div style="color:#94A3B8;">Đã nhận</div>
+                            <div style="color:#94A3B8;" data-i18n="pos.payment.received">Đã nhận</div>
                             <strong id="paymentReceived" style="color:#86EFAC;"></strong>
                         </div>
                         <div style="background:#0F172A; border-radius:7px; padding:0.55rem;">
-                            <div style="color:#94A3B8;">Còn thiếu</div>
+                            <div style="color:#94A3B8;" data-i18n="pos.payment.remaining">Còn thiếu</div>
                             <strong id="paymentRemaining" style="color:#FCA5A5;"></strong>
                         </div>
                     </div>
-                    <button id="btnCashTopup" style="display:none; width:100%; margin-top:0.7rem; padding:0.7rem;" onclick="buTienMatPhanThieu()"><i class="ph ph-money"></i> Thu bù bằng tiền mặt</button>
+                    <button id="btnCashTopup" style="display:none; width:100%; margin-top:0.7rem; padding:0.7rem;" onclick="buTienMatPhanThieu()"><i class="ph ph-money"></i> <span data-i18n="pos.payment.cash_topup">Thu bù bằng tiền mặt</span></button>
                 </div>
-                <button id="btnCancelOrder" class="btn-outline" style="width: 100%; margin-top: 0.5rem; padding: 0.75rem;" onclick="cancelOrder()"><i class="ph ph-x-circle"></i> Hủy đơn &amp; Hoàn kho</button>
+                <button id="btnCancelOrder" class="btn-outline" style="width: 100%; margin-top: 0.5rem; padding: 0.75rem;" onclick="cancelOrder()"><i class="ph ph-x-circle"></i> <span data-i18n="pos.payment.cancel_restore">Hủy đơn &amp; hoàn kho</span></button>
             </div>
 
             <!-- Hóa đơn hiện sau khi thanh toán xong -->
             <div id="hoaDonSection" style="display: none; background:#F8FAFC; color:#0F172A; border-radius:10px; padding:1rem; margin-top:1rem;">
                 <div id="hoaDonCanhBao" style="display:none; margin-bottom:0.75rem; padding:0.75rem; border:2px solid #DC2626; background:#FEF2F2; color:#991B1B; border-radius:8px; font-weight:700;"></div>
                 <div id="hoaDonNoiDung"></div>
-                <button class="btn-outline" style="width:100%; margin-top:1rem; padding:0.7rem;" onclick="dongHoaDon()"><i class="ph ph-plus-circle"></i> Đơn mới</button>
+                <button class="btn-outline" style="width:100%; margin-top:1rem; padding:0.7rem;" onclick="dongHoaDon()"><i class="ph ph-plus-circle"></i> <span data-i18n="pos.receipt.new_order">Đơn mới</span></button>
             </div>
         </div>
     </div>
@@ -212,8 +219,8 @@
             <div id="xnTieuDe" style="padding:0.9rem 1rem; font-weight:700; color:#F8FAFC; border-bottom:1px solid #334155;"></div>
             <div id="xnNoiDung" style="padding:1rem; color:#CBD5E1; font-size:0.9rem; line-height:1.6; white-space:pre-wrap; max-height:50vh; overflow-y:auto;"></div>
             <div style="display:flex; gap:0.6rem; padding:0.9rem 1rem; border-top:1px solid #334155;">
-                <button class="btn-outline" id="xnHuy" style="flex:1; padding:0.75rem;">Hủy</button>
-                <button id="xnDongY" style="flex:1; padding:0.75rem;">Xác nhận</button>
+                <button class="btn-outline" id="xnHuy" style="flex:1; padding:0.75rem;" data-i18n="pos.modal.cancel">Hủy</button>
+                <button id="xnDongY" style="flex:1; padding:0.75rem;" data-i18n="pos.modal.confirm">Xác nhận</button>
             </div>
         </div>
     </div>
@@ -223,27 +230,27 @@
         <div class="pos-modal-card">
             <div class="pos-modal-head">
                 <div>
-                    <small>CA LÀM VIỆC</small>
-                    <h3 id="openShiftTitle"><i class="ph ph-play-circle"></i> Mở ca bán hàng</h3>
+                    <small data-i18n="pos.open_shift.eyebrow">CA LÀM VIỆC</small>
+                    <h3 id="openShiftTitle"><i class="ph ph-play-circle"></i> <span data-i18n="pos.open_shift.title">Mở ca bán hàng</span></h3>
                 </div>
-                <button type="button" class="pos-modal-close" onclick="dongModalCa('openShiftModal')" aria-label="Đóng">&times;</button>
+                <button type="button" class="pos-modal-close" onclick="dongModalCa('openShiftModal')" aria-label="Đóng" data-i18n-aria-label="pos.modal.close">&times;</button>
             </div>
-            <p class="pos-modal-help">Nhập số tiền mặt có sẵn trong ngăn kéo trước khi bắt đầu bán.</p>
-            <label class="pos-field-label" for="openingCashInput">Tiền đầu ca</label>
+            <p class="pos-modal-help" data-i18n="pos.open_shift.help">Nhập số tiền mặt có sẵn trong ngăn kéo trước khi bắt đầu bán.</p>
+            <label class="pos-field-label" for="openingCashInput" data-i18n="pos.open_shift.opening_cash">Tiền đầu ca</label>
             <div class="cash-input-wrap pos-modal-money">
                 <input id="openingCashInput" type="text" inputmode="numeric" pattern="[0-9.]*" autocomplete="off" value="0">
                 <span>₫</span>
             </div>
             <div class="cash-quick-amounts modal-quick-amounts">
-                <button type="button" class="btn-outline" onclick="datGiaTriTien('openingCashInput', 0)">0 ₫</button>
-                <button type="button" class="btn-outline" onclick="datGiaTriTien('openingCashInput', 500000)">500.000 ₫</button>
-                <button type="button" class="btn-outline" onclick="datGiaTriTien('openingCashInput', 1000000)">1.000.000 ₫</button>
+                <button type="button" class="btn-outline" data-money-quick="0" onclick="datGiaTriTien('openingCashInput', 0)">0 ₫</button>
+                <button type="button" class="btn-outline" data-money-quick="500000" onclick="datGiaTriTien('openingCashInput', 500000)">500.000 ₫</button>
+                <button type="button" class="btn-outline" data-money-quick="1000000" onclick="datGiaTriTien('openingCashInput', 1000000)">1.000.000 ₫</button>
             </div>
-            <label class="pos-field-label" for="openingShiftNote">Ghi chú <span>(không bắt buộc)</span></label>
-            <textarea id="openingShiftNote" rows="2" maxlength="500" placeholder="Ví dụ: Bàn giao từ ca sáng"></textarea>
+            <label class="pos-field-label" for="openingShiftNote"><span data-i18n="pos.open_shift.note">Ghi chú</span> <span data-i18n="pos.open_shift.optional">(không bắt buộc)</span></label>
+            <textarea id="openingShiftNote" rows="2" maxlength="500" placeholder="Ví dụ: Bàn giao từ ca sáng" data-i18n-placeholder="pos.open_shift.note_placeholder"></textarea>
             <div class="pos-modal-actions">
-                <button type="button" class="btn-outline" onclick="dongModalCa('openShiftModal')">Để sau</button>
-                <button id="btnSubmitOpenShift" type="button" onclick="moCa()"><i class="ph ph-check-circle"></i> Bắt đầu ca</button>
+                <button type="button" class="btn-outline" onclick="dongModalCa('openShiftModal')" data-i18n="pos.open_shift.later">Để sau</button>
+                <button id="btnSubmitOpenShift" type="button" onclick="moCa()"><i class="ph ph-check-circle"></i> <span data-i18n="pos.open_shift.start">Bắt đầu ca</span></button>
             </div>
         </div>
     </div>
@@ -253,29 +260,29 @@
         <div class="pos-modal-card">
             <div class="pos-modal-head">
                 <div>
-                    <small>SỔ TIỀN MẶT</small>
-                    <h3 id="cashMovementTitle"><i class="ph ph-arrows-down-up"></i> Ghi nhận thu / chi</h3>
+                    <small data-i18n="pos.movement.book">SỔ TIỀN MẶT</small>
+                    <h3 id="cashMovementTitle"><i class="ph ph-arrows-down-up"></i> <span data-i18n="pos.movement.title">Ghi nhận thu / chi</span></h3>
                 </div>
-                <button type="button" class="pos-modal-close" onclick="dongModalCa('cashMovementModal')" aria-label="Đóng">&times;</button>
+                <button type="button" class="pos-modal-close" onclick="dongModalCa('cashMovementModal')" aria-label="Đóng" data-i18n-aria-label="pos.modal.close">&times;</button>
             </div>
-            <div class="movement-type-picker" role="group" aria-label="Loại giao dịch">
+            <div class="movement-type-picker" role="group" aria-label="Loại giao dịch" data-i18n-aria-label="pos.movement.type_aria">
                 <button id="btnMovementIn" type="button" class="active" onclick="chonLoaiThuChi('PAY_IN')">
-                    <i class="ph ph-arrow-down-left"></i> Thu tiền
+                    <i class="ph ph-arrow-down-left"></i> <span data-i18n="pos.movement.pay_in">Thu tiền</span>
                 </button>
                 <button id="btnMovementOut" type="button" onclick="chonLoaiThuChi('PAY_OUT')">
-                    <i class="ph ph-arrow-up-right"></i> Chi tiền
+                    <i class="ph ph-arrow-up-right"></i> <span data-i18n="pos.movement.pay_out">Chi tiền</span>
                 </button>
             </div>
-            <label class="pos-field-label" for="movementAmountInput">Số tiền</label>
+            <label class="pos-field-label" for="movementAmountInput" data-i18n="pos.movement.amount">Số tiền</label>
             <div class="cash-input-wrap pos-modal-money">
                 <input id="movementAmountInput" type="text" inputmode="numeric" pattern="[0-9.]*" autocomplete="off" placeholder="0">
                 <span>₫</span>
             </div>
-            <label class="pos-field-label" for="movementNote">Lý do <span>(bắt buộc)</span></label>
-            <textarea id="movementNote" rows="3" maxlength="500" placeholder="Ví dụ: Chi mua túi đóng gói"></textarea>
+            <label class="pos-field-label" for="movementNote"><span data-i18n="pos.movement.reason">Lý do</span> <span data-i18n="pos.movement.required">(bắt buộc)</span></label>
+            <textarea id="movementNote" rows="3" maxlength="500" placeholder="Ví dụ: Chi mua túi đóng gói" data-i18n-placeholder="pos.movement.note_out"></textarea>
             <div class="pos-modal-actions">
-                <button type="button" class="btn-outline" onclick="dongModalCa('cashMovementModal')">Hủy</button>
-                <button id="btnSubmitMovement" type="button" onclick="ghiNhanThuChi()"><i class="ph ph-check-circle"></i> Ghi nhận</button>
+                <button type="button" class="btn-outline" onclick="dongModalCa('cashMovementModal')" data-i18n="pos.modal.cancel">Hủy</button>
+                <button id="btnSubmitMovement" type="button" onclick="ghiNhanThuChi()"><i class="ph ph-check-circle"></i> <span data-i18n="pos.movement.record">Ghi nhận</span></button>
             </div>
         </div>
     </div>
@@ -285,39 +292,43 @@
         <div class="pos-modal-card">
             <div class="pos-modal-head">
                 <div>
-                    <small>ĐỐI CHIẾU CUỐI CA</small>
-                    <h3 id="closeShiftTitle"><i class="ph ph-stop-circle"></i> Kết ca</h3>
+                    <small data-i18n="pos.close_shift.eyebrow">ĐỐI CHIẾU CUỐI CA</small>
+                    <h3 id="closeShiftTitle"><i class="ph ph-stop-circle"></i> <span data-i18n="pos.close_shift.title">Kết ca</span></h3>
                 </div>
-                <button type="button" class="pos-modal-close" onclick="dongModalCa('closeShiftModal')" aria-label="Đóng">&times;</button>
+                <button type="button" class="pos-modal-close" onclick="dongModalCa('closeShiftModal')" aria-label="Đóng" data-i18n-aria-label="pos.modal.close">&times;</button>
             </div>
             <div class="shift-close-summary">
-                <div><span>Tiền đầu ca</span><strong id="closeOpeningCash">0 ₫</strong></div>
-                <div><span>Tiền theo sổ</span><strong id="closeExpectedCash">—</strong></div>
+                <div><span data-i18n="pos.close_shift.opening_cash">Tiền đầu ca</span><strong id="closeOpeningCash">0 ₫</strong></div>
+                <div><span data-i18n="pos.close_shift.expected_cash">Tiền theo sổ</span><strong id="closeExpectedCash">—</strong></div>
             </div>
-            <label class="pos-field-label" for="actualCashInput">Tiền thực đếm trong ngăn kéo</label>
+            <label class="pos-field-label" for="actualCashInput" data-i18n="pos.close_shift.counted_cash">Tiền thực đếm trong ngăn kéo</label>
             <div class="cash-input-wrap pos-modal-money">
                 <input id="actualCashInput" type="text" inputmode="numeric" pattern="[0-9.]*" autocomplete="off" placeholder="0">
                 <span>₫</span>
             </div>
             <div id="closeDifference" class="shift-difference neutral" aria-live="polite">
-                Nhập tiền thực đếm để xem chênh lệch
+                <span data-i18n="pos.shift.close_count_prompt">Nhập tiền thực đếm để xem chênh lệch</span>
             </div>
-            <label class="pos-field-label" for="closingShiftNote">Ghi chú <span>(nên ghi khi lệch tiền)</span></label>
-            <textarea id="closingShiftNote" rows="2" maxlength="500" placeholder="Giải thích nếu tiền thực tế khác sổ"></textarea>
+            <label class="pos-field-label" for="closingShiftNote"><span data-i18n="pos.close_shift.note">Ghi chú</span> <span data-i18n="pos.close_shift.note_hint">(nên ghi khi lệch tiền)</span></label>
+            <textarea id="closingShiftNote" rows="2" maxlength="500" placeholder="Giải thích nếu tiền thực tế khác sổ" data-i18n-placeholder="pos.close_shift.note_placeholder"></textarea>
             <div class="pos-modal-actions">
-                <button type="button" class="btn-outline" onclick="dongModalCa('closeShiftModal')">Quay lại</button>
-                <button id="btnSubmitCloseShift" type="button" class="btn-danger" onclick="ketCa()"><i class="ph ph-lock-key"></i> Xác nhận kết ca</button>
+                <button type="button" class="btn-outline" onclick="dongModalCa('closeShiftModal')" data-i18n="pos.close_shift.back">Quay lại</button>
+                <button id="btnSubmitCloseShift" type="button" class="btn-danger" onclick="ketCa()"><i class="ph ph-lock-key"></i> <span data-i18n="pos.close_shift.confirm">Xác nhận kết ca</span></button>
             </div>
         </div>
     </div>
 
     <div id="toast"></div>
 
-    <script src="/js/api.js"></script>
+    <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
+    <script src="/js/locales/common.js?v=20260731-i18n4"></script>
+    <script src="/js/locales/pos.js?v=20260731-i18n4"></script>
+    <script src="/js/i18n.js?v=20260731-i18n4"></script>
+    <script src="/js/api.js?v=20260731-i18n4"></script>
     <!-- barcode.js phải nạp trước pos.js: pos.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
-    <script src="/js/barcode.js"></script>
-    <script src="/js/barcode-camera.js"></script>
-    <script src="/js/doc-tien.js?v=20260731-reconciliation"></script>
-    <script src="/js/pos.js?v=20260731-pos-retry"></script>
+    <script src="/js/barcode.js?v=20260731-i18n4"></script>
+    <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
+    <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
+    <script src="/js/pos.js?v=20260731-i18n4"></script>
 </body>
 </html>

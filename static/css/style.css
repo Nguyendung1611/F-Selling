@@ -24,6 +24,51 @@ body {
     min-height: 100vh;
 }
 
+.language-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.language-switcher select {
+    width: auto;
+    min-width: 8.25rem;
+    margin: 0;
+    padding: 0.5rem 2rem 0.5rem 0.75rem;
+    background: var(--card-bg);
+    border-color: var(--border-color);
+    color: var(--text-main);
+    font-size: 0.9rem;
+}
+
+.language-switcher--floating {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 1100;
+    padding: 0.4rem 0.6rem;
+    background: color-mix(in srgb, var(--card-bg) 94%, transparent);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
 .container {
     max-width: 1200px;
     margin: 0 auto;
@@ -318,6 +363,11 @@ th {
         width: 100%;
         gap: 0.5rem;
     }
+
+    .language-switcher--floating {
+        top: 0.5rem;
+        right: 0.5rem;
+    }
     
     .flex-row select, .flex-row button {
         width: 100% !important;
@@ -428,6 +478,14 @@ th {
 
 /* Extra Mobile Adjustments */
 @media (max-width: 480px) {
+    .language-switcher--auth + .login-container,
+    .language-switcher--auth + .verify-container {
+        height: auto;
+        min-height: 100vh;
+        padding-top: 4.75rem;
+        padding-bottom: 1rem;
+    }
+
     .login-box, .verify-box, .glass-card {
         padding: 1.25rem !important;
         margin: 1rem !important;

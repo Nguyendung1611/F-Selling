@@ -1,47 +1,78 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>F-Selling | Đăng ký</title>
+    <title data-i18n="register.page_title">F-Selling | Đăng ký</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
     <link rel="stylesheet" href="/css/auth.css">
 </head>
 <body>
+    <div class="language-switcher language-switcher--floating language-switcher--auth">
+        <label for="languageSelector" data-i18n="common.language">Ngôn ngữ</label>
+        <select id="languageSelector"
+                data-language-selector
+                data-i18n-aria-label="auth.language_selector_aria"
+                data-i18n-title="auth.language_selector_aria">
+            <option value="vi" data-i18n="common.language.vi">Tiếng Việt</option>
+            <option value="en" data-i18n="common.language.en">English</option>
+        </select>
+    </div>
+
     <div class="login-container">
         <div class="glass-card login-box">
-            <img class="logo" src="img/logo.png" alt="">
-            <p style="text-align: center; color: var(--text-muted); margin-bottom: 2rem;">Đăng ký tài khoản Người bán mới</p>
+            <img class="logo" src="img/logo.png" alt="F-Selling">
+            <p data-i18n="register.subtitle" style="text-align: center; color: var(--text-muted); margin-bottom: 2rem;">Đăng ký tài khoản Người bán mới</p>
             
-            <form id="registerForm">
+            <form id="registerForm" data-i18n-aria-label="register.form_aria">
                 <div>
-                    <label>Tên đăng nhập</label>
-                    <input type="text" id="username" required>
+                    <label for="username" data-i18n="auth.username.label">Tên đăng nhập</label>
+                    <input type="text"
+                           id="username"
+                           autocomplete="username"
+                           data-i18n-placeholder="auth.username.placeholder"
+                           required>
                 </div>
                 <div>
-                    <label>Email</label>
-                    <input type="email" id="email" required>
+                    <label for="email" data-i18n="auth.email.label">Email</label>
+                    <input type="email"
+                           id="email"
+                           autocomplete="email"
+                           data-i18n-placeholder="auth.email.placeholder"
+                           required>
                 </div>
                 <div>
-                    <label>Mật khẩu</label>
-                    <input type="password" id="password" required>
+                    <label for="password" data-i18n="auth.password.label">Mật khẩu</label>
+                    <input type="password"
+                           id="password"
+                           autocomplete="new-password"
+                           data-i18n-placeholder="auth.password.placeholder"
+                           required>
                 </div>
                 <div>
-                    <label>Xác nhận Mật khẩu</label>
-                    <input type="password" id="confirm_password" required>
+                    <label for="confirm_password" data-i18n="auth.password.confirm_label">Xác nhận mật khẩu</label>
+                    <input type="password"
+                           id="confirm_password"
+                           autocomplete="new-password"
+                           data-i18n-placeholder="auth.password.confirm_placeholder"
+                           required>
                 </div>
-                <button type="submit" style="width: 100%;">Đăng ký</button>
-                <div id="errorMsg" style="color: #ef4444; margin-top: 1rem; text-align: center;"></div>
+                <button type="submit" data-i18n="register.submit" style="width: 100%;">Đăng ký</button>
+                <div id="errorMsg" aria-live="polite" style="color: #ef4444; margin-top: 1rem; text-align: center;"></div>
             </form>
             <div style="text-align: center; margin-top: 1rem;">
-                <p>Đã có tài khoản? <a href="/" style="color: var(--primary);">Đăng nhập ngay</a></p>
+                <p><span data-i18n="register.have_account">Đã có tài khoản?</span> <a href="/" data-i18n="register.login_now" style="color: var(--primary);">Đăng nhập ngay</a></p>
             </div>
         </div>
     </div>
 
-    <script src="/js/api.js"></script>
-    <script src="/js/register.js"></script>
+    <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
+    <script src="/js/locales/common.js?v=20260731-i18n4"></script>
+    <script src="/js/locales/auth-admin.js?v=20260731-i18n4"></script>
+    <script src="/js/i18n.js?v=20260731-i18n4"></script>
+    <script src="/js/api.js?v=20260731-i18n4"></script>
+    <script src="/js/register.js?v=20260731-i18n4"></script>
 
 </body>
 </html>

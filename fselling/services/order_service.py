@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core.i18n import tr
 from ..dependencies import (
     PERMISSION_RECONCILIATION,
     PERMISSION_SALE,
@@ -162,7 +163,7 @@ def _current_cash_shift(
     if shift is None and (required_for_everyone or cashier_must_open):
         raise HTTPException(
             status_code=409,
-            detail="Hãy mở ca của bạn tại POS trước khi ghi nhận tiền mặt",
+            detail=tr("Hãy mở ca của bạn tại POS trước khi ghi nhận tiền mặt"),
         )
     if shift is not None and lock_for_cash_write:
         # SQLite không có SELECT FOR UPDATE. No-op UPDATE lấy write lock và
@@ -180,7 +181,7 @@ def _current_cash_shift(
             db.rollback()
             raise HTTPException(
                 status_code=409,
-                detail="Ca vừa được đóng; vui lòng tải lại và mở ca mới",
+                detail=tr("Ca vừa được đóng; vui lòng tải lại và mở ca mới"),
             )
     return shift
 
@@ -286,7 +287,7 @@ def _existing_operation_order(
     ):
         raise HTTPException(
             status_code=409,
-            detail="Mã retry tạo đơn đã được dùng cho một đơn khác",
+            detail=tr("Mã retry tạo đơn đã được dùng cho một đơn khác"),
         )
     return _create_order_response(shop, existing)
 
@@ -305,7 +306,7 @@ def _lock_shop_for_order(db: Session, shop_id: int) -> None:
     )
     if locked.rowcount != 1:
         db.rollback()
-        raise HTTPException(status_code=404, detail="Không tìm thấy cửa hàng")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy cửa hàng"))
 
 
 def create_order(
@@ -316,7 +317,10 @@ def create_order(
     require_staff_permission(current_user, PERMISSION_SALE)
 
     if not order.items:
-        raise HTTPException(status_code=400, detail="Đơn hàng không có sản phẩm nào")
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Đơn hàng không có sản phẩm nào"),
+        )
     operation_id = (order.operation_id or "").strip() or None
     operation_fingerprint = _order_operation_fingerprint(order)
     if operation_id:
@@ -384,7 +388,8 @@ def create_order(
         )
         if not kh:
             raise HTTPException(
-                status_code=404, detail="Khách hàng không tồn tại trong cửa hàng này"
+                status_code=404,
+                detail=tr("Khách hàng không tồn tại trong cửa hàng này"),
             )
         customer_id = kh.id
 
@@ -446,12 +451,18 @@ def create_order(
 def get_order(db: Session, current_user: models.User, order_id: int) -> Dict[str, Any]:
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if not order:
-        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy đơn hàng"))
     shop = db.query(models.Shop).filter(models.Shop.id == order.shop_id).first()
     if not shop:
-        raise HTTPException(status_code=404, detail="Không tìm thấy cửa hàng của đơn hàng")
+        raise HTTPException(
+            status_code=404,
+            detail=tr("Không tìm thấy cửa hàng của đơn hàng"),
+        )
     if not has_shop_operator_access(shop, current_user):
-        raise HTTPException(status_code=403, detail="Không có quyền truy cập đơn hàng này")
+        raise HTTPException(
+            status_code=403,
+            detail=tr("Không có quyền truy cập đơn hàng này"),
+        )
     require_staff_permission(current_user, PERMISSION_SALE)
     result = {
         "id": order.id,
@@ -477,14 +488,14 @@ def pay_order(
     """
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy đơn hàng"))
     require_shop_access(db, order.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_SALE)
 
     if order.payment_method != "cash":
         raise HTTPException(
             status_code=409,
-            detail="Đơn chuyển khoản phải chờ ngân hàng xác nhận tự động",
+            detail=tr("Đơn chuyển khoản phải chờ ngân hàng xác nhận tự động"),
         )
 
     if order.status == STATUS_PAID:
@@ -497,7 +508,10 @@ def pay_order(
     if not math.isfinite(tendered_amount) or tendered_amount < total_amount:
         raise HTTPException(
             status_code=400,
-            detail=f"Tiền khách đưa phải ít nhất {total_amount:,.0f}đ",
+            detail=tr(
+                "Tiền khách đưa phải ít nhất {amount}đ",
+                amount=f"{total_amount:,.0f}",
+            ),
         )
     change_amount = tendered_amount - total_amount
     shift = _current_cash_shift(
@@ -515,7 +529,10 @@ def pay_order(
             return {"msg": "Paid successfully"}
         raise HTTPException(
             status_code=409,
-            detail=f"Không thể xác nhận thanh toán cho đơn ở trạng thái {current}",
+            detail=tr(
+                "Không thể xác nhận thanh toán cho đơn ở trạng thái {status}",
+                status=current,
+            ),
         )
 
     db.execute(
@@ -563,13 +580,15 @@ def _cash_topup_amount(order: models.Order, request: CashTopup) -> float:
     ):
         raise HTTPException(
             status_code=409,
-            detail="Chỉ được thu bù tiền mặt cho đơn chuyển thiếu đang chờ đối soát",
+            detail=tr(
+                "Chỉ được thu bù tiền mặt cho đơn chuyển thiếu đang chờ đối soát"
+            ),
         )
 
     received = _so_tien(order.paid_amount) + _so_tien(order.cash_paid_amount)
     remaining = max(_so_tien(order.total_amount) - received, 0)
     if remaining <= MONEY_EPSILON:
-        raise HTTPException(status_code=409, detail="Đơn không còn thiếu tiền")
+        raise HTTPException(status_code=409, detail=tr("Đơn không còn thiếu tiền"))
     if request.amount is not None:
         requested_amount = float(request.amount)
         if (
@@ -578,15 +597,16 @@ def _cash_topup_amount(order: models.Order, request: CashTopup) -> float:
         ):
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "Tiền mặt phải bù đúng toàn bộ phần còn thiếu là "
-                    f"{remaining:,.0f}đ"
+                detail=tr(
+                    "Tiền mặt phải bù đúng toàn bộ phần còn thiếu là {amount}đ",
+                    amount=f"{remaining:,.0f}",
                 ),
             )
     amount = remaining
     if not math.isfinite(amount) or amount <= MONEY_EPSILON:
         raise HTTPException(
-            status_code=400, detail="Số tiền bù phải lớn hơn 0"
+            status_code=400,
+            detail=tr("Số tiền bù phải lớn hơn 0"),
         )
     return amount
 
@@ -605,7 +625,7 @@ def cash_topup(
     """
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if not order:
-        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy đơn hàng"))
     require_shop_access(db, order.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_SALE)
 
@@ -660,7 +680,9 @@ def cash_topup(
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail="Số tiền của đơn vừa thay đổi; vui lòng tải lại trước khi thu bù",
+            detail=tr(
+                "Số tiền của đơn vừa thay đổi; vui lòng tải lại trước khi thu bù"
+            ),
         )
 
     note = (request.note or "").strip()[:500] or None
@@ -685,9 +707,9 @@ def cash_topup(
     db.refresh(order)
     response = {
         "msg": (
-            "Đã thu đủ và hoàn tất đơn hàng"
+            tr("Đã thu đủ và hoàn tất đơn hàng")
             if order.status == STATUS_PAID
-            else "Đã ghi nhận khoản tiền mặt bù thiếu"
+            else tr("Đã ghi nhận khoản tiền mặt bù thiếu")
         ),
         "id": order.id,
         "status": order.status,
@@ -706,7 +728,7 @@ def complete_refund(
     """Ghi nhận đã hoàn toàn bộ khoản đang chờ, không tự chuyển tiền."""
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if not order:
-        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy đơn hàng"))
     require_shop_access(db, order.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_RECONCILIATION)
 
@@ -714,7 +736,7 @@ def complete_refund(
     if len(operation_id) < 8:
         raise HTTPException(
             status_code=400,
-            detail="Mã thao tác hoàn tiền không hợp lệ",
+            detail=tr("Mã thao tác hoàn tiền không hợp lệ"),
         )
     operation_key = (
         "refund:"
@@ -732,7 +754,7 @@ def complete_refund(
             in (ENTRY_REFUND_CASH, ENTRY_REFUND_TRANSFER)
         ):
             response = {
-                "msg": "Lần hoàn tiền này đã được ghi nhận trước đó",
+                "msg": tr("Lần hoàn tiền này đã được ghi nhận trước đó"),
                 "id": order.id,
                 "status": order.status,
                 "total_amount": order.total_amount,
@@ -741,7 +763,7 @@ def complete_refund(
             return response
         raise HTTPException(
             status_code=409,
-            detail="Mã thao tác hoàn tiền đã được dùng cho một giao dịch khác",
+            detail=tr("Mã thao tác hoàn tiền đã được dùng cho một giao dịch khác"),
         )
 
     due = max(_so_tien(order.refund_due_amount), 0)
@@ -749,19 +771,24 @@ def complete_refund(
         if order.refund_completed_at is not None:
             # Bấm lặp: trả cùng kết quả nhưng tuyệt đối không ghi thêm lần hoàn.
             response = {
-                "msg": "Khoản hoàn tiền này đã được ghi nhận trước đó",
+                "msg": tr("Khoản hoàn tiền này đã được ghi nhận trước đó"),
                 "id": order.id,
                 "status": order.status,
                 "total_amount": order.total_amount,
             }
             response.update(payment_summary(order))
             return response
-        raise HTTPException(status_code=409, detail="Đơn hàng không có khoản tiền cần hoàn")
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Đơn hàng không có khoản tiền cần hoàn"),
+        )
 
     if order.reconciliation_reason not in (RECON_OVERPAID, RECON_LATE_PAYMENT):
         raise HTTPException(
             status_code=409,
-            detail="Trạng thái đối soát của đơn không cho phép ghi nhận hoàn tiền",
+            detail=tr(
+                "Trạng thái đối soát của đơn không cho phép ghi nhận hoàn tiền"
+            ),
         )
 
     refund_shift = None
@@ -791,7 +818,7 @@ def complete_refund(
                 in (ENTRY_REFUND_CASH, ENTRY_REFUND_TRANSFER)
             ):
                 response = {
-                    "msg": "Lần hoàn tiền này đã được ghi nhận trước đó",
+                    "msg": tr("Lần hoàn tiền này đã được ghi nhận trước đó"),
                     "id": order.id,
                     "status": order.status,
                     "total_amount": order.total_amount,
@@ -802,7 +829,9 @@ def complete_refund(
             db.rollback()
             raise HTTPException(
                 status_code=409,
-                detail="Mã thao tác hoàn tiền đã được dùng cho một giao dịch khác",
+                detail=tr(
+                    "Mã thao tác hoàn tiền đã được dùng cho một giao dịch khác"
+                ),
             )
 
         db.refresh(order)
@@ -811,7 +840,7 @@ def complete_refund(
             db.rollback()
             if order.refund_completed_at is not None:
                 response = {
-                    "msg": "Khoản hoàn tiền này đã được ghi nhận trước đó",
+                    "msg": tr("Khoản hoàn tiền này đã được ghi nhận trước đó"),
                     "id": order.id,
                     "status": order.status,
                     "total_amount": order.total_amount,
@@ -820,7 +849,7 @@ def complete_refund(
                 return response
             raise HTTPException(
                 status_code=409,
-                detail="Đơn hàng không có khoản tiền cần hoàn",
+                detail=tr("Đơn hàng không có khoản tiền cần hoàn"),
             )
         if order.reconciliation_reason not in (
             RECON_OVERPAID,
@@ -829,7 +858,9 @@ def complete_refund(
             db.rollback()
             raise HTTPException(
                 status_code=409,
-                detail="Trạng thái đối soát của đơn không cho phép ghi nhận hoàn tiền",
+                detail=tr(
+                    "Trạng thái đối soát của đơn không cho phép ghi nhận hoàn tiền"
+                ),
             )
 
     completed_at = datetime.utcnow()
@@ -875,7 +906,7 @@ def complete_refund(
             in (ENTRY_REFUND_CASH, ENTRY_REFUND_TRANSFER)
         ):
             response = {
-                "msg": "Lần hoàn tiền này đã được ghi nhận trước đó",
+                "msg": tr("Lần hoàn tiền này đã được ghi nhận trước đó"),
                 "id": fresh.id,
                 "status": fresh.status,
                 "total_amount": fresh.total_amount,
@@ -884,7 +915,7 @@ def complete_refund(
             return response
         raise HTTPException(
             status_code=409,
-            detail="Mã thao tác hoàn tiền đã được dùng cho một giao dịch khác",
+            detail=tr("Mã thao tác hoàn tiền đã được dùng cho một giao dịch khác"),
         )
 
     result = db.execute(
@@ -925,7 +956,7 @@ def complete_refund(
         fresh = db.query(models.Order).filter(models.Order.id == order_id).first()
         if fresh and fresh.refund_completed_at is not None:
             response = {
-                "msg": "Khoản hoàn tiền này đã được ghi nhận trước đó",
+                "msg": tr("Khoản hoàn tiền này đã được ghi nhận trước đó"),
                 "id": fresh.id,
                 "status": fresh.status,
                 "total_amount": fresh.total_amount,
@@ -934,7 +965,9 @@ def complete_refund(
             return response
         raise HTTPException(
             status_code=409,
-            detail="Khoản cần hoàn vừa thay đổi; vui lòng tải lại trước khi xác nhận",
+            detail=tr(
+                "Khoản cần hoàn vừa thay đổi; vui lòng tải lại trước khi xác nhận"
+            ),
         )
 
     detail = (
@@ -949,7 +982,7 @@ def complete_refund(
     db.commit()
     db.refresh(order)
     response = {
-        "msg": "Đã ghi nhận hoàn tiền thành công",
+        "msg": tr("Đã ghi nhận hoàn tiền thành công"),
         "id": order.id,
         "status": order.status,
         "total_amount": order.total_amount,
@@ -967,7 +1000,7 @@ def get_order_detail(db: Session, current_user: models.User, order_id: int) -> D
     """
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if not order:
-        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy đơn hàng"))
     if current_user.role != "ADMIN":
         require_shop_access(db, order.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_SALE)
@@ -1048,7 +1081,7 @@ def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[
     """
     order = db.query(models.Order).filter(models.Order.id == order_id).first()
     if not order:
-        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy đơn hàng"))
     # Dữ liệu legacy có thể còn đơn hàng sau khi shop đã bị xóa. Admin vẫn cần
     # hủy được các đơn mồ côi này để giải phóng tồn kho; seller không được phép
     # đi vòng qua kiểm tra quyền sở hữu shop.
@@ -1070,7 +1103,11 @@ def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[
         if current == STATUS_CANCELLED:
             return _ket_qua_huy(order_id, restored=0, unrestored=0, voucher_released=False)
         raise HTTPException(
-            status_code=409, detail=f"Không thể hủy đơn ở trạng thái {current}"
+            status_code=409,
+            detail=tr(
+                "Không thể hủy đơn ở trạng thái {status}",
+                status=current,
+            ),
         )
 
     restored, unrestored, voucher_released = _hoan_lai(
@@ -1169,7 +1206,9 @@ def apply_webhook_payment(db: Session, request_data: Dict[str, Any]) -> Dict[str
     if not transactions:
         raise HTTPException(
             status_code=400,
-            detail="Không tìm thấy mã đơn hàng ORDERxxx trong thông tin thanh toán",
+            detail=tr(
+                "Không tìm thấy mã đơn hàng ORDERxxx trong thông tin thanh toán"
+            ),
         )
 
     paid: set[int] = set()
@@ -1220,7 +1259,10 @@ def apply_webhook_payment(db: Session, request_data: Dict[str, Any]) -> Dict[str
             rejected.add(gd.order_id)
 
     if not found_any:
-        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng tương ứng")
+        raise HTTPException(
+            status_code=404,
+            detail=tr("Không tìm thấy đơn hàng tương ứng"),
+        )
     return {
         "paid": sorted(paid),
         "unreconciled": sorted(unreconciled),

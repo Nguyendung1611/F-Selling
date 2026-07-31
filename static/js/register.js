@@ -1,3 +1,34 @@
+function clearRegisterMessage(element) {
+    element.textContent = '';
+    delete element.dataset.messageKey;
+    delete element.dataset.apiMessage;
+}
+
+function showRegisterMessage(element, key) {
+    element.dataset.messageKey = key;
+    delete element.dataset.apiMessage;
+    element.textContent = t(key);
+}
+
+function showRegisterApiError(element, message) {
+    delete element.dataset.messageKey;
+    element.dataset.apiMessage = '1';
+    element.textContent = message;
+}
+
+function setRegisterSubmitState(button, key, disabled) {
+    button.dataset.i18n = key;
+    button.textContent = t(key);
+    button.disabled = disabled;
+}
+
+document.addEventListener('fselling:localechange', () => {
+    document.querySelectorAll('[data-message-key]').forEach(element => {
+        element.textContent = t(element.dataset.messageKey);
+    });
+    document.querySelectorAll('[data-api-message="1"]').forEach(clearRegisterMessage);
+});
+
 document.getElementById('registerForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const username = document.getElementById('username').value;
@@ -5,27 +36,30 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
     const password = document.getElementById('password').value;
     const confirm = document.getElementById('confirm_password').value;
     const submitBtn = e.target.querySelector('button[type="submit"]');
+    const errorMsg = document.getElementById('errorMsg');
+
+    clearRegisterMessage(errorMsg);
     
-    if(password !== confirm) {
-        return document.getElementById('errorMsg').innerText = "Mật khẩu xác nhận không khớp!";
+    if (password !== confirm) {
+        showRegisterMessage(errorMsg, 'auth.validation.password_mismatch');
+        return;
     }
 
     const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?\":{}|<>_]).+$/;
     if (!regex.test(password)) {
-        return document.getElementById('errorMsg').innerText = "Mật khẩu phải bao gồm kí tự đặc biệt, chữ hoa, chữ thường và số!";
+        showRegisterMessage(errorMsg, 'auth.validation.password_policy');
+        return;
     }
 
     try {
-        submitBtn.disabled = true;
-        submitBtn.innerText = "Đang đăng ký...";
+        setRegisterSubmitState(submitBtn, 'register.submitting', true);
         await apiCall('/auth/register', 'POST', { username, email, password, role: 'SELLER' });
         localStorage.setItem('register_email', email);
         localStorage.setItem('otp_send_time', Date.now().toString());
-        alert("Đăng ký thành công! Đang chuyển hướng về trang xác thực tài khoản...");
-        window.location.href = "/verify";
+        alert(t('register.success_redirect'));
+        navigateToPage('/verify');
     } catch (err) {
-        submitBtn.disabled = false;
-        submitBtn.innerText = "Đăng ký";
-        document.getElementById('errorMsg').innerText = err.message;
+        setRegisterSubmitState(submitBtn, 'register.submit', false);
+        showRegisterApiError(errorMsg, err.message);
     }
 });

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..core.config import MAX_SHOPS_PER_USER, log_to_file
+from ..core.i18n import tr
 from ..core.security import new_session_id
 from ..dependencies import require_own_shop
 from ..schemas.shop import ShopCreate
@@ -40,7 +41,7 @@ def _clean_and_validate(shop: ShopCreate) -> Dict[str, str]:
     }
     for field, message in _REQUIRED_FIELDS:
         if not data[field]:
-            raise HTTPException(status_code=400, detail=message)
+            raise HTTPException(status_code=400, detail=tr(message))
     return data
 
 
@@ -48,11 +49,18 @@ def create_shop(db: Session, current_user: models.User, shop: ShopCreate) -> mod
     # STAFF chỉ vận hành shop được gán; nếu tự tạo shop họ sẽ trở thành owner
     # và đi vòng qua ranh giới quản trị đang được require_own_shop bảo vệ.
     if current_user.role == "STAFF":
-        raise HTTPException(status_code=403, detail="Nhân viên không được tạo cửa hàng")
+        raise HTTPException(
+            status_code=403,
+            detail=tr("Nhân viên không được tạo cửa hàng"),
+        )
     count = db.query(models.Shop).filter(models.Shop.owner_id == current_user.id).count()
     if count >= MAX_SHOPS_PER_USER:
         raise HTTPException(
-            status_code=400, detail=f"Bạn chỉ được tạo tối đa {MAX_SHOPS_PER_USER} cửa hàng"
+            status_code=400,
+            detail=tr(
+                "Bạn chỉ được tạo tối đa {count} cửa hàng",
+                count=MAX_SHOPS_PER_USER,
+            ),
         )
 
     data = _clean_and_validate(shop)

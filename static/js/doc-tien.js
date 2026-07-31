@@ -269,7 +269,8 @@
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + getToken()
+                    'Authorization': 'Bearer ' + getToken(),
+                    'Accept-Language': getCurrentLocale()
                 },
                 body: JSON.stringify({ text: cauChu })
             });
@@ -306,7 +307,10 @@
     async function kiemTraServer() {
         try {
             const res = await fetch('/api/tts/status', {
-                headers: { 'Authorization': 'Bearer ' + getToken() }
+                headers: {
+                    'Authorization': 'Bearer ' + getToken(),
+                    'Accept-Language': getCurrentLocale()
+                }
             });
             serverDocDuoc = res.ok ? (await res.json()).enabled === true : false;
         } catch (e) {
