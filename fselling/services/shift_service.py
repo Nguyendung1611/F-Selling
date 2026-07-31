@@ -546,12 +546,19 @@ def close_shift(
     totals = _cash_totals(db, shift_id)
     expected = _expected_cash(shift, totals)
     variance = counted - expected
+    closing_note = _note(request.note)
+    if abs(variance) > MONEY_EPSILON and closing_note is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Ca lệch tiền; vui lòng nhập ghi chú giải trình",
+        )
     closed_at = datetime.utcnow()
     shift.status = STATUS_CLOSED
     shift.counted_cash_amount = counted
     shift.expected_cash_amount = expected
     shift.variance_amount = variance
-    shift.closing_note = _note(request.note)
+    shift.closing_note = closing_note
     shift.closed_by_user_id = current_user.id
     shift.closed_at = closed_at
     _add_audit(

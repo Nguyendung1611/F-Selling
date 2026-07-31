@@ -1,10 +1,14 @@
 """Thu ngân: gắn người bán/ca và tính tiền thừa hoàn toàn ở server."""
+import threading
 import uuid
 
 from conftest import auth, new_staff, seller_with_shop
+from fastapi import HTTPException
 
 from fselling import models
 from fselling.core.database import SessionLocal
+from fselling.schemas.order import OrderCreate
+from fselling.services import order_service
 
 
 def _cash_order(client, ctx, token=None):
@@ -166,6 +170,231 @@ def test_retry_tao_don_khong_tru_kho_hai_lan(client):
         headers=auth(ctx["token"]),
     )
     assert conflict.status_code == 409
+
+
+def test_hai_thu_ngan_khong_the_ban_am_kho_hoac_vuot_luot_voucher(
+    client, monkeypatch
+):
+    ctx = seller_with_shop(client)
+    voucher_code = f"RACE{uuid.uuid4().hex[:8].upper()}"
+
+    session = SessionLocal()
+    try:
+        product = (
+            session.query(models.Product)
+            .filter(models.Product.id == ctx["product"]["id"])
+            .first()
+        )
+        product.stock = 1
+        session.commit()
+    finally:
+        session.close()
+
+    voucher = client.post(
+        "/api/vouchers",
+        params={"shop_id": ctx["shop_id"]},
+        json={
+            "code": voucher_code,
+            "discount_type": "flat",
+            "discount_value": 10_000,
+            "min_order_value": 0,
+            "usage_limit": 1,
+            "expires_at": None,
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert voucher.status_code == 200, voucher.text
+
+    cashier_a, token_a = new_staff(client, ctx, "CASHIER")
+    cashier_b, token_b = new_staff(client, ctx, "CASHIER")
+    _open_shift(client, ctx, token_a, opening=0)
+    _open_shift(client, ctx, token_b, opening=0)
+
+    # Ép hai request cùng vượt qua fast-path rồi tranh đúng shop lock. Nếu
+    # resolve tồn/voucher xảy ra trước lock, cả hai sẽ cùng thấy stock/limit=1.
+    ready = threading.Barrier(2)
+    real_lock = order_service._lock_shop_for_order
+
+    def synchronized_shop_lock(db, shop_id):
+        ready.wait(timeout=5)
+        return real_lock(db, shop_id)
+
+    monkeypatch.setattr(
+        order_service, "_lock_shop_for_order", synchronized_shop_lock
+    )
+
+    outcomes = []
+    outcomes_lock = threading.Lock()
+
+    def submit(username, operation_id):
+        thread_session = SessionLocal()
+        try:
+            user = (
+                thread_session.query(models.User)
+                .filter(models.User.username == username)
+                .first()
+            )
+            request = OrderCreate(
+                items=[
+                    {
+                        "product_id": ctx["product"]["id"],
+                        "product_name": ctx["product"]["name"],
+                        "price": 1,
+                        "quantity": 1,
+                    }
+                ],
+                voucher_code=voucher_code,
+                payment_method="cash",
+                operation_id=operation_id,
+            )
+            result = order_service.create_order(
+                thread_session, user, ctx["shop_id"], request
+            )
+            outcome = ("ok", result["order_id"])
+        except HTTPException as exc:
+            outcome = ("http", exc.status_code, str(exc.detail))
+        except Exception as exc:  # pragma: no cover - làm lỗi thread hiện rõ
+            outcome = ("error", type(exc).__name__, str(exc))
+        finally:
+            thread_session.close()
+        with outcomes_lock:
+            outcomes.append(outcome)
+
+    threads = [
+        threading.Thread(target=submit, args=(cashier_a, uuid.uuid4().hex)),
+        threading.Thread(target=submit, args=(cashier_b, uuid.uuid4().hex)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert len([result for result in outcomes if result[0] == "ok"]) == 1
+    rejected = [result for result in outcomes if result[0] == "http"]
+    assert len(rejected) == 1
+    assert rejected[0][1] == 400
+    assert "không đủ tồn kho" in rejected[0][2]
+
+    session = SessionLocal()
+    try:
+        product = (
+            session.query(models.Product)
+            .filter(models.Product.id == ctx["product"]["id"])
+            .first()
+        )
+        stored_voucher = (
+            session.query(models.Voucher)
+            .filter(
+                models.Voucher.shop_id == ctx["shop_id"],
+                models.Voucher.code == voucher_code,
+            )
+            .first()
+        )
+        assert product.stock == 0
+        assert stored_voucher.usage_count == 1
+        assert (
+            session.query(models.Order)
+            .filter(models.Order.shop_id == ctx["shop_id"])
+            .count()
+            == 1
+        )
+    finally:
+        session.close()
+
+
+def test_retry_dong_thoi_recheck_operation_id_sau_shop_lock(client, monkeypatch):
+    ctx = seller_with_shop(client)
+    cashier, cashier_token = new_staff(client, ctx, "CASHIER")
+    _open_shift(client, ctx, cashier_token, opening=0)
+    operation_id = uuid.uuid4().hex
+
+    ready = threading.Barrier(2)
+    real_lock = order_service._lock_shop_for_order
+
+    def synchronized_shop_lock(db, shop_id):
+        ready.wait(timeout=5)
+        return real_lock(db, shop_id)
+
+    monkeypatch.setattr(
+        order_service, "_lock_shop_for_order", synchronized_shop_lock
+    )
+
+    real_resolve = order_service.inventory_service.resolve_items
+    resolve_calls = 0
+    counter_lock = threading.Lock()
+
+    def counted_resolve(db, shop_id, wanted):
+        nonlocal resolve_calls
+        with counter_lock:
+            resolve_calls += 1
+        return real_resolve(db, shop_id, wanted)
+
+    monkeypatch.setattr(
+        order_service.inventory_service, "resolve_items", counted_resolve
+    )
+
+    outcomes = []
+    outcomes_lock = threading.Lock()
+
+    def submit():
+        thread_session = SessionLocal()
+        try:
+            user = (
+                thread_session.query(models.User)
+                .filter(models.User.username == cashier)
+                .first()
+            )
+            request = OrderCreate(
+                items=[
+                    {
+                        "product_id": ctx["product"]["id"],
+                        "product_name": ctx["product"]["name"],
+                        "price": 1,
+                        "quantity": 1,
+                    }
+                ],
+                payment_method="cash",
+                operation_id=operation_id,
+            )
+            outcome = order_service.create_order(
+                thread_session, user, ctx["shop_id"], request
+            )
+        except Exception as exc:  # pragma: no cover - làm lỗi thread hiện rõ
+            outcome = {"error": type(exc).__name__, "detail": str(exc)}
+        finally:
+            thread_session.close()
+        with outcomes_lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=submit) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(outcomes) == 2
+    assert all("error" not in result for result in outcomes)
+    assert outcomes[0] == outcomes[1]
+    assert resolve_calls == 1
+
+    session = SessionLocal()
+    try:
+        product = (
+            session.query(models.Product)
+            .filter(models.Product.id == ctx["product"]["id"])
+            .first()
+        )
+        assert product.stock == 9
+        assert (
+            session.query(models.Order)
+            .filter(models.Order.operation_id == operation_id)
+            .count()
+            == 1
+        )
+    finally:
+        session.close()
 
 
 def test_cashier_phai_mo_ca_truoc_khi_thu_tien_mat(client):

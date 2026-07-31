@@ -150,6 +150,32 @@ def _dashboard(client, ctx, token=None, **params):
     )
 
 
+def _mo_ca_tien_mat(client, ctx, token=None, opening=0):
+    res = client.post(
+        f"/api/shifts/{ctx['shop_id']}/open",
+        json={"opening_cash_amount": opening},
+        headers=auth(token or ctx["token"]),
+    )
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def _payment_shift_id(order_id, entry_type):
+    session = SessionLocal()
+    try:
+        return (
+            session.query(models.OrderPayment.shift_id)
+            .filter(
+                models.OrderPayment.order_id == order_id,
+                models.OrderPayment.entry_type == entry_type,
+            )
+            .order_by(models.OrderPayment.id.desc())
+            .scalar()
+        )
+    finally:
+        session.close()
+
+
 def test_webhook_du_tien_tu_dong_paid_va_xuat_hoa_don(client, webhook_secret):
     ctx = seller_with_shop(client)
     order_id = _tao_don(client, ctx)
@@ -280,6 +306,7 @@ def test_cash_topup_chi_thu_dung_toan_bo_phan_con_lai(
     ctx = seller_with_shop(client)
     order_id = _tao_don(client, ctx)
     _goi_webhook(client, order_id, 40000, f"CASH-BANK-{order_id}")
+    _mo_ca_tien_mat(client, ctx)
 
     partial = client.post(
         f"/api/orders/{order_id}/cash-topup",
@@ -317,6 +344,77 @@ def test_cash_topup_chi_thu_dung_toan_bo_phan_con_lai(
     )
     assert repeated.status_code == 409
     assert len(_payments(order_id)) == 2
+
+
+def test_tien_mat_doi_soat_bat_buoc_ca_va_lien_ket_dung_ledger(
+    client, webhook_secret
+):
+    ctx = seller_with_shop(client)
+    underpaid_id = _tao_don(client, ctx)
+    _goi_webhook(
+        client,
+        underpaid_id,
+        40000,
+        f"SHIFT-TOPUP-{underpaid_id}",
+    )
+
+    blocked_topup = client.post(
+        f"/api/orders/{underpaid_id}/cash-topup",
+        json={},
+        headers=auth(ctx["token"]),
+    )
+    assert blocked_topup.status_code == 409
+    assert "mở ca" in blocked_topup.json()["detail"].lower()
+
+    topup_shift = _mo_ca_tien_mat(client, ctx)
+    paid = client.post(
+        f"/api/orders/{underpaid_id}/cash-topup",
+        json={},
+        headers=auth(ctx["token"]),
+    )
+    assert paid.status_code == 200, paid.text
+    assert _payment_shift_id(underpaid_id, "CASH_TOPUP") == topup_shift["id"]
+
+    closed = client.post(
+        f"/api/shifts/{topup_shift['id']}/close",
+        json={"counted_cash_amount": 60000},
+        headers=auth(ctx["token"]),
+    )
+    assert closed.status_code == 200, closed.text
+
+    overpaid_id = _tao_don(client, ctx)
+    _goi_webhook(
+        client,
+        overpaid_id,
+        120000,
+        f"SHIFT-REFUND-{overpaid_id}",
+    )
+    refund_body = {
+        "method": "cash",
+        "operation_id": f"shift-refund-operation-{overpaid_id}",
+    }
+    blocked_refund = client.post(
+        f"/api/orders/{overpaid_id}/refund-complete",
+        json=refund_body,
+        headers=auth(ctx["token"]),
+    )
+    assert blocked_refund.status_code == 409
+    assert "mở ca" in blocked_refund.json()["detail"].lower()
+
+    refund_shift = _mo_ca_tien_mat(client, ctx, opening=20000)
+    refunded = client.post(
+        f"/api/orders/{overpaid_id}/refund-complete",
+        json=refund_body,
+        headers=auth(ctx["token"]),
+    )
+    assert refunded.status_code == 200, refunded.text
+    assert _payment_shift_id(overpaid_id, "REFUND_CASH") == refund_shift["id"]
+
+    current = client.get(
+        f"/api/shifts/current/{ctx['shop_id']}",
+        headers=auth(ctx["token"]),
+    ).json()["shift"]
+    assert current["expected_cash_amount"] == 0
 
 
 def test_cash_topup_sai_so_tien_khong_lam_thay_doi_don(
@@ -518,6 +616,7 @@ def test_retry_hoan_cu_khong_xac_nhan_nham_khoan_du_moi(
         "REFUND_TRANSFER"
     ) == 1
 
+    _mo_ca_tien_mat(client, ctx, opening=10000)
     new_cycle = client.post(
         f"/api/orders/{order_id}/refund-complete",
         json={
@@ -573,6 +672,7 @@ def test_tien_ve_sau_huy_giu_unreconciled_den_khi_hoan_xong(
     ).json()
     assert stats["total_revenue"] == 0
 
+    _mo_ca_tien_mat(client, ctx, opening=TOTAL)
     completed = client.post(
         f"/api/orders/{order_id}/refund-complete",
         json={
@@ -630,6 +730,7 @@ def test_staff_dung_shop_duoc_doi_soat_shop_khac_va_anonymous_bi_chan(
         json={},
         headers=auth(other_token),
     ).status_code == 403
+    _mo_ca_tien_mat(client, ctx, staff_token)
     allowed = client.post(
         path,
         json={},
@@ -679,6 +780,7 @@ def test_dashboard_reconciliation_only_loc_dung_ba_nhom_dang_mo(
     client, webhook_secret
 ):
     ctx = seller_with_shop(client)
+    _mo_ca_tien_mat(client, ctx, opening=TOTAL)
 
     pending_id = _tao_don(client, ctx)
 

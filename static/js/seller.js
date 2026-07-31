@@ -283,7 +283,9 @@ async function loadShiftHistory(shopId) {
     tbody.innerHTML = `<tr><td colspan="7" style="color:var(--text-muted);">Đang tải...</td></tr>`;
     try {
         const data = await apiCall(`/shifts/history/${shopId}?page=1&per_page=10`);
-        if (shopId !== currentShopId) return;
+        // Dashboard và kho có thể đang chọn hai shop khác nhau. Chỉ bỏ response
+        // cũ khi người dùng đã chuyển shop thống kê trong lúc request đang chạy.
+        if (shopId !== dashboardShopId) return;
         if (!data.items.length) {
             tbody.innerHTML = `<tr><td colspan="7" style="color:var(--text-muted);">Chưa có ca làm việc</td></tr>`;
             return;
@@ -578,10 +580,28 @@ function doiTrangDoiSoat(buoc) {
     loadDoiSoat();
 }
 
-function thuBuTienMatDoiSoat(orderId, conThieu) {
+async function coCaTienMatDangMo() {
+    const shopId = doiSoatShopId || dashboardShopId || currentShopId;
+    if (!shopId) {
+        showToast('Vui lòng chọn cửa hàng trước');
+        return false;
+    }
+    try {
+        const res = await apiCall(`/shifts/current/${shopId}`);
+        if (res?.shift) return true;
+        showToast('Hãy mở ca của bạn tại POS trước khi ghi nhận tiền mặt');
+        return false;
+    } catch (e) {
+        showToast(e.message || 'Không kiểm tra được ca tiền mặt');
+        return false;
+    }
+}
+
+async function thuBuTienMatDoiSoat(orderId, conThieu) {
     const id = Number(orderId);
     const soTien = Number(conThieu);
     if (!Number.isInteger(id) || !Number.isFinite(soTien) || soTien <= 0) return;
+    if (!await coCaTienMatDangMo()) return;
 
     showCustomConfirm(
         `Thu bù tiền mặt cho đơn #${id}`,
@@ -661,6 +681,7 @@ async function xacNhanDaHoanTien() {
     if (method !== 'cash' && method !== 'transfer') {
         return showToast('Vui lòng chọn phương thức hoàn tiền');
     }
+    if (method === 'cash' && !await coCaTienMatDangMo()) return;
 
     const note = document.getElementById('refundNote').value.trim();
     const reference = method === 'transfer'

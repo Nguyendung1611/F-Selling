@@ -135,13 +135,14 @@ def _current_cash_shift(
     shop_id: int,
     *,
     required_for_cashier: bool = False,
+    required_for_everyone: bool = False,
     lock_for_cash_write: bool = False,
 ) -> Optional[models.CashShift]:
     """Ca OPEN của chính người đang thao tác trong shop.
 
-    API cũ vẫn cho chủ shop/MANAGER thu tiền không qua ca để không phá client
-    đang chạy sau deploy. Riêng preset CASHIER phải mở ca trước khi đụng tiền
-    mặt; giao diện web mới cũng hướng mọi người dùng vào luồng này.
+    `/pay` cũ vẫn cho chủ shop/MANAGER thu tiền không qua ca để không phá
+    client cũ; riêng CASHIER luôn phải mở ca. Các nghiệp vụ đối soát tiền mặt
+    mới dùng ``required_for_everyone`` để mọi khoản thu/hoàn đều vào đúng két.
     """
     shift = (
         db.query(models.CashShift)
@@ -153,15 +154,15 @@ def _current_cash_shift(
         .order_by(models.CashShift.id.desc())
         .first()
     )
-    if (
-        shift is None
-        and required_for_cashier
+    cashier_must_open = (
+        required_for_cashier
         and current_user.role == "STAFF"
         and effective_staff_role(current_user) == STAFF_ROLE_CASHIER
-    ):
+    )
+    if shift is None and (required_for_everyone or cashier_must_open):
         raise HTTPException(
             status_code=409,
-            detail="Thu ngân phải mở ca trước khi thu hoặc chi tiền mặt",
+            detail="Hãy mở ca của bạn tại POS trước khi ghi nhận tiền mặt",
         )
     if shift is not None and lock_for_cash_write:
         # SQLite không có SELECT FOR UPDATE. No-op UPDATE lấy write lock và
@@ -290,6 +291,23 @@ def _existing_operation_order(
     return _create_order_response(shop, existing)
 
 
+def _lock_shop_for_order(db: Session, shop_id: int) -> None:
+    """Tuần tự hóa phần kiểm tồn/voucher và ghi đơn trong cùng một shop.
+
+    SQLite không có ``SELECT FOR UPDATE``. No-op UPDATE này lấy write lock
+    trước khi đọc tồn kho và số lượt voucher; transaction giữ lock tới commit.
+    Nếu sau này đổi database có row lock, chính hàng shop này vẫn là hàng rào
+    chung cho mọi thu ngân của cùng cửa hàng.
+    """
+    locked = db.execute(
+        text("UPDATE shops SET id = id WHERE id = :shop_id"),
+        {"shop_id": shop_id},
+    )
+    if locked.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Không tìm thấy cửa hàng")
+
+
 def create_order(
     db: Session, current_user: models.User, shop_id: int, order: OrderCreate
 ) -> Dict[str, Any]:
@@ -310,6 +328,28 @@ def create_order(
             operation_fingerprint,
         )
         if existing_response is not None:
+            return existing_response
+
+    # Mọi phép đọc có thể quyết định việc ghi (tồn kho, lượt voucher) phải nằm
+    # sau cùng một write lock. Hai cashier có ca khác nhau không thể chỉ dựa
+    # vào shift lock vì khi đó cả hai đã kịp đọc cùng snapshot tồn/lượt dùng.
+    _lock_shop_for_order(db, shop_id)
+
+    # Một retry có thể đã hoàn tất trong lúc request này chờ shop lock. Kiểm
+    # lại ngay sau lock để không resolve/trừ kho/tăng voucher lần thứ hai.
+    if operation_id:
+        existing_response = _existing_operation_order(
+            db,
+            shop,
+            current_user,
+            operation_id,
+            operation_fingerprint,
+        )
+        if existing_response is not None:
+            # Chỉ có no-op UPDATE ở transaction này. Response đã là dict nên
+            # rollback an toàn và nhả write lock ngay, không chờ dependency
+            # đóng Session sau khi FastAPI dựng xong response.
+            db.rollback()
             return existing_response
 
     # Tính tiền TỪ DB, không tin giá client gửi.
@@ -515,30 +555,8 @@ def pay_order(
     return {"msg": "Paid successfully"}
 
 
-def cash_topup(
-    db: Session,
-    current_user: models.User,
-    order_id: int,
-    request: CashTopup,
-) -> Dict[str, Any]:
-    """Ghi nhận tiền mặt bù cho đúng đơn đang thiếu.
-
-    UPDATE có điều kiện bảo đảm webhook và hai cú bấm thu bù không thể cùng
-    thắng dựa trên một số dư cũ. Nếu bỏ amount, thu đúng toàn bộ phần còn thiếu.
-    """
-    order = db.query(models.Order).filter(models.Order.id == order_id).first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
-    require_shop_access(db, order.shop_id, current_user)
-    require_staff_permission(current_user, PERMISSION_SALE)
-    shift = _current_cash_shift(
-        db,
-        current_user,
-        order.shop_id,
-        required_for_cashier=True,
-        lock_for_cash_write=True,
-    )
-
+def _cash_topup_amount(order: models.Order, request: CashTopup) -> float:
+    """Kiểm trạng thái và trả đúng số tiền mặt còn thiếu của đơn."""
     if (
         order.status != STATUS_UNRECONCILED
         or order.reconciliation_reason != RECON_UNDERPAID
@@ -570,6 +588,41 @@ def cash_topup(
         raise HTTPException(
             status_code=400, detail="Số tiền bù phải lớn hơn 0"
         )
+    return amount
+
+
+def cash_topup(
+    db: Session,
+    current_user: models.User,
+    order_id: int,
+    request: CashTopup,
+) -> Dict[str, Any]:
+    """Ghi nhận tiền mặt bù cho đúng đơn đang thiếu.
+
+    UPDATE có điều kiện bảo đảm webhook và hai cú bấm thu bù không thể cùng
+    thắng dựa trên một số dư cũ. Nếu bỏ amount, thu đúng toàn bộ phần còn thiếu.
+    Mọi vai trò đều phải có ca OPEN của chính mình để khoản tiền vào đúng két.
+    """
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
+    require_shop_access(db, order.shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_SALE)
+
+    # Trả lỗi trạng thái/số tiền rõ ràng trước; request hợp lệ mới yêu cầu ca.
+    amount = _cash_topup_amount(order, request)
+    shift = _current_cash_shift(
+        db,
+        current_user,
+        order.shop_id,
+        required_for_everyone=True,
+        lock_for_cash_write=True,
+    )
+    assert shift is not None
+    # Có thể đã chờ một cash write khác. Đọc lại sau lock để không thu theo số
+    # dư cũ; câu UPDATE có điều kiện bên dưới vẫn là hàng rào cuối cùng.
+    db.refresh(order)
+    amount = _cash_topup_amount(order, request)
 
     result = db.execute(
         text(
@@ -656,16 +709,6 @@ def complete_refund(
         raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
     require_shop_access(db, order.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_RECONCILIATION)
-    refund_shift = (
-        _current_cash_shift(
-            db,
-            current_user,
-            order.shop_id,
-            lock_for_cash_write=True,
-        )
-        if request.method == "cash"
-        else None
-    )
 
     operation_id = request.operation_id.strip()
     if len(operation_id) < 8:
@@ -720,6 +763,74 @@ def complete_refund(
             status_code=409,
             detail="Trạng thái đối soát của đơn không cho phép ghi nhận hoàn tiền",
         )
+
+    refund_shift = None
+    if request.method == "cash":
+        # Hoàn bằng tiền mặt phải trừ đúng ca/két của người thao tác. Kiểm
+        # idempotency ở trên trước để một retry đã thành công vẫn đọc được sau
+        # khi ca cũ đã đóng.
+        refund_shift = _current_cash_shift(
+            db,
+            current_user,
+            order.shop_id,
+            required_for_everyone=True,
+            lock_for_cash_write=True,
+        )
+        assert refund_shift is not None
+        # Request cùng operation_id có thể hoàn tất trong lúc chờ shift lock.
+        previous_operation = (
+            db.query(models.OrderPayment)
+            .filter(models.OrderPayment.idempotency_key == operation_key)
+            .first()
+        )
+        if previous_operation:
+            db.refresh(order)
+            if (
+                previous_operation.order_id == order_id
+                and previous_operation.entry_type
+                in (ENTRY_REFUND_CASH, ENTRY_REFUND_TRANSFER)
+            ):
+                response = {
+                    "msg": "Lần hoàn tiền này đã được ghi nhận trước đó",
+                    "id": order.id,
+                    "status": order.status,
+                    "total_amount": order.total_amount,
+                }
+                response.update(payment_summary(order))
+                db.rollback()
+                return response
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Mã thao tác hoàn tiền đã được dùng cho một giao dịch khác",
+            )
+
+        db.refresh(order)
+        due = max(_so_tien(order.refund_due_amount), 0)
+        if due <= MONEY_EPSILON:
+            db.rollback()
+            if order.refund_completed_at is not None:
+                response = {
+                    "msg": "Khoản hoàn tiền này đã được ghi nhận trước đó",
+                    "id": order.id,
+                    "status": order.status,
+                    "total_amount": order.total_amount,
+                }
+                response.update(payment_summary(order))
+                return response
+            raise HTTPException(
+                status_code=409,
+                detail="Đơn hàng không có khoản tiền cần hoàn",
+            )
+        if order.reconciliation_reason not in (
+            RECON_OVERPAID,
+            RECON_LATE_PAYMENT,
+        ):
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Trạng thái đối soát của đơn không cho phép ghi nhận hoàn tiền",
+            )
 
     completed_at = datetime.utcnow()
     target_status = (

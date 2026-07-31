@@ -26,11 +26,122 @@ let cashTenderedAmount = 0;
 let checkoutBusy = false;
 let pendingCashOrderId = null;
 let checkoutOperationId = null;
+let pendingCheckoutState = null;
+let pendingMovementState = null;
+
+const POS_CHECKOUT_STORAGE_PREFIX = 'fselling.pos.checkout.v2';
+const POS_MOVEMENT_STORAGE_PREFIX = 'fselling.pos.movement.v1';
+
+function sessionKey(prefix, suffix = '') {
+    const username = localStorage.getItem('username') || 'anonymous';
+    return `${prefix}:${username}${suffix ? `:${suffix}` : ''}`;
+}
+
+function docSessionJson(key) {
+    try {
+        const raw = sessionStorage.getItem(key);
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+        console.warn('Không đọc được trạng thái POS trong sessionStorage:', e);
+        return null;
+    }
+}
+
+function ghiSessionJson(key, value) {
+    try {
+        sessionStorage.setItem(key, JSON.stringify(value));
+    } catch (e) {
+        // POS vẫn hoạt động khi trình duyệt chặn storage, nhưng không thể tự phục
+        // hồi qua reload. Không được làm vỡ luồng bán hàng chỉ vì lỗi quota.
+        console.warn('Không lưu được trạng thái POS trong sessionStorage:', e);
+    }
+}
+
+function xoaSessionKey(key) {
+    try {
+        sessionStorage.removeItem(key);
+    } catch (e) {
+        console.warn('Không xóa được trạng thái POS trong sessionStorage:', e);
+    }
+}
+
+function checkoutStorageKey() {
+    return sessionKey(POS_CHECKOUT_STORAGE_PREFIX);
+}
+
+function docCheckoutDangDo() {
+    const state = docSessionJson(checkoutStorageKey());
+    if (!state || state.version !== 2) return null;
+    if (state.username !== (localStorage.getItem('username') || 'anonymous')) return null;
+    return state;
+}
+
+function luuCheckoutDangDo(state) {
+    pendingCheckoutState = {
+        ...state,
+        version: 2,
+        username: localStorage.getItem('username') || 'anonymous',
+        saved_at: new Date().toISOString()
+    };
+    ghiSessionJson(checkoutStorageKey(), pendingCheckoutState);
+    return pendingCheckoutState;
+}
+
+function xoaCheckoutDangDo() {
+    pendingCheckoutState = null;
+    xoaSessionKey(checkoutStorageKey());
+}
+
+function movementStorageKey(shiftId) {
+    return sessionKey(POS_MOVEMENT_STORAGE_PREFIX, String(shiftId || 'none'));
+}
+
+function docMovementDangDo(shiftId) {
+    const state = docSessionJson(movementStorageKey(shiftId));
+    if (!state || state.version !== 1 || Number(state.shift_id) !== Number(shiftId)) return null;
+    return state;
+}
+
+function luuMovementDangDo(state) {
+    pendingMovementState = {
+        ...state,
+        version: 1,
+        username: localStorage.getItem('username') || 'anonymous',
+        saved_at: new Date().toISOString()
+    };
+    ghiSessionJson(movementStorageKey(state.shift_id), pendingMovementState);
+    return pendingMovementState;
+}
+
+function xoaMovementDangDo(state = pendingMovementState) {
+    if (state?.shift_id) xoaSessionKey(movementStorageKey(state.shift_id));
+    pendingMovementState = null;
+    movementOperationId = null;
+}
+
+function laLoi4xx(error) {
+    return Number(error?.status) >= 400 && Number(error?.status) < 500;
+}
 
 async function loadShop() {
     try {
         const res = await apiCall('/shops');
         allShops = res.filter(s => s.is_active !== false); // fallback if undefined
+        pendingCheckoutState = docCheckoutDangDo();
+        const pendingShopId = Number(pendingCheckoutState?.shop_id);
+        const coQuyenShopDangCho =
+            pendingShopId && allShops.some(s => s.id === pendingShopId);
+        if (pendingCheckoutState && !coQuyenShopDangCho) {
+            // Shop đã bị xóa/khóa hoặc tài khoản không còn quyền truy cập:
+            // không giữ một thao tác vĩnh viễn mà người dùng không thể xử lý.
+            xoaCheckoutDangDo();
+            showToast('Đã bỏ trạng thái đơn cũ vì bạn không còn truy cập được cửa hàng đó');
+        } else if (coQuyenShopDangCho) {
+            // Một đơn chưa rõ kết quả phải kéo tab về đúng shop của nó. Nếu giữ
+            // shop mới từ localStorage, nút retry/hủy có thể thao tác nhầm quầy.
+            currentShopId = pendingShopId;
+            localStorage.setItem('currentShopId', currentShopId);
+        }
         const sel = document.getElementById('shopSelect');
         sel.innerHTML = '<option value="">-- Chọn Cửa Hàng --</option>';
         allShops.forEach(s => {
@@ -42,6 +153,7 @@ async function loadShop() {
             sel.value = currentShopId;
         }
         await Promise.all([loadCategories(), loadProducts(), loadCurrentShift()]);
+        phucHoiCheckoutDangDo();
     } catch(e) {
         showToast(e.message || 'Không tải được thông tin cửa hàng');
     }
@@ -51,6 +163,10 @@ async function changeShopPOS() {
     const val = document.getElementById('shopSelect').value;
     if(!val) return;
     const shopMoi = parseInt(val);
+    if (checkoutOperationId || currentOrderId || pendingCashOrderId) {
+        document.getElementById('shopSelect').value = String(currentShopId);
+        return showToast('Hãy hoàn tất, thử lại hoặc hủy đơn hiện tại trước khi chuyển cửa hàng');
+    }
     if (activeShift && shopMoi !== currentShopId) {
         document.getElementById('shopSelect').value = String(currentShopId);
         return showToast('Hãy kết ca hiện tại trước khi chuyển cửa hàng');
@@ -169,16 +285,21 @@ BarcodeScanner.batDau(xuLyQuetPOS);
 //
 // Dòng trong giỏ được gộp theo product_id chứ không theo tên: hai sản phẩm khác
 // nhau mà trùng tên từng bị cộng dồn vào một dòng, tính tiền sai.
+function dangKhoaChinhSuaDon() {
+    if (currentOrderId || pendingCashOrderId) {
+        showToast('Đơn đã tạo, hãy hoàn tất hoặc hủy đơn trước khi chỉnh sửa');
+        return true;
+    }
+    if (checkoutOperationId) {
+        showToast('Kết quả tạo đơn chưa rõ; hãy bấm thử tạo đơn lại');
+        return true;
+    }
+    return false;
+}
+
 function addToCart(p) {
     try {
-        if (checkoutOperationId && !currentOrderId) {
-            showToast('Kết quả tạo đơn chưa rõ; hãy bấm thử tạo đơn lại');
-            return false;
-        }
-        if (pendingCashOrderId) {
-            showToast('Hãy hoàn tất thanh toán tiền mặt của đơn hiện tại');
-            return false;
-        }
+        if (dangKhoaChinhSuaDon()) return false;
         if(!cart) cart = [];
         if(p.stock <= 0) { showToast("Sản phẩm đã hết hàng!"); return false; }
         const existing = cart.find(i => i.product_id === p.id);
@@ -197,8 +318,7 @@ function addToCart(p) {
 }
 
 function updateQty(index, delta) {
-    if (checkoutOperationId && !currentOrderId) return showToast('Hãy thử tạo đơn lại trước khi sửa giỏ');
-    if (pendingCashOrderId) return showToast('Đơn đã tạo, hãy hoàn tất thanh toán trước');
+    if (dangKhoaChinhSuaDon()) return;
     const item = cart[index];
     if(item.quantity + delta > item.max_stock) return showToast("Vượt quá tồn kho!");
     if(item.quantity + delta <= 0) cart.splice(index, 1);
@@ -207,8 +327,7 @@ function updateQty(index, delta) {
 }
 
 function removeItem(index) {
-    if (checkoutOperationId && !currentOrderId) return showToast('Hãy thử tạo đơn lại trước khi sửa giỏ');
-    if (pendingCashOrderId) return showToast('Đơn đã tạo, hãy hoàn tất thanh toán trước');
+    if (dangKhoaChinhSuaDon()) return;
     cart.splice(index, 1);
     calcCart();
 }
@@ -225,8 +344,7 @@ function calcCart() {
 }
 
 async function applyVoucher() {
-    if (checkoutOperationId && !currentOrderId) return showToast('Hãy thử tạo đơn lại trước khi đổi voucher');
-    if (pendingCashOrderId) return showToast('Đơn đã tạo, không thể đổi voucher lúc này');
+    if (dangKhoaChinhSuaDon()) return;
     const code = document.getElementById('voucherInput').value.toUpperCase();
     if(!code) {
         currentVoucher = null; discount = 0; total = subtotal;
@@ -293,9 +411,16 @@ function updateUI() {
 }
 
 function setMethod(m) {
+    if (currentOrderId || pendingCashOrderId) {
+        return showToast('Đơn đã tạo; hãy thanh toán hoặc hủy trước khi đổi phương thức');
+    }
     if (checkoutOperationId && !currentOrderId) {
         return showToast('Hãy thử tạo đơn lại trước khi đổi thanh toán');
     }
+    apDungPhuongThucThanhToan(m, true);
+}
+
+function apDungPhuongThucThanhToan(m, focusCash = false) {
     paymentMethod = m;
     document.getElementById('btnMethodQR').classList.remove('active');
     document.getElementById('btnMethodCash').classList.remove('active');
@@ -308,7 +433,7 @@ function setMethod(m) {
     // QR của đơn cũ không được nằm cạnh luồng thu tiền mặt.
     if(m === 'cash') {
         document.getElementById('qrSection').style.display = 'none';
-        setTimeout(() => document.getElementById('cashTenderedInput')?.focus(), 0);
+        if (focusCash) setTimeout(() => document.getElementById('cashTenderedInput')?.focus(), 0);
     }
     renderCashQuickAmounts();
     capNhatTienKhachDua();
@@ -364,6 +489,10 @@ function datTienKhachDua(amount) {
 function capNhatTienKhachDua() {
     const input = document.getElementById('cashTenderedInput');
     cashTenderedAmount = input ? docGiaTriTien(input.value) : 0;
+    if (pendingCheckoutState?.payment_method === 'cash') {
+        pendingCheckoutState.tendered_amount = cashTenderedAmount;
+        luuCheckoutDangDo(pendingCheckoutState);
+    }
     const status = document.getElementById('cashChangeStatus');
     const output = document.getElementById('txtCashChange');
     if (!status || !output) return capNhatNutCheckout();
@@ -402,6 +531,97 @@ function capNhatNutCheckout() {
     else if (thieuTien) button.title = 'Tiền khách đưa chưa đủ';
     else if (donQRDangCho) button.title = 'Đang chờ thanh toán đơn hiện tại';
     else button.title = '';
+}
+
+function taoTrangThaiCheckout(body) {
+    const customerText = selectedCustomerId !== null
+        ? document.getElementById('khachDaChon')?.innerText || ''
+        : '';
+    return luuCheckoutDangDo({
+        phase: 'creating',
+        shop_id: currentShopId,
+        operation_id: body.operation_id,
+        order_id: null,
+        create_payload: JSON.parse(JSON.stringify(body)),
+        payment_method: paymentMethod,
+        tendered_amount: cashTenderedAmount,
+        confirmed_total: Number(total) || 0,
+        server_total: null,
+        server_total_confirmed: false,
+        cart: cart.map(item => ({ ...item })),
+        subtotal: Number(subtotal) || 0,
+        discount: Number(discount) || 0,
+        total: Number(total) || 0,
+        voucher_code: currentVoucher,
+        selected_customer_id: selectedCustomerId,
+        selected_customer_text: customerText,
+        qr_url: null
+    });
+}
+
+function phucHoiCheckoutDangDo() {
+    const state = pendingCheckoutState || docCheckoutDangDo();
+    if (!state || Number(state.shop_id) !== Number(currentShopId)) return false;
+    if (!['creating', 'cash_pending', 'transfer_pending'].includes(state.phase)) return false;
+
+    pendingCheckoutState = state;
+    checkoutOperationId = state.phase === 'creating' ? state.operation_id : null;
+    currentOrderId = state.order_id ? Number(state.order_id) : null;
+    pendingCashOrderId = state.phase === 'cash_pending' && currentOrderId
+        ? currentOrderId
+        : null;
+
+    const restoredCart = Array.isArray(state.cart) && state.cart.length
+        ? state.cart
+        : (state.create_payload?.items || []).map(item => ({
+            ...item,
+            max_stock: Number.MAX_SAFE_INTEGER
+        }));
+    cart = restoredCart.map(item => ({ ...item }));
+    currentVoucher = state.voucher_code || null;
+    selectedCustomerId = state.selected_customer_id ?? null;
+    subtotal = Number(state.subtotal);
+    if (!Number.isFinite(subtotal)) {
+        subtotal = cart.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
+    }
+    discount = Number(state.discount) || 0;
+    const restoredTotal = state.server_total ?? state.total ?? state.confirmed_total;
+    total = Number.isFinite(Number(restoredTotal)) ? Number(restoredTotal) : Math.max(0, subtotal - discount);
+    cashTenderedAmount = Number(state.tendered_amount) || 0;
+
+    const voucherInput = document.getElementById('voucherInput');
+    if (voucherInput) voucherInput.value = currentVoucher || '';
+    const cashInput = document.getElementById('cashTenderedInput');
+    if (cashInput) {
+        cashInput.value = cashTenderedAmount
+            ? cashTenderedAmount.toLocaleString('vi-VN')
+            : '';
+    }
+    if (selectedCustomerId !== null) {
+        const selected = document.getElementById('khachDaChon');
+        if (selected) selected.innerText = state.selected_customer_text || `Khách hàng #${selectedCustomerId}`;
+        const chooser = document.getElementById('khachChuaChon');
+        const clearButton = document.getElementById('khachBoChon');
+        if (chooser) chooser.style.display = 'none';
+        if (clearButton) clearButton.style.display = 'block';
+    }
+
+    apDungPhuongThucThanhToan(state.payment_method === 'cash' ? 'cash' : 'transfer');
+    updateUI();
+
+    if (state.phase === 'transfer_pending' && currentOrderId) {
+        if (state.qr_url) document.getElementById('qrImage').src = state.qr_url;
+        document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total ?? total);
+        document.getElementById('qrSection').style.display = 'block';
+        startPaymentPolling();
+        showToast(`Đã phục hồi đơn chuyển khoản #${currentOrderId}`);
+    } else if (state.phase === 'cash_pending' && currentOrderId) {
+        showToast(`Đã phục hồi đơn tiền mặt #${currentOrderId}; hãy thu tiền hoặc hủy đơn`);
+    } else {
+        showToast('Kết quả tạo đơn trước đó chưa rõ; bấm “Thử tạo đơn lại”');
+    }
+    capNhatNutCheckout();
+    return true;
 }
 
 // ===== Ca làm việc và sổ tiền mặt =====
@@ -545,62 +765,147 @@ async function moCa() {
     }
 }
 
-function chonLoaiThuChi(type) {
+function chonLoaiThuChi(type, persistDraft = true) {
     movementType = type === 'PAY_OUT' ? 'PAY_OUT' : 'PAY_IN';
     document.getElementById('btnMovementIn').classList.toggle('active', movementType === 'PAY_IN');
     document.getElementById('btnMovementOut').classList.toggle('active', movementType === 'PAY_OUT');
     document.getElementById('movementNote').placeholder =
         movementType === 'PAY_IN' ? 'Ví dụ: Nộp thêm tiền lẻ vào quầy' : 'Ví dụ: Chi mua túi đóng gói';
+    if (persistDraft) capNhatMovementDraft();
+}
+
+function khoaFormMovement(locked) {
+    document.getElementById('btnMovementIn').disabled = locked;
+    document.getElementById('btnMovementOut').disabled = locked;
+    document.getElementById('movementAmountInput').disabled = locked;
+    document.getElementById('movementNote').disabled = locked;
+    const submit = document.getElementById('btnSubmitMovement');
+    if (submit && !submit.disabled) {
+        submit.innerHTML = locked
+            ? '<i class="ph ph-arrow-clockwise"></i> Thử ghi lại đúng khoản này'
+            : '<i class="ph ph-check-circle"></i> Ghi nhận';
+    }
+}
+
+function capNhatMovementDraft() {
+    if (!activeShift || pendingMovementState?.submitted) return;
+    if (!pendingMovementState) {
+        pendingMovementState = {
+            shift_id: activeShift.id,
+            operation_id: movementOperationId || taoOperationId(),
+            submitted: false,
+            draft: {}
+        };
+    }
+    movementOperationId = pendingMovementState.operation_id;
+    pendingMovementState.draft = {
+        movement_type: movementType,
+        amount: docGiaTriTien(document.getElementById('movementAmountInput')?.value),
+        note: document.getElementById('movementNote')?.value.trim() || ''
+    };
+    luuMovementDangDo(pendingMovementState);
 }
 
 function moModalThuChi() {
     if (!activeShift) return showToast('Hãy mở ca trước khi ghi nhận thu / chi');
-    movementOperationId = taoOperationId();
-    movementType = 'PAY_IN';
-    document.getElementById('movementAmountInput').value = '';
-    document.getElementById('movementNote').value = '';
-    chonLoaiThuChi('PAY_IN');
+    pendingMovementState = docMovementDangDo(activeShift.id);
+    if (!pendingMovementState) {
+        pendingMovementState = luuMovementDangDo({
+            shift_id: activeShift.id,
+            operation_id: taoOperationId(),
+            submitted: false,
+            draft: { movement_type: 'PAY_IN', amount: 0, note: '' },
+            payload: null
+        });
+    }
+    movementOperationId = pendingMovementState.operation_id;
+    const values = pendingMovementState.submitted
+        ? pendingMovementState.payload
+        : pendingMovementState.draft;
+    movementType = values?.movement_type === 'PAY_OUT' ? 'PAY_OUT' : 'PAY_IN';
+    document.getElementById('movementAmountInput').value =
+        Number(values?.amount) > 0 ? Number(values.amount).toLocaleString('vi-VN') : '';
+    document.getElementById('movementNote').value = values?.note || '';
+    chonLoaiThuChi(movementType, false);
+    khoaFormMovement(Boolean(pendingMovementState.submitted));
     hienModalCa('cashMovementModal', 'movementAmountInput');
 }
 
 async function ghiNhanThuChi() {
     if (!activeShift) return showToast('Ca đã đóng hoặc không còn tồn tại');
-    const amountInput = document.getElementById('movementAmountInput');
-    const amount = docGiaTriTien(amountInput.value);
-    const note = document.getElementById('movementNote').value.trim();
-    if (amount <= 0) {
-        amountInput.focus();
-        return showToast('Vui lòng nhập số tiền lớn hơn 0');
-    }
-    if (!note) {
-        document.getElementById('movementNote').focus();
-        return showToast('Vui lòng nhập lý do thu / chi');
-    }
-    // Giữ operation_id khi request lỗi để nút retry không thể ghi trùng.
-    if (!movementOperationId) movementOperationId = taoOperationId();
-    datNutDangXuLy('btnSubmitMovement', true, 'Đang ghi...');
-    try {
-        const res = await apiCall(`/shifts/${activeShift.id}/movements`, 'POST', {
+    let state = pendingMovementState || docMovementDangDo(activeShift.id);
+    let payload = state?.submitted ? state.payload : null;
+    if (!payload) {
+        const amountInput = document.getElementById('movementAmountInput');
+        const amount = docGiaTriTien(amountInput.value);
+        const note = document.getElementById('movementNote').value.trim();
+        if (amount <= 0) {
+            amountInput.focus();
+            return showToast('Vui lòng nhập số tiền lớn hơn 0');
+        }
+        if (!note) {
+            document.getElementById('movementNote').focus();
+            return showToast('Vui lòng nhập lý do thu / chi');
+        }
+        if (!state) {
+            state = {
+                shift_id: activeShift.id,
+                operation_id: movementOperationId || taoOperationId()
+            };
+        }
+        payload = {
             movement_type: movementType,
             amount,
             note,
-            operation_id: movementOperationId
+            operation_id: state.operation_id
+        };
+        // Từ thời điểm request đầu tiên rời browser, payload bị khóa. Nếu response
+        // mất, retry bắt buộc gửi lại đúng cả operation_id lẫn nội dung.
+        state = luuMovementDangDo({
+            ...state,
+            submitted: true,
+            payload,
+            draft: { movement_type: movementType, amount, note }
         });
+    }
+    pendingMovementState = state;
+    movementOperationId = state.operation_id;
+    khoaFormMovement(true);
+    datNutDangXuLy('btnSubmitMovement', true, 'Đang ghi...');
+    try {
+        const res = await apiCall(`/shifts/${state.shift_id}/movements`, 'POST', payload);
         if (res?.shift) activeShift = res.shift;
         dongModalCa('cashMovementModal');
         capNhatThanhCa('open');
-        showToast(`${movementType === 'PAY_IN' ? 'Đã thu' : 'Đã chi'} ${dinhDangTien(amount)}`);
-        movementOperationId = null;
+        showToast(`${payload.movement_type === 'PAY_IN' ? 'Đã thu' : 'Đã chi'} ${dinhDangTien(payload.amount)}`);
+        xoaMovementDangDo(state);
     } catch (e) {
-        showToast(e.message);
+        if (laLoi4xx(e)) {
+            // 4xx là kết quả xác định: server đã từ chối payload này. Xóa op cũ
+            // để người dùng sửa và gửi một thao tác mới.
+            xoaMovementDangDo(state);
+            khoaFormMovement(false);
+            showToast(`${e.message}. Hãy sửa thông tin rồi ghi nhận lại.`);
+        } else {
+            // Network/5xx: không biết server đã commit chưa, nên giữ nguyên state
+            // và khóa form cho tới khi retry cùng payload trả về kết quả rõ ràng.
+            pendingMovementState = state;
+            luuMovementDangDo(state);
+            showToast(`${e.message}. Bấm “Thử ghi lại đúng khoản này” khi có mạng.`);
+        }
         await loadCurrentShift(false);
     } finally {
         datNutDangXuLy('btnSubmitMovement', false);
+        khoaFormMovement(Boolean(pendingMovementState?.submitted));
     }
 }
 
 async function moModalKetCa() {
     if (!activeShift) return showToast('Không có ca đang mở');
+    const movementDangDo = docMovementDangDo(activeShift.id);
+    if (movementDangDo?.submitted) {
+        return showToast('Hãy thử ghi lại khoản thu / chi đang chờ trước khi kết ca');
+    }
     if (cart.length > 0 || currentOrderId) {
         return showToast('Hãy hoàn tất hoặc hủy đơn hiện tại trước khi kết ca');
     }
@@ -721,15 +1026,145 @@ function xacNhan(tieuDe, noiDung) {
 
 let paymentPollingInterval = null;
 
+async function xacNhanTongTienServer(state) {
+    const daXacNhan = Math.round(Number(state.confirmed_total) || 0);
+    const serverTotal = Math.round(Number(state.server_total) || 0);
+    if (daXacNhan === serverTotal) {
+        state.server_total_confirmed = true;
+        luuCheckoutDangDo(state);
+        return true;
+    }
+    if (state.server_total_confirmed === true) return true;
+
+    const tendered = Number(state.tendered_amount) || 0;
+    const chenhlech = tendered - serverTotal;
+    const dongY = await xacNhan(
+        'Tổng tiền trên server đã thay đổi',
+        `Tổng vừa xác nhận: ${dinhDangTien(daXacNhan)}\n`
+        + `Tổng chính xác: ${dinhDangTien(serverTotal)}\n`
+        + `Khách đưa: ${dinhDangTien(tendered)}\n`
+        + `${chenhlech >= 0 ? 'Tiền thối' : 'Còn thiếu'}: ${dinhDangTien(Math.abs(chenhlech))}\n\n`
+        + 'Xác nhận lại tổng chính xác trước khi ghi nhận đã thu tiền.'
+    );
+    if (!dongY) {
+        state.server_total_confirmed = false;
+        luuCheckoutDangDo(state);
+        showToast('Đơn đã được giữ lại; cần xác nhận tổng mới trước khi thu tiền');
+        return false;
+    }
+    state.server_total_confirmed = true;
+    luuCheckoutDangDo(state);
+    return true;
+}
+
+async function hoanTatTienMatDangCho(state) {
+    const idDon = Number(state.order_id);
+    if (!idDon) throw new Error('Không có mã đơn tiền mặt để thanh toán');
+
+    currentOrderId = idDon;
+    pendingCashOrderId = idDon;
+    total = Number(state.server_total ?? state.total ?? total) || 0;
+    capNhatTienKhachDua();
+    state.tendered_amount = cashTenderedAmount;
+    luuCheckoutDangDo(state);
+
+    if (!await xacNhanTongTienServer(state)) return false;
+    if (cashTenderedAmount < total) {
+        document.getElementById('cashTenderedInput')?.focus();
+        showToast(`Khách còn thiếu ${dinhDangTien(total - cashTenderedAmount)}`);
+        return false;
+    }
+
+    await apiCall(`/orders/${idDon}/pay`, 'POST', {
+        tendered_amount: cashTenderedAmount
+    });
+    // Pay đã trả success (kể cả idempotent "đã PAID"): từ đây mới được xóa
+    // state durable của tab.
+    xoaCheckoutDangDo();
+    pendingCashOrderId = null;
+    showToast(`Thu tiền mặt thành công, thối ${dinhDangTien(cashTenderedAmount - total)}`);
+    await hienHoaDon(idDon);
+    return true;
+}
+
+async function guiYeuCauTaoDonDangDo(state) {
+    const res = await apiCall(
+        `/orders/${state.shop_id}`,
+        'POST',
+        state.create_payload
+    );
+    checkoutOperationId = null;
+    currentOrderId = Number(res.order_id);
+    state.order_id = currentOrderId;
+    state.server_total = Number.isFinite(Number(res.total))
+        ? Number(res.total)
+        : Number(state.total) || 0;
+
+    if (state.payment_method === 'transfer') {
+        state.phase = 'transfer_pending';
+        state.qr_url = res.qr_url || state.qr_url || null;
+        luuCheckoutDangDo(state);
+        if (state.qr_url) document.getElementById('qrImage').src = state.qr_url;
+        document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total);
+        document.getElementById('qrSection').style.display = 'block';
+        showToast('Tạo đơn thành công! Khách vui lòng quét mã.');
+        DocTien.chuanBiSoTien(res.total);
+        startPaymentPolling();
+        return;
+    }
+
+    state.phase = 'cash_pending';
+    state.server_total_confirmed =
+        Math.round(Number(state.confirmed_total) || 0) === Math.round(state.server_total);
+    pendingCashOrderId = currentOrderId;
+    total = state.server_total;
+    luuCheckoutDangDo(state);
+    document.getElementById('txtTotal').innerText = dinhDangTien(total);
+    renderCashQuickAmounts();
+    capNhatTienKhachDua();
+    await hoanTatTienMatDangCho(state);
+}
+
+async function thuTaoDonDangDo(state) {
+    if (!state || state.phase !== 'creating' || checkoutBusy) return;
+    checkoutOperationId = state.operation_id;
+    checkoutBusy = true;
+    capNhatNutCheckout();
+    try {
+        await guiYeuCauTaoDonDangDo(state);
+    } catch (e) {
+        if (!currentOrderId && laLoi4xx(e)) {
+            // POST create trả 4xx: server xác định không tạo đơn, nên có thể bỏ
+            // operation cũ và cho sửa giỏ. Network/5xx phải giữ exact payload.
+            checkoutOperationId = null;
+            xoaCheckoutDangDo();
+        } else if (!currentOrderId) {
+            luuCheckoutDangDo(state);
+        }
+        showToast(e.message);
+    } finally {
+        checkoutBusy = false;
+        capNhatNutCheckout();
+    }
+}
+
 async function checkout() {
     if (checkoutBusy) return;
-    if(cart.length === 0) return showToast("Giỏ hàng trống!");
+    if (pendingCashOrderId) return thuTienMatDonDangCho();
+    if (checkoutOperationId) {
+        if (!activeShift) {
+            showToast('Hãy mở ca trước khi thử tạo lại đơn');
+            return moModalMoCa();
+        }
+        const state = pendingCheckoutState || docCheckoutDangDo();
+        return thuTaoDonDangDo(state);
+    }
+    if (currentOrderId) return showToast('Đang có một đơn chờ thanh toán');
+    if(cart.length === 0) return showToast('Giỏ hàng trống!');
     if(!activeShift) {
         showToast('Hãy mở ca trước khi bán hàng');
         return moModalMoCa();
     }
-    if (pendingCashOrderId) return thuTienMatDonDangCho();
-    if (currentOrderId) return showToast('Đang có một đơn chờ thanh toán');
     capNhatTienKhachDua();
     if (paymentMethod === 'cash' && cashTenderedAmount < total) {
         document.getElementById('cashTenderedInput')?.focus();
@@ -752,87 +1187,50 @@ async function checkout() {
     );
     if (!dongY) return;
 
-    checkoutBusy = true;
-    capNhatNutCheckout();
-    try {
-        const body = {
-            // Gửi kèm product_name để hóa đơn/log vẫn đọc được nếu cần đối chiếu,
-            // nhưng server định danh sản phẩm bằng product_id.
-            items: cart.map(i => ({product_id: i.product_id, product_name: i.product_name, price: i.price, quantity: i.quantity})),
-            voucher_code: currentVoucher,
-            payment_method: paymentMethod
-        };
-        if (!checkoutOperationId) checkoutOperationId = taoOperationId();
-        body.operation_id = checkoutOperationId;
-        if(selectedCustomerId !== null) body.customer_id = selectedCustomerId;
-        const res = await apiCall(`/orders/${currentShopId}`, 'POST', body);
-        checkoutOperationId = null;
-        currentOrderId = res.order_id;
-        
-        if(paymentMethod === 'transfer') {
-            document.getElementById('qrImage').src = res.qr_url;
-            document.getElementById('qrTotalTxt').innerText = res.total.toLocaleString() + ' ₫';
-            document.getElementById('qrSection').style.display = 'block';
-            showToast("Tạo đơn thành công! Khách vui lòng quét mã.");
-            // Nạp trước đúng các từ của số tiền này. Khi webhook về chỉ còn
-            // phát ngay, không chen khoảng chờ tải file giữa câu.
-            DocTien.chuanBiSoTien(res.total);
-            startPaymentPolling();
-        } else {
-            const idDon = currentOrderId;
-            pendingCashOrderId = idDon;
-            if (Number.isFinite(Number(res.total))) {
-                // Server mới là nguồn đúng về giá/voucher. Nếu tổng có thay đổi
-                // do dữ liệu vừa được cập nhật, dùng số server khi kiểm tiền.
-                total = Number(res.total);
-                document.getElementById('txtTotal').innerText = dinhDangTien(total);
-                renderCashQuickAmounts();
-                capNhatTienKhachDua();
-            }
-            if (cashTenderedAmount < total) {
-                throw new Error(`Tổng trên server là ${dinhDangTien(total)}; khách còn thiếu ${dinhDangTien(total - cashTenderedAmount)}`);
-            }
-            await apiCall(`/orders/${idDon}/pay`, 'POST', {
-                tendered_amount: cashTenderedAmount
-            });
-            pendingCashOrderId = null;
-            showToast(`Thu tiền mặt thành công, thối ${dinhDangTien(cashTenderedAmount - total)}`);
-            await hienHoaDon(idDon);
-        }
-    } catch (e) {
-        // 4xx xác nhận server đã từ chối và không tạo đơn; cho phép sửa giỏ.
-        // Lỗi mạng/5xx giữ operation_id để lần bấm sau nhận lại đúng đơn nếu
-        // server đã commit nhưng response bị mất.
-        if (!currentOrderId && e.status >= 400 && e.status < 500) {
-            checkoutOperationId = null;
-        }
-        showToast(e.message);
-    } finally {
-        checkoutBusy = false;
-        capNhatNutCheckout();
-    }
+    const body = {
+        // Gửi kèm product_name để hóa đơn/log vẫn đọc được nếu cần đối chiếu,
+        // nhưng server định danh sản phẩm bằng product_id.
+        items: cart.map(i => ({product_id: i.product_id, product_name: i.product_name, price: i.price, quantity: i.quantity})),
+        voucher_code: currentVoucher,
+        payment_method: paymentMethod,
+        operation_id: taoOperationId()
+    };
+    if(selectedCustomerId !== null) body.customer_id = selectedCustomerId;
+    checkoutOperationId = body.operation_id;
+    const state = taoTrangThaiCheckout(body);
+    await thuTaoDonDangDo(state);
 }
 
 async function thuTienMatDonDangCho() {
     if (!pendingCashOrderId || checkoutBusy) return;
     if (!activeShift) return showToast('Ca đã đóng hoặc không còn tồn tại');
-    capNhatTienKhachDua();
-    if (cashTenderedAmount < total) {
-        document.getElementById('cashTenderedInput')?.focus();
-        return showToast(`Khách còn thiếu ${dinhDangTien(total - cashTenderedAmount)}`);
+    const state = pendingCheckoutState || docCheckoutDangDo();
+    if (!state || state.phase !== 'cash_pending') {
+        return showToast('Không tìm thấy trạng thái đơn tiền mặt để thử lại');
     }
     checkoutBusy = true;
     capNhatNutCheckout();
-    const idDon = pendingCashOrderId;
     try {
-        await apiCall(`/orders/${idDon}/pay`, 'POST', {
-            tendered_amount: cashTenderedAmount
-        });
-        pendingCashOrderId = null;
-        showToast(`Thu tiền mặt thành công, thối ${dinhDangTien(cashTenderedAmount - total)}`);
-        await hienHoaDon(idDon);
+        await hoanTatTienMatDangCho(state);
     } catch (e) {
-        showToast(`${e.message}. Có thể bấm “Thử thu tiền lại”.`);
+        if (Number(e.status) === 404) {
+            // 404 xác định đơn không còn tồn tại; bỏ state nhưng giữ giỏ để có
+            // thể tạo lại sau khi người dùng kiểm tra.
+            xoaCheckoutDangDo();
+            currentOrderId = null;
+            pendingCashOrderId = null;
+            checkoutOperationId = null;
+            showToast(`${e.message}. Đơn không còn tồn tại, vui lòng tạo lại.`);
+        } else {
+            // Các 4xx khác vẫn có thể là đơn PENDING hợp lệ (ca đóng, chưa đủ
+            // tiền...). Giữ order_id để người dùng thu hoặc hủy đúng đơn đó.
+            luuCheckoutDangDo(state);
+            showToast(
+                laLoi4xx(e)
+                    ? e.message
+                    : `${e.message}. Có thể bấm “Thử thu tiền lại”.`
+            );
+        }
     } finally {
         checkoutBusy = false;
         capNhatNutCheckout();
@@ -841,13 +1239,14 @@ async function thuTienMatDonDangCho() {
 
 async function cancelOrder() {
     if(!currentOrderId) return;
+    const idDon = currentOrderId;
     const dongY = await xacNhan(
-        `Hủy đơn #${currentOrderId}?`,
+        `Hủy đơn #${idDon}?`,
         'Hàng trong đơn sẽ được trả lại kho.'
     );
     if (!dongY) return;
     try {
-        const res = await apiCall(`/orders/${currentOrderId}/cancel`, 'POST');
+        const res = await apiCall(`/orders/${idDon}/cancel`, 'POST');
         stopPaymentPolling();
         if(res.unrestored_items > 0) {
             showToast(`Đã hủy đơn. Có ${res.unrestored_items} dòng không hoàn kho được, vui lòng kiểm tra lại tồn kho.`);
@@ -855,7 +1254,21 @@ async function cancelOrder() {
             showToast("Đã hủy đơn và hoàn lại hàng vào kho.");
         }
         resetPOS();
-    } catch (e) { showToast(e.message); }
+    } catch (e) {
+        if (Number(e.status) === 404 && idDon === currentOrderId) {
+            // Kết quả xác định: order không còn tồn tại. Bỏ khóa durable nhưng
+            // giữ giỏ hiện tại để thu ngân có thể kiểm tra và tạo lại.
+            stopPaymentPolling();
+            xoaCheckoutDangDo();
+            currentOrderId = null;
+            pendingCashOrderId = null;
+            checkoutOperationId = null;
+            document.getElementById('qrSection').style.display = 'none';
+            capNhatNutCheckout();
+            return showToast(`${e.message}. Đơn không còn tồn tại.`);
+        }
+        showToast(e.message);
+    }
 }
 
 function startPaymentPolling() {
@@ -1093,6 +1506,7 @@ function dongHoaDon() {
 function resetPOS() {
     stopPaymentPolling();
     dongHoaDon();
+    xoaCheckoutDangDo();
     cart = [];
     currentVoucher = null;
     document.getElementById('voucherInput').value = '';
@@ -1121,9 +1535,7 @@ function resetPOS() {
 
 // ===== C2d: gắn khách hàng vào đơn ở POS =====
 function boChonKhach() {
-    if (checkoutOperationId && !currentOrderId) {
-        return showToast('Hãy thử tạo đơn lại trước khi đổi khách hàng');
-    }
+    if (dangKhoaChinhSuaDon()) return;
     selectedCustomerId = null;
     const el = id => document.getElementById(id);
     if (el('khachDaChon')) el('khachDaChon').innerText = 'Khách vãng lai';
@@ -1135,9 +1547,7 @@ function boChonKhach() {
 }
 
 function chonKhach(id, ten, sdt) {
-    if (checkoutOperationId && !currentOrderId) {
-        return showToast('Hãy thử tạo đơn lại trước khi đổi khách hàng');
-    }
+    if (dangKhoaChinhSuaDon()) return;
     selectedCustomerId = id;
     document.getElementById('khachDaChon').innerText = `${ten} (${sdt})`;
     document.getElementById('khachChuaChon').style.display = 'none';
@@ -1145,6 +1555,7 @@ function chonKhach(id, ten, sdt) {
 }
 
 async function timKhachPOS() {
+    if (dangKhoaChinhSuaDon()) return;
     const q = document.getElementById('posCustSearch').value.trim();
     if (!q) return;
     try {
@@ -1161,6 +1572,7 @@ async function timKhachPOS() {
 }
 
 function hienFormKhachMoi() {
+    if (dangKhoaChinhSuaDon()) return;
     const f = document.getElementById('posCustNewForm');
     f.style.display = f.style.display === 'none' ? 'block' : 'none';
     if (f.style.display === 'block') {
@@ -1171,9 +1583,7 @@ function hienFormKhachMoi() {
 }
 
 async function taoKhachPOS() {
-    if (checkoutOperationId && !currentOrderId) {
-        return showToast('Hãy thử tạo đơn lại trước khi đổi khách hàng');
-    }
+    if (dangKhoaChinhSuaDon()) return;
     const name = document.getElementById('posCustNewName').value.trim();
     const phone = document.getElementById('posCustNewPhone').value.trim();
     if (!name) return showToast('Vui lòng nhập tên khách');
@@ -1193,7 +1603,7 @@ async function taoKhachPOS() {
 [
     ['cashTenderedInput', capNhatTienKhachDua],
     ['openingCashInput', null],
-    ['movementAmountInput', null],
+    ['movementAmountInput', capNhatMovementDraft],
     ['actualCashInput', capNhatChenhLechKetCa]
 ].forEach(([id, callback]) => {
     const input = document.getElementById(id);
@@ -1203,6 +1613,8 @@ async function taoKhachPOS() {
         if (callback) callback();
     });
 });
+
+document.getElementById('movementNote')?.addEventListener('input', capNhatMovementDraft);
 
 document.querySelectorAll('.pos-modal').forEach(modal => {
     modal.addEventListener('click', event => {

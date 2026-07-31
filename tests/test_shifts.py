@@ -1,10 +1,13 @@
 """E1: ca thu ngân durable và sổ thu/chi tiền mặt."""
 import uuid
+from pathlib import Path
 
 from conftest import STAFF_PASSWORD, auth, login, new_staff, seller_with_shop
 
 from fselling import models
 from fselling.core.database import SessionLocal
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _open(client, ctx, token=None, amount=500_000):
@@ -245,6 +248,38 @@ def test_dong_ca_luu_snapshot_chenh_lech_va_khoa_ledger(client):
     assert history["items"][0]["id"] == shift["id"]
 
 
+def test_dong_ca_lech_tien_bat_buoc_ghi_chu_giai_trinh(client):
+    ctx = seller_with_shop(client)
+    shift = _open(client, ctx, amount=100_000)
+
+    blocked = client.post(
+        f"/api/shifts/{shift['id']}/close",
+        json={"counted_cash_amount": 90_000},
+        headers=auth(ctx["token"]),
+    )
+    assert blocked.status_code == 400
+    assert "ghi chú" in blocked.json()["detail"]
+
+    # Request bị từ chối không được làm ca đóng dở hoặc ghi snapshot lệch.
+    current = client.get(
+        f"/api/shifts/current/{ctx['shop_id']}",
+        headers=auth(ctx["token"]),
+    ).json()["shift"]
+    assert current["id"] == shift["id"]
+    assert current["status"] == "OPEN"
+    assert current["counted_cash_amount"] is None
+
+    # Khớp tiền thì không bắt người dùng nhập một ghi chú vô nghĩa.
+    closed = client.post(
+        f"/api/shifts/{shift['id']}/close",
+        json={"counted_cash_amount": 100_000},
+        headers=auth(ctx["token"]),
+    )
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["variance_amount"] == 0
+    assert closed.json()["closing_note"] is None
+
+
 def test_khong_dong_ca_khi_con_don_tien_mat_pending(client):
     ctx = seller_with_shop(client)
     shift = _open(client, ctx, amount=0)
@@ -391,3 +426,13 @@ def test_xoa_shop_don_ca_ledger_va_vo_hieu_staff(client):
         assert staff.staff_shop_id is None
     finally:
         session.close()
+
+
+def test_lich_su_ca_theo_shop_dang_xem_tren_dashboard():
+    seller_js = (ROOT / "static" / "js" / "seller.js").read_text(encoding="utf-8")
+    seller_html = (ROOT / "static" / "seller.html").read_text(encoding="utf-8")
+
+    assert "if (shopId !== dashboardShopId) return;" in seller_js
+    assert 'onclick="loadShiftHistory(dashboardShopId)"' in seller_html
+    assert "if (shopId !== currentShopId) return;" not in seller_js
+    assert 'onclick="loadShiftHistory(currentShopId)"' not in seller_html

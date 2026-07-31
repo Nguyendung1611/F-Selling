@@ -49,6 +49,9 @@ def test_seller_co_hang_cho_doi_soat_va_refund_idempotent():
     assert "reconciliation_only: 'true'" in js
     assert "`/orders/${id}/cash-topup`" in js
     assert "`/orders/${orderId}/refund-complete`" in js
+    assert "async function coCaTienMatDangMo()" in js
+    assert "if (!await coCaTienMatDangMo()) return;" in js
+    assert "`/shifts/current/${shopId}`" in js
     assert "operation_id: refundOperationId" in js
     assert "setInterval(lamMoiBadgeDoiSoatNen, 30000)" in js
     assert "Chuyển khoản + tiền mặt" in js
