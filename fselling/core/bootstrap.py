@@ -171,6 +171,13 @@ _MIGRATIONS = [
     "ON order_return_items(order_item_id)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_order_returns_idempotency_key "
     "ON order_returns(idempotency_key)",
+    # F3: chống dò mật khẩu và dò mã OTP. Bộ đếm để trong DB chứ không trong bộ
+    # nhớ tiến trình - restart là kẻ tấn công được xóa bộ đếm, mà restart thì họ
+    # ép được.
+    "ALTER TABLE users ADD COLUMN failed_login_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN locked_until DATETIME",
+    "ALTER TABLE users ADD COLUMN verification_attempts INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN verification_code_sent_at DATETIME",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
@@ -410,6 +417,11 @@ def seed_admin(db: Session) -> None:
             admin.hashed_password = hashed_pw
             admin.role = "ADMIN"
             admin.is_verified = True
+            # Đường cứu cuối khi admin bị khóa vì dò mật khẩu: đặt lại
+            # ADMIN_INITIAL_PASSWORD rồi khởi động lại là vào được ngay, không
+            # phải ngồi chờ hết giờ khóa. Chỉ chủ máy chủ mới làm được việc này.
+            admin.failed_login_count = 0
+            admin.locked_until = None
             print("[SEED] Synchronized admin password from ADMIN_INITIAL_PASSWORD.")
         db.commit()
     elif not admin:

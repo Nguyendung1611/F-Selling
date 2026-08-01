@@ -67,6 +67,13 @@ Từ đó app không tự đổi nữa, bạn quản lý mật khẩu bằng ch�
 | `PAYMENT_WEBHOOK_SECRET` | Secret cho webhook thanh toán (thiếu thì webhook trả 503). |
 | `ALLOWED_ORIGINS` | Domain được phép gọi API (CORS). |
 | `SMTP_HOST/PORT/USER/PASSWORD` | Cấu hình gửi email OTP (tùy chọn). |
+| `LOGIN_MAX_ATTEMPTS` | Sai mật khẩu bao nhiêu lần thì khóa tạm (mặc định 5). |
+| `LOGIN_LOCKOUT_MINUTES` | Khóa tạm bao nhiêu phút (mặc định 15). |
+| `OTP_MAX_ATTEMPTS` | Nhập sai mã bao nhiêu lần thì hủy mã (mặc định 5). |
+| `OTP_RESEND_COOLDOWN_SECONDS` | Cách nhau bao lâu mới được xin mã mới (mặc định 60). |
+
+> **Lỡ tự khóa tài khoản admin?** Đặt lại `ADMIN_INITIAL_PASSWORD` trong `.env`
+> rồi khởi động lại server — khóa được gỡ ngay, không phải ngồi chờ hết giờ.
 
 ## 7. Deploy lên server (tùy chọn)
 

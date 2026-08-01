@@ -9,6 +9,25 @@ EN_MESSAGES = {
     "Phiên đăng nhập không hợp lệ": "Invalid session",
     "Không tìm thấy người dùng": "User not found",
     "Tài khoản đã ngừng hoạt động": "This account has been deactivated",
+    # F3: chống dò mật khẩu và dò mã OTP
+    "Tên đăng nhập hoặc mật khẩu không chính xác": (
+        "Incorrect username or password"
+    ),
+    "Sai mật khẩu quá nhiều lần. Tài khoản tạm khóa {minutes} phút.": (
+        "Too many failed sign-in attempts. This account is locked for "
+        "{minutes} minutes."
+    ),
+    "Tài khoản đang tạm khóa. Vui lòng thử lại sau {minutes} phút.": (
+        "This account is temporarily locked. Try again in {minutes} minutes."
+    ),
+    "Đã nhập sai mã quá nhiều lần. Mã này bị hủy, "
+    "vui lòng bấm gửi lại để nhận mã mới.": (
+        "Too many incorrect codes. This code has been cancelled — request a "
+        "new one."
+    ),
+    "Vui lòng đợi {seconds} giây nữa rồi hãy xin mã mới": (
+        "Please wait {seconds} more seconds before requesting a new code"
+    ),
     "Tài khoản đã được đăng nhập ở thiết bị khác. Vui lòng đăng nhập lại.": (
         "This account was signed in on another device. Please sign in again."
     ),

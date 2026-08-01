@@ -84,6 +84,12 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
 
 **Bảo mật**
 
+- **Sai mật khẩu bị khóa tạm tài khoản, nhưng sai mã OTP thì HỦY MÃ chứ không
+  khóa.** Khóa tài khoản theo email là mở đường cho kẻ xấu vô hiệu hóa tài khoản
+  người khác chỉ bằng cách gõ bừa. Bộ đếm để trong DB, không để trong RAM
+  (restart là kẻ tấn công xóa được bộ đếm). Kiểm khóa **trước** khi kiểm mật
+  khẩu, và username không tồn tại vẫn phải tốn đúng chừng ấy thời gian
+  (`burn_password_time`).
 - Secret chỉ lấy từ biến môi trường. **Không bao giờ** đặt API key trong
   JavaScript — ai mở devtools cũng lấy được.
 - Không commit `.env`, `*.db`, `request_log.txt`.

@@ -421,6 +421,52 @@ những người đã từng mở trang. Bản giá vốn (F1) đã bị đúng 
 ca thêm file mới mà quên `?v=`; việc BUMP khi sửa file thì không máy nào kiểm hộ
 được, phải tự nhớ.
 
+### 17. Chống dò mật khẩu và dò mã OTP: hai hình phạt khác nhau, có lý do
+
+Trước bản F3, cả ba đường dưới đây đều cho đoán **không giới hạn**:
+`login`, `verify-email`, `forgot-password-reset`. Đường thứ ba nặng nhất — mã
+chỉ 6 chữ số (một triệu khả năng) mà phần thưởng là **đặt được mật khẩu mới cho
+tài khoản người khác**.
+
+Hai đường bị phạt theo hai kiểu khác nhau, và **không được đổi chỗ cho nhau**:
+
+| Đường | Sai quá ngưỡng | Vì sao |
+|---|---|---|
+| Sai mật khẩu | **Khóa tài khoản** `LOGIN_LOCKOUT_MINUTES` phút | Kẻ tấn công phải biết username; khóa tạm là giá phải trả hợp lý |
+| Sai mã OTP | **Hủy mã**, KHÔNG khóa tài khoản | Chỉ cần biết email là gõ bừa được. Khóa tài khoản ở đây = ai biết email của bạn cũng vô hiệu hóa được tài khoản bạn |
+
+Hủy mã thì kẻ tấn công chỉ tự làm mất công của chính họ; chủ tài khoản bấm "gửi
+lại mã" là dùng tiếp.
+
+**Bốn điều bắt buộc giữ:**
+
+**Bộ đếm nằm trong DB, không nằm trong bộ nhớ tiến trình.** Để trong RAM thì
+restart là kẻ tấn công được xóa bộ đếm — mà restart họ ép được (chỉ cần làm app
+lỗi). DB cũng là nơi duy nhất còn đúng khi chạy nhiều worker hoặc nhiều máy.
+
+**Kiểm khóa TRƯỚC khi kiểm mật khẩu.** Kiểm mật khẩu rồi mới chặn thì mỗi
+request bị khóa vẫn tốn một lần bcrypt, và cửa khóa thành ra đường làm nghẽn
+server.
+
+**Username không tồn tại vẫn phải tốn đúng chừng ấy thời gian**
+(`security.burn_password_time()`). Trả lời tức thì là nói cho kẻ dò biết
+username nào KHÔNG có, và loại trừ dần cũng chính là dò ra username nào CÓ.
+Thông báo lỗi của hai ca cũng phải giống hệt nhau.
+
+**Cấp mã mới thì phải reset bộ đếm sai** (`_cap_ma_moi`). Mã mới là bí mật mới;
+số lần đoán hụt mã cũ không nói gì về nó. Quên reset thì người dùng thật xin mã
+mới xong vẫn bị chặn ngay lần nhập đầu.
+
+Đường cứu khi admin tự khóa mình: đặt lại `ADMIN_INITIAL_PASSWORD` rồi khởi động
+lại — `seed_admin()` gỡ khóa. Chỉ người có quyền trên máy chủ mới làm được.
+
+Cooldown xin mã (`OTP_RESEND_COOLDOWN_SECONDS`) **dùng chung cho cả
+`resend-code` lẫn `forgot-password-request`**: hai endpoint gửi mail tới cùng
+một hộp thư, tách riêng thì luân phiên hai đường là gửi được gấp đôi.
+
+Bốn giá trị đều chỉnh được qua biến môi trường: `LOGIN_MAX_ATTEMPTS`,
+`LOGIN_LOCKOUT_MINUTES`, `OTP_MAX_ATTEMPTS`, `OTP_RESEND_COOLDOWN_SECONDS`.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

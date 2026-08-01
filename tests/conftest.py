@@ -127,6 +127,10 @@ def register_seller(client, username: str = None, password: str = SELLER_PASSWOR
         user = session.query(models.User).filter(models.User.username == username).first()
         user.is_verified = True
         user.verification_code = None
+        # Helper này giả lập một tài khoản ĐÃ LẬP TỪ TRƯỚC, không phải người vừa
+        # bấm đăng ký xong. Giữ lại mốc phát mã của lúc register thì mọi test
+        # xin mã ngay sau đó đều dính cooldown chống dội bom email (F3).
+        user.verification_code_sent_at = None
         session.commit()
     finally:
         session.close()

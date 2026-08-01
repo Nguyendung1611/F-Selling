@@ -42,6 +42,23 @@ def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
 
 
+# Băm sẵn một lần lúc nạp module để `burn_password_time()` không phải trả giá
+# gensalt ở mỗi request. Giá trị cụ thể không quan trọng - không ai đăng nhập
+# bằng nó, vì nó không gắn với tài khoản nào cả.
+_DUMMY_HASH = hash_password("khong-phai-mat-khau-cua-ai-ca")
+
+
+def burn_password_time() -> None:
+    """Tiêu đúng lượng thời gian của một lần kiểm mật khẩu, rồi bỏ kết quả.
+
+    Gọi khi tên đăng nhập KHÔNG tồn tại. Không có nó thì tài khoản không tồn tại
+    trả lời gần như tức thì, còn tài khoản có thật phải chờ bcrypt - chênh lệch
+    đó đủ để dò xem username nào có trong hệ thống mà không cần đoán đúng mật
+    khẩu lần nào.
+    """
+    bcrypt.checkpw(b"khong-phai-mat-khau-cua-ai-ca", _DUMMY_HASH.encode("utf-8"))
+
+
 def new_session_id() -> str:
     """Sinh session_id mới -> mọi token cũ của user lập tức mất hiệu lực."""
     return uuid.uuid4().hex

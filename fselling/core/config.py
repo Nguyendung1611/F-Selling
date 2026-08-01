@@ -96,6 +96,22 @@ def _int_env(name: str, default: int) -> int:
 # đặt ORDER_PENDING_TIMEOUT_MINUTES=30 trong .env để bật.
 ORDER_PENDING_TIMEOUT_MINUTES: int = _int_env("ORDER_PENDING_TIMEOUT_MINUTES", 0)
 
+# --- Chống dò mật khẩu và dò mã OTP ---
+# Bộ đếm nằm trong DB chứ không phải trong bộ nhớ tiến trình: khởi động lại
+# server là kẻ tấn công được reset bộ đếm, mà restart thì họ ép được (chỉ cần
+# làm app lỗi). DB cũng là nơi duy nhất còn đúng khi chạy nhiều worker/máy.
+LOGIN_MAX_ATTEMPTS: int = _int_env("LOGIN_MAX_ATTEMPTS", 5)
+LOGIN_LOCKOUT_MINUTES: int = _int_env("LOGIN_LOCKOUT_MINUTES", 15)
+
+# Mã OTP chỉ có 6 chữ số = 1 triệu khả năng, script quét vài phút là ra. Chạm
+# ngưỡng thì HỦY MÃ chứ không khóa tài khoản: khóa tài khoản theo email là mở
+# đường cho kẻ xấu khóa tài khoản người khác chỉ bằng cách đoán bừa.
+OTP_MAX_ATTEMPTS: int = _int_env("OTP_MAX_ATTEMPTS", 5)
+
+# Khoảng cách tối thiểu giữa hai lần xin mã, chống dội bom email vào hộp thư
+# nạn nhân và chống kéo dài vô hạn cửa sổ để dò mã.
+OTP_RESEND_COOLDOWN_SECONDS: int = _int_env("OTP_RESEND_COOLDOWN_SECONDS", 60)
+
 # --- Upload ---
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp"}
 ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
