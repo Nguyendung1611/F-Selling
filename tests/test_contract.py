@@ -92,6 +92,8 @@ ROUTES_BO_SUNG = {
     # F4: khách trả bớt nợ. Khác cash-topup (đơn chuyển thiếu, phải trả trọn
     # phần còn thiếu) vì trả nợ dần nhiều lần là chuyện bình thường.
     ("POST", "/api/orders/{order_id}/debt-payment"),
+    # F5: lô hàng sắp/đã hết hạn của shop.
+    ("GET", "/api/products/{shop_id}/batches"),
 }
 
 
@@ -198,6 +200,9 @@ def test_danh_sach_san_pham_giu_nguyen_cac_truong(client):
         "category_id",
         "shop_id",
         "category_is_active",
+        # F5: cờ theo dõi lô + hạn sử dụng. POS cần biết để cảnh báo khi tồn
+        # khả dụng thấp hơn tổng tồn vì có hàng quá hạn.
+        "track_batches",
     }
 
 

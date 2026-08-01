@@ -1,4 +1,15 @@
-from sqlalchemy import Boolean, Column, Float, ForeignKey, Integer, String
+import datetime
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+)
 from sqlalchemy.orm import relationship
 
 from ..core.database import Base
@@ -35,8 +46,50 @@ class Product(Base):
     category_id = Column(Integer, ForeignKey("categories.id"))
     shop_id = Column(Integer, ForeignKey("shops.id"))
 
+    # F5: bật theo dõi lô + hạn sử dụng cho riêng sản phẩm này.
+    # CỐ Ý là tùy chọn từng sản phẩm chứ không bật cho cả shop: ly nhựa và túi
+    # nilon không có hạn sử dụng, ép khai lô cho chúng là làm khổ người nhập
+    # hàng vô cớ. Sản phẩm tắt cờ này chạy y hệt như trước khi có F5.
+    track_batches = Column(Boolean, nullable=False, default=False)
+
     category = relationship("Category", back_populates="products")
     shop = relationship("Shop", back_populates="products")
+    batches = relationship("ProductBatch", back_populates="product")
+
+
+class ProductBatch(Base):
+    """Một lô hàng đã nhập: cùng sản phẩm, cùng hạn sử dụng, cùng giá nhập.
+
+    Đây là NGUỒN SỰ THẬT về tồn kho của sản phẩm có `track_batches`.
+    `Product.stock` trở thành bản sao được cập nhật trong CÙNG transaction với
+    lô - không phải hai người ghi độc lập, mà một hàm duy nhất ghi cả hai
+    (`inventory_service.ghi_ton_kho`). `doi_chieu_ton_kho()` kiểm lại để lệch
+    thì lộ ra chứ không âm thầm.
+
+    `expiry_date` lưu dạng chuỗi 'YYYY-MM-DD' như `Voucher.expires_at` - so
+    sánh chuỗi theo định dạng đó là so sánh đúng thứ tự ngày, và tránh hẳn bài
+    toán múi giờ mà `KIEN_TRUC.md` đã nêu ở phần hiển thị ngày giờ.
+    """
+
+    __tablename__ = "product_batches"
+    __table_args__ = (
+        # Bán hàng luôn hỏi "lô nào của sản phẩm này hết hạn sớm nhất mà còn
+        # hàng" - index theo đúng thứ tự đó.
+        Index("ix_product_batches_product_expiry", "product_id", "expiry_date"),
+    )
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    shop_id = Column(Integer, ForeignKey("shops.id"), nullable=False)
+    # NULL = lô không có hạn sử dụng (hàng nhập trước khi bật cờ theo dõi).
+    # Lô không hạn được xếp SAU CÙNG khi trừ FEFO.
+    expiry_date = Column(String(10), nullable=True)
+    quantity = Column(Integer, nullable=False, default=0)
+    # Giá nhập của riêng lô này. Bán lô nào thì lãi tính theo giá lô đó.
+    cost_price = Column(Float, nullable=True)
+    note = Column(String(200), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    product = relationship("Product", back_populates="batches")
 
 
 class Voucher(Base):

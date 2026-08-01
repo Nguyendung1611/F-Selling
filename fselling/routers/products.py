@@ -55,6 +55,7 @@ def create_product(
     category_id: int = Form(...),
     image: UploadFile = File(None),
     cost_price: Optional[float] = Form(None),
+    track_batches: bool = Form(False),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -70,6 +71,7 @@ def create_product(
         barcode=barcode,
         image=image,
         cost_price=cost_price,
+        track_batches=track_batches,
     )
 
 
@@ -88,6 +90,16 @@ def get_product_costs(
     current_user: models.User = Depends(get_current_user),
 ):
     return catalog_service.list_product_costs(db, current_user, shop_id)
+
+
+@router.get("/{shop_id}/batches")
+def get_product_batches(
+    shop_id: int,
+    days: int = 30,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return catalog_service.danh_sach_lo(db, current_user, shop_id, days)
 
 
 @router.get("/{shop_id}/barcode/{barcode}")
@@ -138,7 +150,8 @@ def adjust_stock(
     current_user: models.User = Depends(get_current_user),
 ):
     return catalog_service.adjust_stock(
-        db, current_user, product_id, payload.delta, payload.unit_cost
+        db, current_user, product_id, payload.delta, payload.unit_cost,
+        payload.expiry_date,
     )
 
 

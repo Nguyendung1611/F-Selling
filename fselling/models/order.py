@@ -159,6 +159,28 @@ class OrderReturnItem(Base):
     parent_return = relationship("OrderReturn", back_populates="items")
 
 
+class OrderItemBatch(Base):
+    """Dòng đơn này đã lấy bao nhiêu từ lô nào.
+
+    Không có bảng này thì lúc khách trả hàng hoặc hủy đơn, hệ thống không biết
+    nhập lại vào lô nào — đoán bừa là làm hỏng cả hạn sử dụng lẫn giá vốn. Một
+    dòng đơn có thể ăn qua NHIỀU lô nên đây là quan hệ nhiều-nhiều thật sự.
+    """
+
+    __tablename__ = "order_item_batches"
+    __table_args__ = (
+        Index("ix_order_item_batches_order_item_id", "order_item_id"),
+        Index("ix_order_item_batches_batch_id", "batch_id"),
+    )
+    id = Column(Integer, primary_key=True)
+    order_item_id = Column(Integer, ForeignKey("order_items.id"), nullable=False)
+    batch_id = Column(Integer, ForeignKey("product_batches.id"), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    # Ảnh chụp giá vốn của lô tại thời điểm xuất, cùng lý do với mọi ảnh chụp
+    # khác trong dự án.
+    cost_price = Column(Float, nullable=True)
+
+
 class OrderPayment(Base):
     """Sổ bất biến của mọi khoản tiền vào và lần ghi nhận hoàn tiền.
 

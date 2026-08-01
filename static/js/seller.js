@@ -1200,22 +1200,99 @@ async function saveShop() {
 // --- DASHBOARD / DATA LOGIC ---
 
 function switchWarehouseSubTab(subTab) {
-    const prodsBtn = document.getElementById('whSubTabProds');
-    const catsBtn = document.getElementById('whSubTabCats');
-    const prodsSec = document.getElementById('warehouseProductsSection');
-    const catsSec = document.getElementById('warehouseCategoriesSection');
-    
-    if (subTab === 'products') {
-        if (prodsBtn) prodsBtn.classList.add('active');
-        if (catsBtn) catsBtn.classList.remove('active');
-        if (prodsSec) prodsSec.style.display = 'grid';
-        if (catsSec) catsSec.style.display = 'none';
-    } else {
-        if (prodsBtn) prodsBtn.classList.remove('active');
-        if (catsBtn) catsBtn.classList.add('active');
-        if (prodsSec) prodsSec.style.display = 'none';
-        if (catsSec) catsSec.style.display = 'grid';
+    const nut = {
+        products: 'whSubTabProds',
+        categories: 'whSubTabCats',
+        expiry: 'whSubTabExpiry'
+    };
+    const khoi = {
+        products: ['warehouseProductsSection', 'grid'],
+        categories: ['warehouseCategoriesSection', 'grid'],
+        expiry: ['warehouseExpirySection', 'block']
+    };
+    if (!khoi[subTab]) subTab = 'products';
+
+    Object.entries(nut).forEach(([ten, id]) => {
+        document.getElementById(id)?.classList.toggle('active', ten === subTab);
+    });
+    Object.entries(khoi).forEach(([ten, [id, kieu]]) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = ten === subTab ? kieu : 'none';
+    });
+
+    if (subTab === 'expiry') loadHanSuDung();
+}
+
+// ===== F5: hàng sắp hết hạn và đã hết hạn =====
+
+let hanSuDungRequestId = 0;
+
+async function loadHanSuDung() {
+    const shopId = currentShopId;
+    if (!shopId) return;
+    const soNgay = Number(document.getElementById('expiryDays')?.value) || 30;
+    const requestId = ++hanSuDungRequestId;
+    const generation = currentShopGeneration;
+    try {
+        const d = await apiCall(`/products/${shopId}/batches?days=${soNgay}`);
+        // Đổi shop giữa chừng thì kết quả cũ không được ghi đè lên màn mới.
+        if (requestId !== hanSuDungRequestId
+            || generation !== currentShopGeneration
+            || currentShopId !== shopId) return;
+        veHanSuDung(d);
+    } catch (e) {
+        if (requestId === hanSuDungRequestId && currentShopId === shopId) {
+            showToast(e.message);
+        }
     }
+}
+
+function veHanSuDung(d) {
+    const soHetHan = Number(d.expired_quantity || 0);
+    const soSapHet = Number(d.expiring_soon_quantity || 0);
+    document.getElementById('expiredQty').innerText = dinhDangSoSeller(soHetHan);
+    document.getElementById('soonQty').innerText = dinhDangSoSeller(soSapHet);
+
+    // Giá trị tồn chỉ có mặt khi người gọi được xem giá vốn; không có thì để
+    // trống chứ không hiện 0 - 0 ở đây đọc ra là "hàng không đáng tiền nào".
+    const veTien = (id, gia_tri) => {
+        const el = document.getElementById(id);
+        el.innerText = (gia_tri === undefined || gia_tri === null)
+            ? ''
+            : t('seller.expiry.value', { amount: dinhDangTienDoiSoat(gia_tri) });
+    };
+    veTien('expiredValue', d.expired_value);
+    veTien('soonValue', d.expiring_soon_value);
+
+    // Badge trên tab con: chỉ đếm hàng ĐÃ hỏng, đó mới là thứ phải xử lý ngay.
+    const badge = document.getElementById('expiryBadge');
+    if (badge) {
+        badge.innerText = soHetHan > 99 ? '99+' : String(soHetHan);
+        badge.style.display = soHetHan > 0 ? 'inline-block' : 'none';
+    }
+
+    const tbody = document.getElementById('expiryList');
+    tbody.innerHTML = '';
+    const dong = [
+        ...(d.expired || []).map(r => ({ ...r, hong: true })),
+        ...(d.expiring_soon || []).map(r => ({ ...r, hong: false }))
+    ];
+    if (!dong.length) {
+        tbody.innerHTML = `<tr><td colspan="4" style="color: var(--text-muted);">`
+            + `${escapeHtml(t('seller.expiry.empty'))}</td></tr>`;
+        return;
+    }
+    dong.forEach(r => {
+        const nhan = r.hong
+            ? `<span style="color:#B91C1C; font-weight:700;">${escapeHtml(t('seller.expiry.expired'))}</span>`
+            : `<span style="color:#B45309; font-weight:600;">${escapeHtml(t('seller.expiry.soon'))}</span>`;
+        tbody.innerHTML += `<tr>
+            <td>${escapeHtml(r.product_name || '')}</td>
+            <td style="white-space:nowrap;">${escapeHtml(r.expiry_date || '')}</td>
+            <td>${escapeHtml(dinhDangSoSeller(r.quantity))}</td>
+            <td>${nhan}</td>
+        </tr>`;
+    });
 }
 
 function renderCategories(cats) {
@@ -1506,6 +1583,11 @@ function editProduct(id) {
     }
     document.getElementById('prodStock').value = product.stock;
     _khoaOTonKho(true);
+    const oLo = document.getElementById('prodTrackBatches');
+    if (oLo) {
+        oLo.checked = Boolean(product.track_batches);
+        oLo.disabled = true;   // xem mục 'chỉ gửi khi tạo mới' ở createProduct
+    }
     document.getElementById('catSelect').value = String(product.category_id);
     document.getElementById('productFormTitle').innerText = t('seller.products.edit_title');
     document.getElementById('btnSaveProduct').innerHTML = `<i class="ph ph-floppy-disk"></i> <span data-seller-action-label="product-save">${escapeHtml(t('seller.products.update'))}</span>`;
@@ -1520,6 +1602,8 @@ function cancelEditProduct() {
     document.getElementById('prodPrice').value = '';
     const oGiaVon = document.getElementById('prodCost');
     if (oGiaVon) oGiaVon.value = '';
+    const oLoMoi = document.getElementById('prodTrackBatches');
+    if (oLoMoi) { oLoMoi.checked = false; oLoMoi.disabled = false; }
     document.getElementById('prodStock').value = '100';
     _khoaOTonKho(false);
     document.getElementById('prodImage').value = '';
@@ -1545,6 +1629,18 @@ async function nhapXuatKho(id) {
     // Chỉ hỏi đơn giá khi NHẬP kho. Xuất kho không làm đổi đơn giá bình quân
     // của số hàng còn lại, và backend từ chối thẳng nếu gửi kèm.
     const body = { delta };
+
+    // Sản phẩm theo lô: nhập hàng bắt buộc khai hạn, nếu không server từ chối.
+    if (delta > 0 && product.track_batches) {
+        const hanRaw = prompt(t('seller.products.expiry_prompt', { name: product.name }));
+        if (hanRaw === null) return;
+        const han = (hanRaw || '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(han)) {
+            return showToast(t('seller.products.expiry_invalid'));
+        }
+        body.expiry_date = han;
+    }
+
     if (XEM_DUOC_GIA_VON && delta > 0) {
         const giaVonHienTai = giaVonCua(id);
         const rawCost = prompt(t('seller.products.unit_cost_prompt', {
@@ -1929,6 +2025,11 @@ async function createProduct() {
         }
         // Gửi cả khi rỗng: rỗng nghĩa là XÓA giá vốn, dùng khi khai nhầm.
         formData.append('cost_price', costStr);
+    }
+    // Chỉ gửi khi TẠO mới: đổi cờ này trên sản phẩm đã có tồn kho sẽ làm tổng
+    // lô lệch với tồn (chưa có lô nào mà cờ đã bật), nên form sửa không đụng tới.
+    if (editingProductId === null && document.getElementById('prodTrackBatches')?.checked) {
+        formData.append('track_batches', 'true');
     }
     formData.append('stock', stockStr);
     formData.append('category_id', catSelect.value);

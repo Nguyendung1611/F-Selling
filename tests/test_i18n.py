@@ -191,3 +191,39 @@ def test_ghi_chu_he_thong_pos_duoc_dich_con_ghi_chu_khach_giu_nguyen():
     assert "function nhanGhiChuButToan(note)" in seller_js
     assert "seller.order_detail.system_pos_cash_topup" in seller_js
     assert "return value;" in seller_js
+
+
+def test_moi_file_locale_deu_hop_le_ve_cu_phap():
+    """Mỗi khóa dịch phải nằm trọn trên MỘT dòng, chuỗi phải đóng lại.
+
+    Chuỗi có xuống dòng thật (thay vì hai ký tự `\n`) làm vỡ cú pháp JS, và khi
+    một file locale vỡ thì **toàn bộ** catalog của trang đó không nạp được -
+    người dùng thấy nguyên tên khóa như 'seller.page_title' thay vì tiếng Việt.
+    Hỏng kiểu này không có lỗi nào ở backend và không test nào khác bắt được;
+    nó đã từng lọt lên nhánh chính một lần.
+    """
+    from pathlib import Path
+
+    locale_dir = Path(__file__).resolve().parent.parent / "static" / "js" / "locales"
+    loi = []
+    for path in sorted(locale_dir.glob("*.js")):
+        for so_dong, dong in enumerate(
+            path.read_text(encoding="utf-8").split("\n"), start=1
+        ):
+            thu = dong.strip()
+            # Dòng khai một khóa dịch: bắt đầu bằng nháy đơn và có dấu ':'
+            if not (thu.startswith("'") and "':" in thu):
+                continue
+            gia_tri = thu.split("':", 1)[1].strip()
+            if not gia_tri:
+                continue
+            mo = gia_tri[0]
+            if mo not in ("'", '"'):
+                continue      # giá trị nối chuỗi nhiều dòng bằng dấu ngoặc
+            # Chuỗi phải kết thúc bằng đúng dấu nháy đã mở (kèm dấu phẩy hoặc không)
+            duoi = gia_tri.rstrip()
+            if duoi.endswith(","):
+                duoi = duoi[:-1].rstrip()
+            if not duoi.endswith(mo) or len(duoi) < 2:
+                loi.append(f"{path.name}:{so_dong}: {thu[:60]}")
+    assert not loi, "Chuỗi dịch bị xuống dòng giữa chừng:\n" + "\n".join(loi)

@@ -471,6 +471,15 @@
                         <i class="ph ph-list"></i>
                         <span data-i18n="seller.warehouse.categories">Quản lý Danh Mục</span>
                     </button>
+
+                    <button
+                        class="tab-btn"
+                        id="whSubTabExpiry"
+                        onclick="switchWarehouseSubTab('expiry')">
+                        <i class="ph ph-calendar-x"></i>
+                        <span data-i18n="seller.warehouse.expiry">Hạn Sử Dụng</span>
+                        <span id="expiryBadge" style="display:none; margin-left:0.4rem; background:#B91C1C; color:white; border-radius:10px; padding:0 0.45rem; font-size:0.75rem; font-weight:700;">0</span>
+                    </button>
                 </div>
 
                 <!-- Products Sub-content -->
@@ -512,6 +521,13 @@
                             <div class="input-wrapper"><i class="ph ph-stack"></i><input type="number" id="prodStock" placeholder="Tồn kho" data-i18n-placeholder="seller.products.stock_placeholder" value="100"></div>
                         </div>
                         <div class="form-group">
+                            <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                                <input type="checkbox" id="prodTrackBatches" style="margin:0; width:auto;">
+                                <span data-i18n="seller.products.track_batches">Theo dõi hạn sử dụng theo lô</span>
+                            </label>
+                            <small style="color:#64748B; font-size:0.75rem;" data-i18n="seller.products.track_batches_hint">Bật cho thuốc, đồ ăn, nguyên liệu. Mỗi lần nhập hàng sẽ phải khai hạn, và bán ra tự trừ lô hạn gần nhất trước.</small>
+                        </div>
+                        <div class="form-group">
                             <label data-i18n="seller.products.image_required">Hình ảnh *</label>
                             <input class="product_img-input" type="file" id="prodImage" accept="image/*">
                         </div>
@@ -541,6 +557,49 @@
                 </div>
 
                 <!-- Categories Sub-content -->
+                <div id="warehouseExpirySection" style="display: none;">
+                    <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem;">
+                        <label style="margin:0;">
+                            <span data-i18n="seller.expiry.window">Cảnh báo trước</span>
+                            <select id="expiryDays" onchange="loadHanSuDung()" style="margin-left:0.5rem; margin-bottom:0;">
+                                <option value="7">7</option>
+                                <option value="30" selected>30</option>
+                                <option value="60">60</option>
+                                <option value="90">90</option>
+                            </select>
+                            <span data-i18n="seller.expiry.days">ngày</span>
+                        </label>
+                        <button class="btn-outline" onclick="loadHanSuDung()" style="padding:0.35rem 0.8rem;">
+                            <i class="ph ph-arrows-clockwise"></i> <span data-i18n="common.refresh">Tải lại</span>
+                        </button>
+                    </div>
+
+                    <div class="stats-grid" style="margin-bottom:1.5rem;">
+                        <div class="stat-card" style="border-color:#B91C1C;">
+                            <h4 data-i18n="seller.expiry.expired_title">ĐÃ HẾT HẠN</h4>
+                            <strong id="expiredQty" class="stat-value" style="color:#B91C1C;">0</strong>
+                            <small id="expiredValue" style="display:block; color:#64748B; font-size:0.75rem;"></small>
+                        </div>
+                        <div class="stat-card" style="border-color:#B45309;">
+                            <h4 data-i18n="seller.expiry.soon_title">SẮP HẾT HẠN</h4>
+                            <strong id="soonQty" class="stat-value" style="color:#B45309;">0</strong>
+                            <small id="soonValue" style="display:block; color:#64748B; font-size:0.75rem;"></small>
+                        </div>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table>
+                            <thead><tr>
+                                <th data-i18n="seller.expiry.product">Sản phẩm</th>
+                                <th data-i18n="seller.expiry.expiry_date">Hạn sử dụng</th>
+                                <th data-i18n="seller.expiry.quantity">Số lượng</th>
+                                <th data-i18n="seller.expiry.status">Tình trạng</th>
+                            </tr></thead>
+                            <tbody id="expiryList"></tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <div class="modal-body-split" id="warehouseCategoriesSection" style="display: none;">
                     <!-- Add/Edit Category Form (Left) -->
                     <div class="modal-col-form" style="border-right: 1px solid var(--border-color); padding-right: 2rem;">
@@ -1010,14 +1069,14 @@
     </div>
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
-    <script src="/js/locales/common.js?v=20260801-cong-no"></script>
-    <script src="/js/locales/seller.js?v=20260801-cong-no"></script>
+    <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
+    <script src="/js/locales/seller.js?v=20260802-han-su-dung"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260801-cong-no"></script>
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260801-cong-no"></script>
+    <script src="/js/seller.js?v=20260802-han-su-dung"></script>
 </body>
 </html>

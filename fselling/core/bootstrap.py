@@ -182,6 +182,16 @@ _MIGRATIONS = [
     "ALTER TABLE customers ADD COLUMN credit_limit FLOAT",
     "CREATE INDEX IF NOT EXISTS ix_orders_status_customer "
     "ON orders(status, customer_id)",
+    # F5: lô hàng + hạn sử dụng. Hai bảng product_batches/order_item_batches do
+    # create_all() tạo mới; cờ dưới đây mặc định TẮT nên mọi sản phẩm đang có
+    # giữ nguyên hành vi cũ.
+    "ALTER TABLE products ADD COLUMN track_batches BOOLEAN NOT NULL DEFAULT 0",
+    "CREATE INDEX IF NOT EXISTS ix_product_batches_product_expiry "
+    "ON product_batches(product_id, expiry_date)",
+    "CREATE INDEX IF NOT EXISTS ix_order_item_batches_order_item_id "
+    "ON order_item_batches(order_item_id)",
+    "CREATE INDEX IF NOT EXISTS ix_order_item_batches_batch_id "
+    "ON order_item_batches(batch_id)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt

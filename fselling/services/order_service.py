@@ -523,9 +523,19 @@ def create_order(
                 return existing_response
         raise
 
+    # Trừ kho TRƯỚC khi dựng dòng đơn: với sản phẩm theo lô, giá vốn của dòng
+    # phải lấy từ đúng các lô vừa xuất, nên phải biết đã lấy lô nào rồi mới ghi
+    # được dòng.
+    lo_da_lay = inventory_service.deduct_stock(db, resolved_items)
+
     for prod, qty in resolved_items:
-        db.add(
-            models.OrderItem(
+        da_lay = lo_da_lay.get(prod.id) or []
+        gia_von_dong = (
+            inventory_service.gia_von_binh_quan_da_lay(da_lay)
+            if da_lay
+            else prod.cost_price
+        )
+        dong = models.OrderItem(
                 order_id=new_order.id,
                 # Ghi kèm product_id để hoàn tồn kho chính xác khi hủy đơn (A1d).
                 # product_name vẫn được giữ: nó là ảnh chụp tên tại thời điểm bán,
@@ -537,13 +547,28 @@ def create_order(
                 # hàng giá khác sau này không được phép làm đổi lãi của đơn đã
                 # bán - mà tra ngược Product.cost_price lúc làm báo cáo thì đúng
                 # là như vậy, và không lấy lại được số cũ nữa.
-                # NULL ở đây = chưa khai giá vốn; báo cáo đếm riêng, không tính
-                # thành lãi bằng cả giá bán.
-                cost_price=prod.cost_price,
+                # Hàng theo lô lấy giá vốn của ĐÚNG các lô vừa xuất (bình quân
+                # phần đã lấy nếu dòng ăn qua nhiều lô); hàng không theo lô lấy
+                # giá vốn bình quân của sản phẩm như trước.
+                # NULL = chưa khai giá vốn; báo cáo đếm riêng, không tính thành
+                # lãi bằng cả giá bán.
+                cost_price=gia_von_dong,
                 quantity=qty,
-            )
         )
-    inventory_service.deduct_stock(resolved_items)
+        db.add(dong)
+        if da_lay:
+            # Vết lô đã xuất: không có nó thì lúc trả hàng không biết nhập lại
+            # vào lô nào, và đoán bừa là hỏng cả hạn sử dụng lẫn giá vốn.
+            db.flush()      # lấy id của dòng đơn
+            for lo, so_luong in da_lay:
+                db.add(
+                    models.OrderItemBatch(
+                        order_item_id=dong.id,
+                        batch_id=lo.id,
+                        quantity=so_luong,
+                        cost_price=lo.cost_price,
+                    )
+                )
 
     if applied_voucher is not None:
         applied_voucher.usage_count = (applied_voucher.usage_count or 0) + 1

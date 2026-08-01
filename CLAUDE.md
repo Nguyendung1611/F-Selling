@@ -34,6 +34,11 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   nguyên tồn, KHÔNG coi là 0. Và phải so `stock_snapshot` với tồn hiện tại để
   không nuốt mất số hàng vừa bán trong lúc đếm.
 - Tồn kho đổi qua `adjust_stock` (cộng trừ theo delta), không ghi đè.
+- **Hàng có `track_batches`: bảng lô là sự thật, `Product.stock` là bản sao.**
+  Bán và xuất trừ theo **FEFO** (hạn gần nhất trước), "còn hàng" chỉ tính phần
+  chưa hết hạn, giá vốn lấy từ đúng lô đã xuất, hoàn kho về đúng lô đã xuất
+  (`order_item_batches`). Kiểm kê hiện **từ chối** hàng theo lô. Sản phẩm tắt cờ
+  chạy y như cũ — đừng làm hỏng điều đó.
 - **Đơn ghi nợ ở trạng thái `DEBT`, KHÔNG phải `PENDING`.** Để ở `PENDING` thì
   `cancel_expired_pending_orders` xóa sạch sổ nợ và hoàn kho hàng đã giao, còn
   `close_shift` chặn thu ngân kết ca vĩnh viễn. Đơn nợ bắt buộc có khách; tiền

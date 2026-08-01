@@ -32,6 +32,9 @@ class StockAdjust(BaseModel):
     # thật và phải kéo bình quân xuống. JSON body giữ được sự khác biệt đó, khác
     # với form multipart nơi field rỗng rơi về default.
     unit_cost: Optional[float] = None
+    # F5: hạn sử dụng của lô đang nhập, dạng 'YYYY-MM-DD'. BẮT BUỘC khi nhập
+    # hàng cho sản phẩm đã bật theo dõi lô; bỏ qua với sản phẩm khác.
+    expiry_date: Optional[str] = None
 
 
 class StocktakeItem(BaseModel):

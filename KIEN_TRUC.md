@@ -568,6 +568,59 @@ Còn thiếu: webhook ngân hàng chưa nhận thanh toán cho đơn `DEBT`
 không có đường chuyển khoản kèm mã đơn; thu nợ chuyển khoản đi qua endpoint
 `debt-payment` và người bán tự đối chiếu.
 
+### 21. Lô hàng và hạn sử dụng: bảng lô là sự thật, `Product.stock` là bản sao
+
+Bật `Product.track_batches` thì tồn kho của sản phẩm đó **không còn là một con
+số** nữa: "còn 40 hộp" tách thành "12 hộp hết hạn 20/8, 28 hộp hết hạn 15/11".
+
+Cờ này CỐ Ý là tùy chọn **từng sản phẩm**, không phải cả shop: ly nhựa và túi
+nilon không có hạn sử dụng, ép chúng khai lô là làm khổ người nhập hàng vô cớ.
+Sản phẩm tắt cờ chạy y hệt như trước F5 —
+`test_san_pham_khong_bat_co_chay_y_nhu_cu` giữ điều đó.
+
+**Bảy điều bắt buộc giữ:**
+
+**`Product.stock` là BẢN SAO của tổng lô.** Đây là ngoại lệ có kiểm soát với
+nguyên tắc "một nguồn sự thật": mọi đường ghi đều đi qua cùng một transaction
+cập nhật cả lô lẫn tổng, và `inventory_service.doi_chieu_ton_kho()` kiểm lại để
+lệch thì lộ ra. Giữ cột tổng vì 10 chỗ đang đọc nó (lưới sản phẩm POS, danh sách
+kho); bắt chúng cộng lô mỗi lần là chậm và dễ sót.
+
+**"Còn hàng" nghĩa là hàng CHƯA hết hạn.** `ton_kha_dung()` loại phần quá hạn,
+và `resolve_items` từ chối đơn dựa trên con số đó chứ không dựa vào `stock`.
+Thông báo phải nêu cả hai số ("chỉ còn 28 chưa hết hạn, tổng tồn 40") — đó là
+câu thu ngân sẽ hỏi ngay tại quầy.
+
+**Bán và xuất kho trừ theo FEFO**, không phải FIFO: lô hạn **gần nhất** đi
+trước, bất kể nhập trước hay sau. Lô không hạn (`expiry_date` NULL, hàng nhập
+trước khi bật cờ) xếp **sau cùng**.
+
+**Hết hạn ngày hôm nay vẫn bán được** — so sánh `expiry_date >= hôm nay`.
+
+**Giá vốn lấy từ ĐÚNG lô đã xuất.** Một dòng đơn ăn qua nhiều lô thì chốt bình
+quân của phần đã lấy (`gia_von_binh_quan_da_lay`). Có lô nào chưa khai giá vốn
+thì cả dòng là `None` — trộn với 0 là biến hàng chưa khai giá thành lãi bằng cả
+giá bán (bẫy 13). Bình quân gia quyền trên `Product.cost_price` (F1) vẫn còn
+nhưng chỉ dùng cho sản phẩm KHÔNG theo lô.
+
+**Hoàn kho phải về ĐÚNG lô đã xuất**, đọc từ `order_item_batches`. Tạo lô mới là
+bịa ra một hạn không có thật; dồn vào lô bất kỳ là làm sai cả hạn lẫn giá vốn.
+Hoàn theo thứ tự ngược với lúc xuất để trả một phần không đẩy hàng cận hạn quay
+lại kệ trước hàng dài hạn.
+
+**Kiểm kê hiện TỪ CHỐI sản phẩm theo lô.** `apply_stocktake` gán thẳng
+`prod.stock = counted`, làm vậy với hàng có lô là phá vỡ ràng buộc tổng mà không
+biết cộng trừ vào lô nào. Từ chối kèm thông báo rõ, còn hơn im lặng làm hỏng dữ
+liệu. Kiểm kê theo lô là việc của đợt sau.
+
+`expiry_date` lưu dạng chuỗi `'YYYY-MM-DD'` (như `Voucher.expires_at`): so sánh
+chuỗi theo định dạng đó là so sánh đúng thứ tự ngày, và tránh hẳn bài toán múi
+giờ ở phần hiển thị.
+
+**Chưa làm ở đợt này:** kiểm kê theo lô, phiếu hủy hàng hết hạn, màn hình báo
+cáo hạn sử dụng (endpoint `GET /api/products/{shop_id}/batches` đã có, giao diện
+thì chưa), và biến thể sản phẩm.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

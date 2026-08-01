@@ -5,6 +5,7 @@ import os
 import pathlib
 import re
 import uuid
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, UploadFile
@@ -31,6 +32,7 @@ from ..dependencies import (
     require_staff_permission,
 )
 from ..schemas.catalog import CategoryUpdate
+from . import inventory_service
 from .log_service import log_system_action
 
 DEFAULT_PRODUCT_IMAGE = "https://placehold.co/150x150/1E293B/FFF?text=SP"
@@ -436,6 +438,7 @@ def create_product(
     barcode: Optional[str] = None,
     image: Optional[UploadFile] = None,
     cost_price: Optional[float] = None,
+    track_batches: bool = False,
 ) -> models.Product:
     shop = _require_shop_operator_403(db, shop_id, current_user)
     if cost_price is not None:
@@ -480,6 +483,7 @@ def create_product(
         name=name,
         price=price,
         cost_price=cost_price,
+        track_batches=bool(track_batches),
         stock=stock,
         image_url=image_url,
         category_id=category_id,
@@ -526,6 +530,7 @@ def list_products(db: Session, shop_id: int) -> List[Dict]:
                 "category_id": p.category_id,
                 "shop_id": p.shop_id,
                 "category_is_active": cat_active,
+                "track_batches": bool(p.track_batches),
             }
         )
     return res
@@ -556,6 +561,87 @@ def list_product_costs(
         ],
         "chua_khai": sum(1 for p in products if p.cost_price is None),
     }
+
+
+def danh_sach_lo(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    sap_het_han_trong: int = 30,
+) -> Dict[str, Any]:
+    """Các lô còn hàng của shop, kèm phân loại theo hạn sử dụng.
+
+    `sap_het_han_trong` là số ngày coi là "sắp hết hạn". Giá trị tồn tính theo
+    giá vốn của TỪNG lô - đó là số tiền thật sẽ mất nếu hàng hỏng trên kệ.
+    """
+    shop = require_shop_access(db, shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_INVENTORY)
+    xem_gia_von = has_cost_visibility(shop, current_user)
+
+    hom_nay = datetime.utcnow().date()
+    moc_canh_bao = (hom_nay + timedelta(days=max(sap_het_han_trong, 0))).strftime(
+        "%Y-%m-%d"
+    )
+    hom_nay_str = hom_nay.strftime("%Y-%m-%d")
+
+    lo = (
+        db.query(models.ProductBatch)
+        .filter(
+            models.ProductBatch.shop_id == shop_id,
+            models.ProductBatch.quantity > 0,
+        )
+        .all()
+    )
+    ten_sp = {
+        p.id: p.name
+        for p in db.query(models.Product)
+        .filter(models.Product.shop_id == shop_id)
+        .all()
+    }
+
+    da_het_han: List[Dict[str, Any]] = []
+    sap_het_han: List[Dict[str, Any]] = []
+    gia_tri_het_han = 0.0
+    gia_tri_sap_het = 0.0
+
+    for b in lo:
+        if b.expiry_date is None:
+            continue      # lô không hạn không bao giờ vào hai nhóm này
+        ban_ghi: Dict[str, Any] = {
+            "batch_id": b.id,
+            "product_id": b.product_id,
+            "product_name": ten_sp.get(b.product_id),
+            "expiry_date": b.expiry_date,
+            "quantity": b.quantity,
+        }
+        gia_tri = (
+            float(b.cost_price) * b.quantity if b.cost_price is not None else None
+        )
+        if xem_gia_von:
+            ban_ghi["cost_price"] = b.cost_price
+            ban_ghi["stock_value"] = gia_tri
+
+        if b.expiry_date < hom_nay_str:
+            da_het_han.append(ban_ghi)
+            gia_tri_het_han += gia_tri or 0.0
+        elif b.expiry_date <= moc_canh_bao:
+            sap_het_han.append(ban_ghi)
+            gia_tri_sap_het += gia_tri or 0.0
+
+    da_het_han.sort(key=lambda r: r["expiry_date"])
+    sap_het_han.sort(key=lambda r: r["expiry_date"])
+
+    ket_qua: Dict[str, Any] = {
+        "days": sap_het_han_trong,
+        "expired": da_het_han,
+        "expiring_soon": sap_het_han,
+        "expired_quantity": sum(r["quantity"] for r in da_het_han),
+        "expiring_soon_quantity": sum(r["quantity"] for r in sap_het_han),
+    }
+    if xem_gia_von:
+        ket_qua["expired_value"] = gia_tri_het_han
+        ket_qua["expiring_soon_value"] = gia_tri_sap_het
+    return ket_qua
 
 
 def update_product(
@@ -713,6 +799,29 @@ def apply_stocktake(
         if it.counted < 0:
             raise HTTPException(status_code=400, detail=tr("Số đếm không được âm"))
 
+    # Kiểm kê hiện gán thẳng `prod.stock = counted`. Làm vậy với hàng theo lô là
+    # phá vỡ ràng buộc "tổng lô = tồn kho" mà không có cách nào biết phải cộng
+    # trừ vào lô nào. TỪ CHỐI kèm thông báo rõ, còn hơn im lặng làm hỏng dữ liệu.
+    # Kiểm kê theo lô là việc của đợt sau.
+    theo_lo = (
+        db.query(models.Product)
+        .filter(
+            models.Product.shop_id == shop_id,
+            models.Product.id.in_(ids),
+            models.Product.track_batches == True,  # noqa: E712
+        )
+        .all()
+    )
+    if theo_lo:
+        raise HTTPException(
+            status_code=400,
+            detail=tr(
+                "Chưa kiểm kê được sản phẩm có theo dõi hạn sử dụng: {names}. "
+                "Điều chỉnh qua nhập/xuất kho theo lô.",
+                names=", ".join(p.name for p in theo_lo[:5]),
+            ),
+        )
+
     san_pham = {
         p.id: p
         for p in db.query(models.Product)
@@ -810,12 +919,122 @@ _ADJUST_STOCK = text(
 )
 
 
+_NGAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _kiem_han_su_dung(raw: Optional[str]) -> Optional[str]:
+    """Chuỗi 'YYYY-MM-DD' hoặc None. Sai định dạng -> 400 chứ không lưu bừa.
+
+    Lưu dạng chuỗi theo đúng định dạng này để so sánh chuỗi cũng là so sánh
+    đúng thứ tự ngày, và tránh hẳn bài toán múi giờ.
+    """
+    if raw is None or not str(raw).strip():
+        return None
+    chuoi = str(raw).strip()
+    if not _NGAY.match(chuoi):
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Hạn sử dụng phải theo định dạng YYYY-MM-DD"),
+        )
+    try:
+        datetime.strptime(chuoi, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Hạn sử dụng không phải một ngày có thật"),
+        )
+    return chuoi
+
+
+def _dieu_chinh_ton_theo_lo(
+    db: Session,
+    current_user: models.User,
+    prod: models.Product,
+    delta: int,
+    unit_cost: Optional[float],
+    expiry_date: Optional[str],
+) -> Dict[str, Any]:
+    """Nhập/xuất kho cho sản phẩm có theo dõi lô.
+
+    Nhập tạo LÔ MỚI; xuất trừ theo FEFO. `Product.stock` được ghi trong cùng
+    transaction với lô - đó là bản sao của tổng lô, không phải một con số sống
+    độc lập.
+    """
+    han = _kiem_han_su_dung(expiry_date)
+    if delta > 0:
+        if han is None:
+            raise HTTPException(
+                status_code=400,
+                detail=tr(
+                    "Sản phẩm '{name}' có theo dõi hạn sử dụng; "
+                    "nhập hàng phải khai hạn của lô",
+                    name=prod.name,
+                ),
+            )
+        db.add(
+            models.ProductBatch(
+                product_id=prod.id,
+                shop_id=prod.shop_id,
+                expiry_date=han,
+                quantity=delta,
+                cost_price=unit_cost,
+            )
+        )
+        prod.stock = int(prod.stock or 0) + delta
+        mo_ta = f"Nhập lô HSD {han} x{delta}"
+    else:
+        can_tru = -delta
+        kha_dung = sum(
+            b.quantity for b in inventory_service.lo_con_ban_duoc(db, prod.id)
+        )
+        if kha_dung < can_tru:
+            raise HTTPException(
+                status_code=400,
+                detail=tr(
+                    "Sản phẩm '{name}' chỉ còn {available} chưa hết hạn "
+                    "(tổng tồn {total})",
+                    name=prod.name,
+                    available=kha_dung,
+                    total=int(prod.stock or 0),
+                ),
+            )
+        con_lai = can_tru
+        for lo in inventory_service.lo_con_ban_duoc(db, prod.id):
+            if con_lai <= 0:
+                break
+            lay = min(lo.quantity, con_lai)
+            lo.quantity -= lay
+            con_lai -= lay
+        prod.stock = int(prod.stock or 0) - can_tru
+        mo_ta = f"Xuất theo FEFO x{can_tru}"
+
+    db.commit()
+    db.refresh(prod)
+    log_system_action(
+        db,
+        current_user.id,
+        "ADJUST_STOCK",
+        f"{mo_ta} - SP '{prod.name}' ({prod.code}) -> tồn {prod.stock}",
+    )
+    db.refresh(prod)
+    ket_qua: Dict[str, Any] = {
+        "id": prod.id,
+        "stock": prod.stock,
+        "delta": delta,
+        "available_stock": inventory_service.ton_kha_dung(db, prod),
+    }
+    if has_cost_visibility(prod.shop, current_user):
+        ket_qua["cost_price"] = prod.cost_price
+    return ket_qua
+
+
 def adjust_stock(
     db: Session,
     current_user: models.User,
     product_id: int,
     delta: int,
     unit_cost: Optional[float] = None,
+    expiry_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Nhập (delta > 0) hoặc xuất (delta < 0) kho theo số lượng thay đổi.
 
@@ -854,6 +1073,11 @@ def adjust_stock(
                 status_code=400,
                 detail=tr("Phiếu xuất kho không nhận đơn giá nhập"),
             )
+
+    if prod.track_batches:
+        return _dieu_chinh_ton_theo_lo(
+            db, current_user, prod, delta, unit_cost, expiry_date
+        )
 
     gia_von_truoc = prod.cost_price
     result = db.execute(
