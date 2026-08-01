@@ -112,6 +112,13 @@ OTP_MAX_ATTEMPTS: int = _int_env("OTP_MAX_ATTEMPTS", 5)
 # nạn nhân và chống kéo dài vô hạn cửa sổ để dò mã.
 OTP_RESEND_COOLDOWN_SECONDS: int = _int_env("OTP_RESEND_COOLDOWN_SECONDS", 60)
 
+# --- SMTP ---
+# `smtplib.SMTP(host, port)` KHÔNG có timeout mặc định: máy chủ mail treo là
+# request treo vĩnh viễn, và mỗi request treo giữ một luồng trong threadpool của
+# FastAPI. Hết luồng thì cả app đứng - kể cả POS đang bán hàng, dù POS chẳng
+# liên quan gì tới email. Con số này là trần thiệt hại.
+SMTP_TIMEOUT_SECONDS: int = _int_env("SMTP_TIMEOUT_SECONDS", 10)
+
 # --- Upload ---
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp"}
 ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}

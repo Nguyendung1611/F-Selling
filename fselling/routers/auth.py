@@ -1,5 +1,5 @@
 """Router xác thực. Chỉ xử lý HTTP, nghiệp vụ nằm trong auth_service."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -19,9 +19,17 @@ from ..services import auth_service
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+# `background_tasks` được truyền xuống service để việc gửi email KHÔNG nằm
+# trong thời gian trả lời request: nói chuyện với máy chủ mail mất hàng giây, mà
+# mỗi giây đó giữ một luồng trong threadpool của FastAPI - hết luồng thì cả app
+# đứng, kể cả POS đang bán hàng.
 @router.post("/register")
-def register(user: UserCreate, db: Session = Depends(get_db)):
-    return auth_service.register(db, user)
+def register(
+    user: UserCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return auth_service.register(db, user, background_tasks)
 
 
 @router.post("/verify-email")
@@ -30,13 +38,21 @@ def verify_email(data: EmailVerify, db: Session = Depends(get_db)):
 
 
 @router.post("/resend-code")
-def resend_code(data: ResendCodeRequest, db: Session = Depends(get_db)):
-    return auth_service.resend_code(db, data)
+def resend_code(
+    data: ResendCodeRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return auth_service.resend_code(db, data, background_tasks)
 
 
 @router.post("/forgot-password-request")
-def forgot_password_request(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    return auth_service.forgot_password_request(db, data)
+def forgot_password_request(
+    data: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    return auth_service.forgot_password_request(db, data, background_tasks)
 
 
 @router.post("/forgot-password-reset")

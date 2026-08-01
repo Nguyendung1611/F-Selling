@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Dict
+from typing import Dict, Optional
 
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -41,6 +41,42 @@ from .log_service import log_system_action
 
 PASSWORD_POLICY_MSG = "Mật khẩu phải bao gồm kí tự đặc biệt, chữ hoa, chữ thường và số"
 
+# Câu trả lời DUY NHẤT của các endpoint xin mã, dùng cho MỌI trường hợp: email
+# có thật, email không tồn tại, hay đang trong thời gian chờ. Trả lời khác nhau
+# theo từng ca là nói cho người hỏi biết email nào đã đăng ký F-Selling - thứ
+# dùng để nhắm mục tiêu lừa đảo.
+MSG_DA_GUI_MA = (
+    "Nếu email này có tài khoản, mã xác minh đã được gửi. "
+    "Nhớ kiểm tra cả hộp thư rác."
+)
+
+
+def _gui_mail_nen(
+    background_tasks: Optional[BackgroundTasks],
+    email_to: str,
+    otp_code: str,
+    subject: str,
+) -> None:
+    """Đẩy việc gửi mail ra ngoài thời gian trả lời request.
+
+    Gửi thẳng ở đây thì request phải chờ hết vòng nói chuyện với máy chủ mail -
+    đo được 3,5 giây với Gmail - và mỗi lần chờ giữ một luồng trong threadpool
+    của FastAPI. Vài chục request là hết luồng, lúc đó POS cũng không bán được
+    hàng dù POS chẳng liên quan gì tới email.
+
+    Tách ra nền còn khép luôn kênh đo thời gian: email có thật và email không
+    tồn tại giờ trả lời nhanh như nhau.
+
+    `background_tasks` để None được, cho các lời gọi từ script/test không đi qua
+    HTTP; khi đó gửi thẳng như cũ.
+    """
+    if background_tasks is None:
+        email_service.send_otp_email(email_to, otp_code, subject)
+        return
+    background_tasks.add_task(
+        email_service.send_otp_email, email_to, otp_code, subject
+    )
+
 
 def _token_response(user: models.User, token: str) -> Dict[str, str]:
     response = {"access_token": token, "token_type": "bearer", "role": user.role}
@@ -66,23 +102,6 @@ def _cap_ma_moi(user: models.User) -> str:
     user.verification_attempts = 0
     user.verification_code_sent_at = datetime.utcnow()
     return otp_code
-
-
-def _chan_xin_ma_lien_tuc(user: models.User) -> None:
-    """Chặn xin mã dồn dập: dội bom hộp thư nạn nhân, và mỗi lần xin lại là một
-    lần gia hạn cửa sổ để dò mã."""
-    if OTP_RESEND_COOLDOWN_SECONDS <= 0 or user.verification_code_sent_at is None:
-        return
-    da_qua = (datetime.utcnow() - user.verification_code_sent_at).total_seconds()
-    con_lai = OTP_RESEND_COOLDOWN_SECONDS - da_qua
-    if con_lai > 0:
-        raise HTTPException(
-            status_code=429,
-            detail=tr(
-                "Vui lòng đợi {seconds} giây nữa rồi hãy xin mã mới",
-                seconds=int(con_lai) + 1,
-            ),
-        )
 
 
 def _dem_lan_nhap_sai_ma(db: Session, user: models.User) -> None:
@@ -111,7 +130,11 @@ def _dem_lan_nhap_sai_ma(db: Session, user: models.User) -> None:
     raise HTTPException(status_code=400, detail=tr("Mã xác thực không hợp lệ"))
 
 
-def register(db: Session, user: UserCreate) -> Dict[str, str]:
+def register(
+    db: Session,
+    user: UserCreate,
+    background_tasks: Optional[BackgroundTasks] = None,
+) -> Dict[str, str]:
     if not is_strong_password(user.password):
         raise HTTPException(status_code=400, detail=tr(PASSWORD_POLICY_MSG))
 
@@ -138,7 +161,9 @@ def register(db: Session, user: UserCreate) -> Dict[str, str]:
     db.add(db_user)
     db.commit()
 
-    email_service.send_otp_email(user.email, otp_code, "F-Selling: Xác minh tài khoản mới")
+    _gui_mail_nen(
+        background_tasks, user.email, otp_code, "F-Selling: Xác minh tài khoản mới"
+    )
     return {
         "msg": tr(
             "Đăng ký thành công. Vui lòng kiểm tra email để nhận mã kích hoạt tài khoản."
@@ -149,10 +174,10 @@ def register(db: Session, user: UserCreate) -> Dict[str, str]:
 def verify_email(db: Session, data: EmailVerify) -> Dict[str, str]:
     user = db.query(models.User).filter(models.User.email == data.email).first()
     if not user:
-        raise HTTPException(
-            status_code=404,
-            detail=tr("Không tìm thấy tài khoản với email này"),
-        )
+        # Cùng một câu với "mã sai": email lạ mà trả 404 riêng thì đây cũng
+        # thành một cửa để quét email nào đã đăng ký, y như forgot-password.
+        # Người dùng thật không mất gì - gõ nhầm email thì mã cũng sai thật.
+        raise HTTPException(status_code=400, detail=tr("Mã xác thực không hợp lệ"))
     if user.is_verified:
         return {"msg": tr("Tài khoản đã được xác minh trước đó.")}
 
@@ -183,40 +208,56 @@ def verify_email(db: Session, data: EmailVerify) -> Dict[str, str]:
     }
 
 
-def resend_code(db: Session, data: ResendCodeRequest) -> Dict[str, str]:
+def _con_trong_thoi_gian_cho(user: models.User) -> bool:
+    if OTP_RESEND_COOLDOWN_SECONDS <= 0 or user.verification_code_sent_at is None:
+        return False
+    da_qua = (datetime.utcnow() - user.verification_code_sent_at).total_seconds()
+    return da_qua < OTP_RESEND_COOLDOWN_SECONDS
+
+
+def resend_code(
+    db: Session,
+    data: ResendCodeRequest,
+    background_tasks: Optional[BackgroundTasks] = None,
+) -> Dict[str, str]:
+    """Gửi lại mã xác minh. LUÔN trả cùng một câu, xem `MSG_DA_GUI_MA`."""
     user = db.query(models.User).filter(models.User.email == data.email).first()
-    if not user:
-        raise HTTPException(
-            status_code=404,
-            detail=tr("Không tìm thấy tài khoản với email này"),
+
+    # Ba lý do không gửi, và cả ba đều phải im lặng như nhau:
+    #   - email không có tài khoản  -> lộ email nào đã đăng ký
+    #   - tài khoản đã xác minh rồi -> lộ thêm cả trạng thái tài khoản
+    #   - đang trong thời gian chờ  -> lộ qua đúng cái 429 của lần bấm thứ hai
+    if user and not user.is_verified and not _con_trong_thoi_gian_cho(user):
+        otp_code = _cap_ma_moi(user)
+        db.commit()
+        _gui_mail_nen(
+            background_tasks,
+            user.email,
+            otp_code,
+            "F-Selling: Gửi lại mã xác minh tài khoản",
         )
-    if user.is_verified:
-        raise HTTPException(status_code=400, detail=tr("Tài khoản đã được xác minh"))
-
-    _chan_xin_ma_lien_tuc(user)
-    otp_code = _cap_ma_moi(user)
-    db.commit()
-
-    email_service.send_otp_email(user.email, otp_code, "F-Selling: Gửi lại mã xác minh tài khoản")
-    return {"msg": tr("Đã gửi lại mã xác minh mới vào email của bạn.")}
+    return {"msg": tr(MSG_DA_GUI_MA)}
 
 
-def forgot_password_request(db: Session, data: ForgotPasswordRequest) -> Dict[str, str]:
+def forgot_password_request(
+    db: Session,
+    data: ForgotPasswordRequest,
+    background_tasks: Optional[BackgroundTasks] = None,
+) -> Dict[str, str]:
+    """Xin mã khôi phục mật khẩu. LUÔN trả cùng một câu, xem `MSG_DA_GUI_MA`.
+
+    Đây là endpoint gọi được mà KHÔNG cần đăng nhập và chỉ cần một địa chỉ
+    email, nên nó là chỗ thuận tiện nhất để quét xem email nào có tài khoản.
+    """
     user = db.query(models.User).filter(models.User.email == data.email).first()
-    if not user:
-        raise HTTPException(
-            status_code=404,
-            detail=tr("Không tìm thấy tài khoản liên kết với email này"),
+
+    if user and not _con_trong_thoi_gian_cho(user):
+        otp_code = _cap_ma_moi(user)
+        db.commit()
+        _gui_mail_nen(
+            background_tasks, user.email, otp_code, "F-Selling: Mã khôi phục mật khẩu"
         )
-
-    _chan_xin_ma_lien_tuc(user)
-    otp_code = _cap_ma_moi(user)
-    db.commit()
-
-    email_service.send_otp_email(user.email, otp_code, "F-Selling: Mã khôi phục mật khẩu")
-    return {
-        "msg": tr("Đã gửi mã xác minh khôi phục mật khẩu vào email của bạn.")
-    }
+    return {"msg": tr(MSG_DA_GUI_MA)}
 
 
 def forgot_password_reset(db: Session, data: ForgotPasswordReset) -> Dict[str, str]:
@@ -225,10 +266,10 @@ def forgot_password_reset(db: Session, data: ForgotPasswordReset) -> Dict[str, s
 
     user = db.query(models.User).filter(models.User.email == data.email).first()
     if not user:
-        raise HTTPException(
-            status_code=404,
-            detail=tr("Không tìm thấy tài khoản với email này"),
-        )
+        # PHẢI dùng đúng chuỗi mà `_dem_lan_nhap_sai_ma` trả về, không phải một
+        # câu "tương tự". Lệch một chữ ("xác nhận" so với "xác thực") là kẻ dò
+        # phân biệt được ngay email nào có thật - test bắt được đúng lỗi này.
+        raise HTTPException(status_code=400, detail=tr("Mã xác thực không hợp lệ"))
 
     # Đây là đường NGUY HIỂM NHẤT trong cả app: đoán trúng 6 chữ số là đặt được
     # mật khẩu mới cho tài khoản người khác. Bắt buộc phải đếm số lần đoán.

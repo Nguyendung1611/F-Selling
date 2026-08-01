@@ -90,6 +90,13 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   (restart là kẻ tấn công xóa được bộ đếm). Kiểm khóa **trước** khi kiểm mật
   khẩu, và username không tồn tại vẫn phải tốn đúng chừng ấy thời gian
   (`burn_password_time`).
+- **Gửi email phải đi qua `background_tasks`, và `smtplib.SMTP` phải có
+  `timeout`.** Gửi thẳng trong request giữ một luồng threadpool suốt 3,5 giây;
+  vài chục request là POS đứng máy dù POS không liên quan gì tới email.
+- **Các endpoint xin mã không được lộ email nào đã đăng ký.** Cùng mã HTTP, cùng
+  y nguyên câu trả lời (`MSG_DA_GUI_MA`) cho mọi ca: email có thật, email lạ, hay
+  đang trong thời gian chờ. Cooldown phải **im lặng** — trả 429 cho lần bấm thứ
+  hai là tự mở lại kênh rò rỉ.
 - Secret chỉ lấy từ biến môi trường. **Không bao giờ** đặt API key trong
   JavaScript — ai mở devtools cũng lấy được.
 - Không commit `.env`, `*.db`, `request_log.txt`.

@@ -467,6 +467,58 @@ một hộp thư, tách riêng thì luân phiên hai đường là gửi đượ
 Bốn giá trị đều chỉnh được qua biến môi trường: `LOGIN_MAX_ATTEMPTS`,
 `LOGIN_LOCKOUT_MINUTES`, `OTP_MAX_ATTEMPTS`, `OTP_RESEND_COOLDOWN_SECONDS`.
 
+### 18. Gửi email PHẢI nằm ngoài thời gian trả lời request
+
+`send_otp_email` nói chuyện với máy chủ mail qua mạng — đo thực tế với Gmail là
+**3,5 giây**. FastAPI chạy endpoint đồng bộ trong threadpool (~40 luồng), nên
+mỗi lần gửi giữ một luồng suốt chừng ấy. Vài chục request `quên mật khẩu` là hết
+luồng, và lúc đó **POS cũng không bán được hàng** dù POS chẳng liên quan gì tới
+email. Không cần kẻ xấu: một hôm Gmail chậm là đủ.
+
+Ba lớp bảo vệ, phải giữ đủ cả ba:
+
+1. **`background_tasks.add_task(...)`** (`auth_service._gui_mail_nen`) — request
+   trả lời xong rồi mới gửi mail. Router phải nhận `BackgroundTasks` và truyền
+   xuống service.
+2. **`timeout=SMTP_TIMEOUT_SECONDS`** khi mở `smtplib.SMTP`. Không có nó thì
+   smtplib chờ **vô hạn** lúc máy chủ mail không phản hồi.
+3. **`server.quit()` bọc trong `finally` + `close()` dự phòng** — `quit()` cũng
+   đi qua mạng nên cũng hỏng được, mà socket thì kiểu gì cũng phải đóng.
+
+### 19. Bốn endpoint xin mã KHÔNG được lộ email nào đã đăng ký
+
+`forgot-password-request` gọi được mà không cần đăng nhập và chỉ cần một địa chỉ
+email — đó là chỗ thuận tiện nhất để quét xem email nào có tài khoản F-Selling,
+thứ dùng để nhắm mục tiêu lừa đảo.
+
+Rò rỉ đi qua **ba kênh riêng biệt**, bịt thiếu kênh nào cũng bằng không:
+
+| Kênh | Cách bịt |
+|---|---|
+| Mã HTTP | `forgot-password-request` và `resend-code` luôn trả 200; `verify-email` và `forgot-password-reset` trả đúng 400 "mã sai" cho email lạ |
+| Nội dung câu trả lời | Dùng **cùng một hằng** `MSG_DA_GUI_MA`, và ở nhánh email lạ phải dùng **đúng chuỗi** mà `_dem_lan_nhap_sai_ma` trả về |
+| Thời gian phản hồi | Đẩy việc gửi mail ra nền (mục 18) |
+
+**Cooldown phải im lặng.** Trả 429 cho lần bấm thứ hai chính là một kênh rò rỉ
+hoàn chỉnh: email không tồn tại thì bấm bao nhiêu lần cũng 200, email có thật
+thì lần hai ra 429 — bấm hai lần là biết. Nay trong thời gian chờ vẫn trả 200 và
+chỉ lặng lẽ không gửi mail.
+
+**Lệch một chữ là hỏng.** Bản đầu nhánh email lạ của `forgot_password_reset` trả
+"Mã **xác nhận** không hợp lệ" trong khi nhánh mã sai trả "Mã **xác thực** không
+hợp lệ" — đúng một từ, và đủ để phân biệt.
+`tests/test_rate_limit.py::test_forgot_password_reset_khong_lo_email_la` so sánh
+nguyên vẹn hai body chính vì vậy.
+
+**Frontend cũng phải đổi theo.** `auth.js` và `verify.js` hiện chuỗi của riêng
+chúng (`forgot.code_sent`, `verify.resend_success`) chứ không hiện câu từ server,
+nên sửa mỗi backend là người dùng vẫn đọc "đã gửi mã tới email của bạn" và không
+bao giờ nghi mình gõ nhầm địa chỉ.
+
+**Còn sót:** thời gian phản hồi vẫn lệch ~50ms (60ms so với 7ms) vì nhánh email
+có thật còn ghi DB. Yếu hơn hẳn mức 3.522ms so với 4ms lúc đầu nhưng chưa phải
+bằng 0; đóng nốt thì phải đẩy cả phần ghi DB ra nền.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

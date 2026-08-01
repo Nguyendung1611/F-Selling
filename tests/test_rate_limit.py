@@ -293,16 +293,26 @@ def test_dat_lai_mat_khau_thanh_cong_go_luon_khoa_dang_nhap(client, _no_real_ema
 
 
 # ---------- Cooldown xin mã ----------
-def test_xin_ma_lien_tuc_bi_chan(client, _no_real_email):
+def test_xin_ma_lien_tuc_khong_gui_them_mail(client, _no_real_email):
+    """Cooldown giờ IM LẶNG: vẫn trả 200 như mọi ca khác, nhưng không gửi mail.
+
+    Trả 429 cho lần bấm thứ hai chính là kênh rò rỉ: email không tồn tại thì
+    bấm bao nhiêu lần cũng 200, còn email có thật thì lần hai ra 429 - bấm hai
+    lần là biết email nào đã đăng ký.
+    """
     username = register_seller(client)
     assert client.post(
         "/api/auth/forgot-password-request", json={"email": _email(username)}
     ).status_code == 200
+    so_mail = len(_no_real_email)
+    ma_lan_dau = _user(username).verification_code
 
     res = client.post(
         "/api/auth/forgot-password-request", json={"email": _email(username)}
     )
-    assert res.status_code == 429, "Xin mã lần hai ngay lập tức phải bị chặn"
+    assert res.status_code == 200, "Vẫn phải là 200, giống hệt mọi ca khác"
+    assert len(_no_real_email) == so_mail, "Nhưng tuyệt đối không gửi thêm mail"
+    assert _user(username).verification_code == ma_lan_dau, "Và không cấp mã mới"
 
 
 def test_het_cooldown_thi_xin_lai_duoc(client, _no_real_email):
@@ -320,14 +330,108 @@ def test_cooldown_dung_chung_cho_moi_duong_xin_ma(client, _no_real_email):
     """Hai endpoint cùng gửi mail tới một hộp thư, nên phải chung một cooldown -
     nếu tách riêng thì luân phiên hai đường là gửi được gấp đôi."""
     username = _dang_ky_chua_xac_minh(client)  # register vừa gửi một mã
+    so_mail = len(_no_real_email)
 
-    res = client.post("/api/auth/resend-code", json={"email": _email(username)})
-    assert res.status_code == 429
+    assert client.post(
+        "/api/auth/resend-code", json={"email": _email(username)}
+    ).status_code == 200
+    assert client.post(
+        "/api/auth/forgot-password-request", json={"email": _email(username)}
+    ).status_code == 200
+    assert len(_no_real_email) == so_mail, (
+        "Cả hai đường đều phải im lặng trong thời gian chờ"
+    )
 
-    res = client.post(
+
+# ---------- Không lộ email nào đã đăng ký ----------
+KHONG_TON_TAI = "chac_chan_khong_co_tai_khoan_nao@example.com"
+
+
+def test_forgot_password_tra_loi_giong_het_du_email_co_hay_khong(client, _no_real_email):
+    """Endpoint này gọi được mà không cần đăng nhập và chỉ cần một địa chỉ email,
+    nên nó là chỗ thuận tiện nhất để quét xem email nào có tài khoản."""
+    username = register_seller(client)
+
+    co_that = client.post(
         "/api/auth/forgot-password-request", json={"email": _email(username)}
     )
-    assert res.status_code == 429
+    khong_co = client.post(
+        "/api/auth/forgot-password-request", json={"email": KHONG_TON_TAI}
+    )
+
+    assert co_that.status_code == khong_co.status_code == 200
+    assert co_that.json() == khong_co.json(), (
+        "Khác một chữ trong câu trả lời là đủ để phân biệt"
+    )
+
+
+def test_resend_code_tra_loi_giong_het_du_email_co_hay_khong(client, _no_real_email):
+    username = _dang_ky_chua_xac_minh(client)
+    _sua_user(username, verification_code_sent_at=None)
+
+    co_that = client.post("/api/auth/resend-code", json={"email": _email(username)})
+    khong_co = client.post("/api/auth/resend-code", json={"email": KHONG_TON_TAI})
+
+    assert co_that.status_code == khong_co.status_code == 200
+    assert co_that.json() == khong_co.json()
+
+
+def test_resend_code_khong_lo_ca_tai_khoan_da_xac_minh(client, _no_real_email):
+    """Trả 400 "đã xác minh" là lộ thêm cả trạng thái tài khoản, không chỉ sự
+    tồn tại của email."""
+    da_xac_minh = register_seller(client)
+    chua_xac_minh = _dang_ky_chua_xac_minh(client)
+
+    a = client.post("/api/auth/resend-code", json={"email": _email(da_xac_minh)})
+    b = client.post("/api/auth/resend-code", json={"email": _email(chua_xac_minh)})
+    c = client.post("/api/auth/resend-code", json={"email": KHONG_TON_TAI})
+
+    assert a.status_code == b.status_code == c.status_code == 200
+    assert a.json() == b.json() == c.json()
+
+
+def test_verify_email_khong_lo_email_la(client, _no_real_email):
+    """Email lạ phải nhận đúng câu "mã sai" như email có thật mà gõ sai mã."""
+    username = _dang_ky_chua_xac_minh(client)
+
+    ma_sai = client.post(
+        "/api/auth/verify-email",
+        json={"email": _email(username), "code": "000000"},
+    )
+    email_la = client.post(
+        "/api/auth/verify-email", json={"email": KHONG_TON_TAI, "code": "000000"}
+    )
+
+    assert ma_sai.status_code == email_la.status_code == 400
+    assert ma_sai.json() == email_la.json()
+
+
+def test_forgot_password_reset_khong_lo_email_la(client, _no_real_email):
+    username = register_seller(client)
+    client.post("/api/auth/forgot-password-request", json={"email": _email(username)})
+
+    ma_sai = client.post(
+        "/api/auth/forgot-password-reset",
+        json={
+            "email": _email(username),
+            "code": "000000",
+            "new_password": "Moi@2026abc",
+        },
+    )
+    email_la = client.post(
+        "/api/auth/forgot-password-reset",
+        json={"email": KHONG_TON_TAI, "code": "000000", "new_password": "Moi@2026abc"},
+    )
+
+    assert ma_sai.status_code == email_la.status_code == 400
+    assert ma_sai.json() == email_la.json()
+
+
+def test_email_khong_ton_tai_thi_khong_gui_mail_nao(client, _no_real_email):
+    so_mail = len(_no_real_email)
+    client.post("/api/auth/forgot-password-request", json={"email": KHONG_TON_TAI})
+    client.post("/api/auth/resend-code", json={"email": KHONG_TON_TAI})
+    assert len(_no_real_email) == so_mail
 
 
 def test_so_mail_da_gui_khong_tang_khi_bi_chan(client, _no_real_email):

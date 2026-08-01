@@ -71,6 +71,12 @@ Từ đó app không tự đổi nữa, bạn quản lý mật khẩu bằng ch�
 | `LOGIN_LOCKOUT_MINUTES` | Khóa tạm bao nhiêu phút (mặc định 15). |
 | `OTP_MAX_ATTEMPTS` | Nhập sai mã bao nhiêu lần thì hủy mã (mặc định 5). |
 | `OTP_RESEND_COOLDOWN_SECONDS` | Cách nhau bao lâu mới được xin mã mới (mặc định 60). |
+| `SMTP_TIMEOUT_SECONDS` | Chờ máy chủ mail tối đa bao lâu (mặc định 10). |
+
+> **Vì sao "quên mật khẩu" luôn báo đã gửi mã?** Kể cả khi email chưa từng đăng
+> ký, hệ thống vẫn trả lời y hệt. Nếu báo "không tìm thấy tài khoản" thì bất kỳ
+> ai cũng dò được email nào có tài khoản F-Selling để nhắm lừa đảo. Không nhận
+> được mã thì kiểm tra lại địa chỉ email và xem cả hộp thư rác.
 
 > **Lỡ tự khóa tài khoản admin?** Đặt lại `ADMIN_INITIAL_PASSWORD` trong `.env`
 > rồi khởi động lại server — khóa được gỡ ngay, không phải ngồi chờ hết giờ.

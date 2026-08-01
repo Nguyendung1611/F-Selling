@@ -6,6 +6,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+from ..core.config import SMTP_TIMEOUT_SECONDS
 from ..core.i18n import get_locale, tr
 
 DEFAULT_SUBJECT = "F-Selling: Mã xác minh của bạn"
@@ -48,11 +49,20 @@ def send_otp_email(email_to: str, otp_code: str, subject: str = DEFAULT_SUBJECT)
         msg["Subject"] = tr(subject)
         msg.attach(MIMEText(_build_body(otp_code), "html", "utf-8"))
 
-        server = smtplib.SMTP(smtp_host, smtp_port)
-        server.starttls()
-        server.login(smtp_user, smtp_password)
-        server.sendmail(smtp_user, email_to, msg.as_string())
-        server.quit()
+        # timeout BẮT BUỘC: không có nó thì smtplib chờ vô hạn khi máy chủ mail
+        # không phản hồi, và mỗi lần chờ giữ một luồng của threadpool FastAPI.
+        server = smtplib.SMTP(smtp_host, smtp_port, timeout=SMTP_TIMEOUT_SECONDS)
+        try:
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_user, email_to, msg.as_string())
+        finally:
+            # `quit()` cũng đi qua mạng nên cũng hỏng được; đóng socket kiểu gì
+            # cũng phải xảy ra, nếu không thì rò rỉ kết nối sau mỗi lần lỗi.
+            try:
+                server.quit()
+            except (smtplib.SMTPException, OSError):
+                server.close()
         return True
     except (smtplib.SMTPException, OSError) as e:
         print(f"Error sending mail to {email_to}: {e}")

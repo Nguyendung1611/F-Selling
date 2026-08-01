@@ -28,6 +28,11 @@ EN_MESSAGES = {
     "Vui lòng đợi {seconds} giây nữa rồi hãy xin mã mới": (
         "Please wait {seconds} more seconds before requesting a new code"
     ),
+    "Nếu email này có tài khoản, mã xác minh đã được gửi. "
+    "Nhớ kiểm tra cả hộp thư rác.": (
+        "If an account exists for this email, a verification code has been "
+        "sent. Remember to check your spam folder."
+    ),
     "Tài khoản đã được đăng nhập ở thiết bị khác. Vui lòng đăng nhập lại.": (
         "This account was signed in on another device. Please sign in again."
     ),
