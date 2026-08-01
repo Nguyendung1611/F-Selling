@@ -214,6 +214,8 @@ def test_stats_khong_loc_giu_nguyen_contract(client):
         # giới hạn quyền - chỉ số tiền lãi mới nhạy cảm.
         "returned_amount",
         "net_revenue",
+        # F4: công nợ phải thu. Đứng riêng, KHÔNG cộng vào doanh thu.
+        "receivable_amount",
     }
     assert len(body["trend_labels"]) == 7, "Mặc định vẫn là xu hướng 7 ngày"
 

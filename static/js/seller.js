@@ -2749,6 +2749,19 @@ function renderCustomerShopOptions() {
     if (allShops.length) loadCustomers();
 }
 
+/** Dòng công nợ nhỏ dưới tên khách. Khách không nợ thì không hiện gì cho gọn. */
+function dongCongNo(kh) {
+    const no = Number(kh.debt_amount || 0);
+    if (no <= 0) return '';
+    const hanMuc = kh.credit_limit;
+    const chamTran = hanMuc !== null && hanMuc !== undefined && no >= Number(hanMuc);
+    const mau = chamTran ? '#B91C1C' : '#B45309';
+    return `<br><span style="font-size:0.75rem; color:${mau}; font-weight:600;">`
+        + `${escapeHtml(t('seller.customers.owes', {
+            amount: dinhDangTienDoiSoat(no)
+        }))}</span>`;
+}
+
 function renderCustomers(list) {
     const tbody = document.getElementById('customerList');
     tbody.innerHTML = '';
@@ -2760,7 +2773,7 @@ function renderCustomers(list) {
         const customerId = Number(kh.id);
         if (!Number.isInteger(customerId)) return;
         tbody.innerHTML += `<tr>
-            <td>${escapeHtml(kh.name)}</td>
+            <td>${escapeHtml(kh.name)}${dongCongNo(kh)}</td>
             <td>${escapeHtml(kh.phone)}</td>
             <td style="text-align:right; white-space:nowrap;">
                 <button type="button" class="btn-outline" style="padding:0.2rem 0.5rem;" data-customer-history-id="${customerId}" title="${escapeHtml(t('seller.customers.history_action'))}" aria-label="${escapeHtml(t('seller.customers.history_action'))}"><i class="ph ph-clock-counter-clockwise"></i></button>
@@ -2845,7 +2858,15 @@ async function saveCustomer() {
     ) return;
     if (!name) return showToast(t('seller.customers.name_required_error'));
     if (!phone) return showToast(t('seller.customers.phone_required_error'));
-    const body = { name, phone, address, note };
+    // Ô trống = không giới hạn (gửi null), KHÁC HẲN 0 = cấm khách này nợ.
+    const hanMucRaw = (document.getElementById('custCreditLimit')?.value || '').trim();
+    if (hanMucRaw !== '' && Number(hanMucRaw) < 0) {
+        return showToast(t('seller.customers.credit_limit_negative'));
+    }
+    const body = {
+        name, phone, address, note,
+        credit_limit: hanMucRaw === '' ? null : Number(hanMucRaw)
+    };
     try {
         if (isEditing) {
             await apiCall(`/customers/member/${customerId}`, 'PUT', body);
@@ -2870,6 +2891,10 @@ function editCustomer(id) {
     document.getElementById('custPhone').value = kh.phone || '';
     document.getElementById('custAddress').value = kh.address || '';
     document.getElementById('custNote').value = kh.note || '';
+    const oHanMuc = document.getElementById('custCreditLimit');
+    // Chưa đặt hạn mức thì để TRỐNG, không điền 0 - 0 mang nghĩa cấm nợ.
+    if (oHanMuc) oHanMuc.value = (kh.credit_limit === null || kh.credit_limit === undefined)
+        ? '' : kh.credit_limit;
     document.getElementById('custFormTitle').innerText = t('seller.customers.edit_title');
     document.getElementById('btnSaveCustomer').innerHTML = `<i class="ph ph-floppy-disk"></i> <span data-seller-action-label="customer-save">${escapeHtml(t('seller.customers.update'))}</span>`;
     document.getElementById('btnCancelEditCustomer').style.display = 'block';
@@ -2877,7 +2902,7 @@ function editCustomer(id) {
 
 function cancelEditCustomer() {
     editingCustomerId = null;
-    ['custName', 'custPhone', 'custAddress', 'custNote'].forEach(id => document.getElementById(id).value = '');
+    ['custName', 'custPhone', 'custAddress', 'custNote', 'custCreditLimit'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     document.getElementById('custFormTitle').innerText = t('seller.customers.add_title');
     document.getElementById('btnSaveCustomer').innerHTML = `<i class="ph ph-plus"></i> <span data-seller-action-label="customer-save">${escapeHtml(t('seller.customers.save'))}</span>`;
     document.getElementById('btnCancelEditCustomer').style.display = 'none';
@@ -2929,16 +2954,77 @@ function renderCustomerHistory(d) {
         d.orders.forEach(o => {
             const tt = window.moTaTrangThaiDon(o.status);
             const ngay = dinhDangNgayGio(o.date);
+            const conNo = Number(o.remaining || 0);
+            const oThuNo = conNo > 0
+                ? `<br><button type="button" class="btn-outline" style="padding:0.15rem 0.45rem; font-size:0.75rem; margin-top:0.25rem;" data-debt-order-id="${o.id}" data-debt-remaining="${conNo}">`
+                  + `<i class="ph ph-hand-coins"></i> ${escapeHtml(t('seller.customers.collect_debt'))}</button>`
+                : '';
+            const dongConNo = conNo > 0
+                ? `<br><span style="font-size:0.75rem;">${escapeHtml(t('seller.customers.still_owes', {
+                    amount: dinhDangTienDoiSoat(conNo)
+                  }))}</span>`
+                : '';
             tbody.innerHTML += `<tr>
                 <td><strong>#${o.id}</strong></td>
                 <td>${ngay}</td>
                 <td>${escapeHtml(dinhDangTienDoiSoat(o.total || 0))}</td>
-                <td style="color:${tt.color}; font-weight:600;">${escapeHtml(tt.label)}</td>
+                <td style="color:${tt.color}; font-weight:600;">${escapeHtml(tt.label)}${dongConNo}${oThuNo}</td>
             </tr>`;
+        });
+        tbody.querySelectorAll('[data-debt-order-id]').forEach(nut => {
+            nut.addEventListener('click', () => thuNo(
+                Number(nut.dataset.debtOrderId),
+                Number(nut.dataset.debtRemaining)
+            ));
         });
     }
     document.getElementById('customerHistoryModal').style.display = 'flex';
 }
+
+/** Thu bớt nợ của một đơn. Trả bao nhiêu cũng được, nên phải hỏi số tiền. */
+async function thuNo(orderId, conNo) {
+    const raw = prompt(t('seller.customers.collect_prompt', {
+        id: orderId,
+        remaining: dinhDangTienDoiSoat(conNo)
+    }), String(Math.round(conNo)));
+    if (raw === null) return;
+    const soTien = parseFloat((raw || '').replace(/[.,\s]/g, ''));
+    if (!isFinite(soTien) || soTien <= 0) {
+        return showToast(t('seller.customers.collect_amount_invalid'));
+    }
+    if (soTien > conNo) {
+        return showToast(t('seller.customers.collect_too_much', {
+            remaining: dinhDangTienDoiSoat(conNo)
+        }));
+    }
+    // Hỏi hình thức bằng prompt thứ hai thay vì showCustomConfirm: hàm đó không
+    // có callback cho nút Hủy, dùng nó ở đây sẽ treo im lặng khi người dùng bỏ
+    // giữa chừng.
+    const cachRaw = prompt(t('seller.customers.collect_method_prompt'), 'TM');
+    if (cachRaw === null) return;
+    const cach = (cachRaw || '').trim().toUpperCase();
+    if (!['TM', 'CK'].includes(cach)) {
+        return showToast(t('seller.customers.collect_method_invalid'));
+    }
+    const tienMat = cach === 'TM';
+    try {
+        const res = await apiCall(`/orders/${orderId}/debt-payment`, 'POST', {
+            amount: soTien,
+            method: tienMat ? 'cash' : 'transfer',
+            // Một mã cho đúng một lần bấm: bấm lại vì mạng chậm không thu hai lần.
+            operation_id: taoOperationIdHoanTien()
+        });
+        showToast(t('seller.customers.collect_done', {
+            amount: dinhDangTienDoiSoat(soTien),
+            remaining: dinhDangTienDoiSoat(res.remaining_amount || 0)
+        }));
+        if (openCustomerHistoryId !== null) xemLichSuKhach(openCustomerHistoryId);
+        loadCustomers();
+    } catch (e) {
+        showToast(e.message);
+    }
+}
+
 
 async function xemLichSuKhach(id) {
     const shopId = damBaoCacheShopTrongSelector(

@@ -89,6 +89,23 @@ class OrderReturnCreate(BaseModel):
     operation_id: str = Field(min_length=8, max_length=128)
 
 
+class DebtPayment(BaseModel):
+    """Một lần khách trả bớt nợ. Trả bao nhiêu cũng được, nhiều lần cũng được.
+
+    Khác `CashTopup` ở chỗ đó: `CashTopup` bắt trả trọn phần còn thiếu vì nó
+    dành cho đơn chuyển khoản thiếu, còn trả nợ dần là chuyện bình thường của
+    bán ghi sổ.
+    """
+
+    amount: float
+    method: Literal["cash", "transfer"]
+    note: Optional[str] = None
+    reference: Optional[str] = None
+    # Một id cho đúng MỘT lần bấm thu tiền. Retry mạng dùng lại id này nên không
+    # ghi thành hai lần trả.
+    operation_id: str = Field(min_length=8, max_length=128)
+
+
 class RefundComplete(BaseModel):
     """Ghi nhận shop đã hoàn đúng toàn bộ khoản đang chờ.
 

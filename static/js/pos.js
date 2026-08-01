@@ -474,21 +474,57 @@ function setMethod(m) {
 
 function apDungPhuongThucThanhToan(m, focusCash = false) {
     paymentMethod = m;
-    document.getElementById('btnMethodQR').classList.remove('active');
-    document.getElementById('btnMethodCash').classList.remove('active');
-    if(m==='transfer') document.getElementById('btnMethodQR').classList.add('active');
-    else document.getElementById('btnMethodCash').classList.add('active');
-    
+    ['btnMethodQR', 'btnMethodCash', 'btnMethodDebt'].forEach(id => {
+        document.getElementById(id)?.classList.remove('active');
+    });
+    const nut = { transfer: 'btnMethodQR', cash: 'btnMethodCash', debt: 'btnMethodDebt' }[m]
+        || 'btnMethodQR';
+    document.getElementById(nut)?.classList.add('active');
+
     const cashSection = document.getElementById('cashTenderSection');
     if (cashSection) cashSection.style.display = m === 'cash' ? 'block' : 'none';
 
-    // QR của đơn cũ không được nằm cạnh luồng thu tiền mặt.
-    if(m === 'cash') {
+    // QR của đơn cũ không được nằm cạnh luồng thu tiền mặt hay ghi nợ.
+    if(m === 'cash' || m === 'debt') {
         document.getElementById('qrSection').style.display = 'none';
-        if (focusCash) setTimeout(() => document.getElementById('cashTenderedInput')?.focus(), 0);
+        if (m === 'cash' && focusCash) {
+            setTimeout(() => document.getElementById('cashTenderedInput')?.focus(), 0);
+        }
     }
+    capNhatCanhBaoGhiNo();
     renderCashQuickAmounts();
     capNhatTienKhachDua();
+}
+
+/** Bảng nhắc khi chọn Ghi nợ: bắt buộc có khách, và cho thấy khách đang nợ bao
+ *  nhiêu TRƯỚC khi bán thêm - chờ server trả lỗi vượt hạn mức thì đã muộn, hàng
+ *  đã quét vào giỏ và khách đang đứng đợi. */
+async function capNhatCanhBaoGhiNo() {
+    const bang = document.getElementById('debtNotice');
+    if (!bang) return;
+    if (paymentMethod !== 'debt') {
+        bang.style.display = 'none';
+        return;
+    }
+    bang.style.display = 'block';
+    if (selectedCustomerId === null) {
+        bang.innerText = dich('pos.debt.need_customer');
+        return;
+    }
+    try {
+        const kh = await apiCall(`/customers/member/${selectedCustomerId}`);
+        const dangNo = Number(kh.debt_amount || 0);
+        const hanMuc = kh.credit_limit;
+        bang.innerText = hanMuc === null || hanMuc === undefined
+            ? dich('pos.debt.current', { amount: dinhDangTien(dangNo) })
+            : dich('pos.debt.current_with_limit', {
+                amount: dinhDangTien(dangNo),
+                limit: dinhDangTien(hanMuc),
+                left: dinhDangTien(Math.max(hanMuc - dangNo, 0))
+            });
+    } catch (e) {
+        bang.innerText = dich('pos.debt.load_error');
+    }
 }
 
 // ===== Tiền khách đưa / tiền thối =====
@@ -1208,6 +1244,26 @@ async function guiYeuCauTaoDonDangDo(state) {
         return;
     }
 
+    if (state.payment_method === 'debt') {
+        // Ghi nợ không có bước thu tiền nào ở đây cả: hàng giao rồi, tiền hẹn
+        // trả sau. Xuất hóa đơn để khách cầm về rồi dọn giỏ như một đơn đã xong.
+        xoaCheckoutDangDo();
+        checkoutOperationId = null;
+        showToast(dich('pos.debt.created', {
+            amount: dinhDangTien(state.server_total)
+        }));
+        await hienHoaDon(currentOrderId);
+        currentOrderId = null;
+        cart = [];
+        currentVoucher = null;
+        document.getElementById('voucherInput').value = '';
+        document.getElementById('voucherMsg').innerText = '';
+        calcCart();
+        loadProducts();
+        capNhatCanhBaoGhiNo();
+        return;
+    }
+
     state.phase = 'cash_pending';
     state.server_total_confirmed =
         Math.round(Number(state.confirmed_total) || 0) === Math.round(state.server_total);
@@ -1267,15 +1323,22 @@ async function checkout() {
             amount: dinhDangTien(total - cashTenderedAmount)
         }));
     }
+    // Chặn ngay ở đây thay vì để server trả 400: lúc đó hàng đã quét vào giỏ và
+    // khách đang đứng đợi, báo sớm thì thu ngân chọn khách rồi bấm lại là xong.
+    if (paymentMethod === 'debt' && selectedCustomerId === null) {
+        return showToast(dich('pos.debt.need_customer'));
+    }
 
     // Xác nhận trước khi chốt. Tạo đơn là TRỪ TỒN KHO ngay, và với tiền mặt còn
     // thu tiền luôn - không có bước quay lại. Khi quét mã vạch, quét thừa một
     // món rất dễ xảy ra mà danh sách lại cuộn nên khó thấy, nên bắt buộc phải
     // có một lần đối chiếu tổng số món và tổng tiền bằng mắt.
     const soMon = cart.reduce((n, i) => n + i.quantity, 0);
-    const tenPTTT = dich(
-        paymentMethod === 'cash' ? 'pos.payment.cash' : 'pos.payment.transfer'
-    );
+    const tenPTTT = dich({
+        cash: 'pos.payment.cash',
+        debt: 'pos.payment.debt',
+        transfer: 'pos.payment.transfer'
+    }[paymentMethod] || 'pos.payment.transfer');
     const dongTomTat = cart
         .map(i => `  ${i.product_name}  ${dinhDangTien(i.price)} × ${dinhDangSoPOS(i.quantity)}`)
         .join('\n');
@@ -1911,6 +1974,7 @@ function boChonKhach() {
     if (el('posCustResults')) el('posCustResults').innerHTML = '';
     if (el('posCustSearch')) el('posCustSearch').value = '';
     if (el('posCustNewForm')) el('posCustNewForm').style.display = 'none';
+    capNhatCanhBaoGhiNo();
 }
 
 function chonKhach(id, ten, sdt) {
@@ -1919,6 +1983,7 @@ function chonKhach(id, ten, sdt) {
     const selected = document.getElementById('khachDaChon');
     selected.removeAttribute('data-i18n');
     selected.innerText = `${ten} (${sdt})`;
+    capNhatCanhBaoGhiNo();
     document.getElementById('khachChuaChon').style.display = 'none';
     document.getElementById('khachBoChon').style.display = 'block';
 }

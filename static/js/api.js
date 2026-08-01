@@ -95,7 +95,9 @@ const NHAN_TRANG_THAI_DON = {
     PENDING:      { key: 'common.status.pending',      color: '#F59E0B' },
     PAID:         { key: 'common.status.paid',         color: 'var(--success)' },
     CANCELLED:    { key: 'common.status.cancelled',    color: '#94A3B8' },
-    UNRECONCILED: { key: 'common.status.unreconciled', color: '#EF4444' }
+    UNRECONCILED: { key: 'common.status.unreconciled', color: '#EF4444' },
+    // F4: bán ghi nợ. Thiếu dòng này thì mọi màn hiện chữ "DEBT" trần.
+    DEBT:         { key: 'common.status.debt',         color: '#B45309' }
 };
 
 function moTaTrangThaiDon(status) {

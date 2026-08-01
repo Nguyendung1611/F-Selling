@@ -217,4 +217,6 @@ def test_doanh_thu_chi_tinh_don_da_thanh_toan(client):
         # F2: hàng khách trả lại (ngày trả, không phải ngày bán).
         "returned_amount",
         "net_revenue",
+        # F4: công nợ phải thu (tiền mới hứa trả, chưa thực thu).
+        "receivable_amount",
     }

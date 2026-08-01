@@ -34,6 +34,12 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   nguyên tồn, KHÔNG coi là 0. Và phải so `stock_snapshot` với tồn hiện tại để
   không nuốt mất số hàng vừa bán trong lúc đếm.
 - Tồn kho đổi qua `adjust_stock` (cộng trừ theo delta), không ghi đè.
+- **Đơn ghi nợ ở trạng thái `DEBT`, KHÔNG phải `PENDING`.** Để ở `PENDING` thì
+  `cancel_expired_pending_orders` xóa sạch sổ nợ và hoàn kho hàng đã giao, còn
+  `close_shift` chặn thu ngân kết ca vĩnh viễn. Đơn nợ bắt buộc có khách; tiền
+  thu nợ cộng vào `paid_amount`/`cash_paid_amount` sẵn có; `DEBT_CASH` đã nằm
+  trong `CASH_PAYMENT_IN_TYPES` nên **đừng** thêm `CashMovement`. Nợ chưa thu
+  không tính vào doanh thu. `credit_limit` `NULL` = không giới hạn, `0` = cấm nợ.
 - **Trả hàng không phải hủy đơn.** Hủy là đơn chưa thanh toán; trả hàng là đơn
   `PAID`, hàng quay về, và xảy ra được nhiều lần. Đơn **giữ nguyên `PAID`** sau
   khi trả — việc trả nằm ở bảng `order_returns`. Tiền hoàn phải phân bổ giảm giá

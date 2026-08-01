@@ -178,6 +178,10 @@ _MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN locked_until DATETIME",
     "ALTER TABLE users ADD COLUMN verification_attempts INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN verification_code_sent_at DATETIME",
+    # F4: bán ghi nợ. NULL = không giới hạn, giữ nguyên hành vi cho khách cũ.
+    "ALTER TABLE customers ADD COLUMN credit_limit FLOAT",
+    "CREATE INDEX IF NOT EXISTS ix_orders_status_customer "
+    "ON orders(status, customer_id)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt

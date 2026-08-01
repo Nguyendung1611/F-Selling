@@ -23,7 +23,13 @@ from ..dependencies import (
     require_shop_access,
     require_staff_permission,
 )
-from ..schemas.order import CashPayment, CashTopup, OrderCreate, RefundComplete
+from ..schemas.order import (
+    CashPayment,
+    CashTopup,
+    DebtPayment,
+    OrderCreate,
+    RefundComplete,
+)
 from . import inventory_service, payment_service, voucher_service
 from .log_service import log_system_action
 
@@ -31,6 +37,8 @@ from .log_service import log_system_action
 # --- Máy trạng thái đơn hàng ---
 # PENDING ------> PAID          (tiền mặt | webhook đủ tiền)
 # PENDING ------> CANCELLED     (hủy đơn - A1d)
+# DEBT ---------> PAID          (F4: khách trả đủ nợ, có thể qua nhiều lần trả)
+# DEBT ---------> CANCELLED     (F4: hủy đơn nợ CHƯA thu đồng nào)
 # CANCELLED ----> UNRECONCILED  (CHỈ webhook: tiền về sau khi đơn đã hủy)
 # UNRECONCILED -> PAID          (webhook cộng dồn đủ | bù tiền mặt phần thiếu)
 # PAID là trạng thái cuối. Mọi đường khác đều bị từ chối.
@@ -38,10 +46,34 @@ STATUS_PENDING = "PENDING"
 STATUS_PAID = "PAID"
 STATUS_CANCELLED = "CANCELLED"
 STATUS_UNRECONCILED = "UNRECONCILED"
+# F4: bán ghi nợ. CỐ Ý là một trạng thái riêng chứ không dùng lại PENDING, vì
+# PENDING đang mang nghĩa "đang chờ khách trả tiền ngay bây giờ" và có hai cỗ
+# máy bám vào nghĩa đó:
+#   - `cancel_expired_pending_orders` hủy mọi đơn PENDING quá hạn và hoàn tồn
+#     kho -> để đơn nợ ở PENDING là một ngày nào đó sổ nợ bị xóa sạch và số hàng
+#     khách đã cầm về được cộng trả vào kho.
+#   - `close_shift` không cho đóng ca khi còn đơn PENDING tiền mặt -> thu ngân
+#     sẽ không bao giờ kết ca được, vì đơn nợ treo hàng tuần là chuyện bình thường.
+# Cả hai chỗ đó lọc đúng chuỗi "PENDING" nên trạng thái riêng tự tránh được.
+STATUS_DEBT = "DEBT"
 
 MANUAL_PAY_FROM: Tuple[str, ...] = (STATUS_PENDING,)
 WEBHOOK_PAY_FROM: Tuple[str, ...] = (STATUS_PENDING,)
-CANCEL_FROM: Tuple[str, ...] = (STATUS_PENDING,)
+CANCEL_FROM: Tuple[str, ...] = (STATUS_PENDING, STATUS_DEBT)
+DEBT_PAY_FROM: Tuple[str, ...] = (STATUS_DEBT,)
+
+PAYMENT_METHOD_TRANSFER = "transfer"
+PAYMENT_METHOD_CASH = "cash"
+PAYMENT_METHOD_DEBT = "debt"
+# Trước F4 trường này KHÔNG được kiểm gì cả: client gửi chuỗi nào cũng lưu
+# nguyên vào DB. Giờ có hình thức "ghi nợ" mang hệ quả tài chính thật thì bắt
+# buộc phải chốt danh sách, nếu không client tự khai khống được.
+PAYMENT_METHODS = frozenset(
+    {PAYMENT_METHOD_TRANSFER, PAYMENT_METHOD_CASH, PAYMENT_METHOD_DEBT}
+)
+
+ENTRY_DEBT_CASH = "DEBT_CASH"
+ENTRY_DEBT_TRANSFER = "DEBT_TRANSFER"
 
 RECON_UNDERPAID = "UNDERPAID"
 RECON_OVERPAID = "OVERPAID"
@@ -292,6 +324,54 @@ def _existing_operation_order(
     return _create_order_response(shop, existing)
 
 
+def cong_no_cua_khach(db: Session, customer_id: int) -> float:
+    """Tổng tiền khách còn nợ: phần chưa trả của mọi đơn đang ở trạng thái DEBT.
+
+    Tính từ chính các đơn chứ không giữ một cột "tổng nợ" trên `customers`: cột
+    tổng như vậy là nguồn sự thật thứ hai, và chỉ cần một đường ghi quên cập
+    nhật là sổ nợ lệch mà không ai biết cho tới lúc đối chiếu với khách.
+    """
+    don_no = (
+        db.query(models.Order)
+        .filter(
+            models.Order.customer_id == customer_id,
+            models.Order.status == STATUS_DEBT,
+        )
+        .all()
+    )
+    tong = 0.0
+    for o in don_no:
+        da_tra = _so_tien(o.paid_amount) + _so_tien(o.cash_paid_amount)
+        tong += max(_so_tien(o.total_amount) - da_tra, 0.0)
+    return tong
+
+
+def _kiem_ban_ghi_no(
+    db: Session, khach: Optional[models.Customer], tong_don: float
+) -> None:
+    """Hai điều kiện để được ghi nợ, kiểm ngay trước khi tạo đơn."""
+    if khach is None:
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Bán ghi nợ phải chọn khách hàng"),
+        )
+    if khach.credit_limit is None:
+        return
+    dang_no = cong_no_cua_khach(db, khach.id)
+    if dang_no + tong_don > _so_tien(khach.credit_limit) + MONEY_EPSILON:
+        raise HTTPException(
+            status_code=400,
+            detail=tr(
+                "Khách '{name}' đang nợ {current} và hạn mức là {limit}; "
+                "đơn này {amount} sẽ vượt hạn mức",
+                name=khach.name,
+                current=f"{dang_no:,.0f}đ",
+                limit=f"{_so_tien(khach.credit_limit):,.0f}đ",
+                amount=f"{tong_don:,.0f}đ",
+            ),
+        )
+
+
 def _lock_shop_for_order(db: Session, shop_id: int) -> None:
     """Tuần tự hóa phần kiểm tồn/voucher và ghi đơn trong cùng một shop.
 
@@ -320,6 +400,13 @@ def create_order(
         raise HTTPException(
             status_code=400,
             detail=tr("Đơn hàng không có sản phẩm nào"),
+        )
+    if order.payment_method not in PAYMENT_METHODS:
+        raise HTTPException(
+            status_code=400,
+            detail=tr(
+                "Hình thức thanh toán không hợp lệ",
+            ),
         )
     operation_id = (order.operation_id or "").strip() or None
     operation_fingerprint = _order_operation_fingerprint(order)
@@ -374,11 +461,12 @@ def create_order(
         lock_for_cash_write=True,
     )
 
-    # Khách hàng gắn vào đơn (tùy chọn). Phải là khách của ĐÚNG shop này -
-    # không cho mượn customer_id của shop khác.
+    # Khách hàng gắn vào đơn (tùy chọn, TRỪ đơn ghi nợ). Phải là khách của ĐÚNG
+    # shop này - không cho mượn customer_id của shop khác.
     customer_id = None
+    khach = None
     if order.customer_id is not None:
-        kh = (
+        khach = (
             db.query(models.Customer)
             .filter(
                 models.Customer.id == order.customer_id,
@@ -386,12 +474,19 @@ def create_order(
             )
             .first()
         )
-        if not kh:
+        if not khach:
             raise HTTPException(
                 status_code=404,
                 detail=tr("Khách hàng không tồn tại trong cửa hàng này"),
             )
-        customer_id = kh.id
+        customer_id = khach.id
+
+    ghi_no = order.payment_method == PAYMENT_METHOD_DEBT
+    if ghi_no:
+        # Nợ mà không biết ai nợ thì không đòi được. Kiểm hạn mức nằm sau
+        # `_lock_shop_for_order` nên hai đơn nợ cùng lúc của một khách không thể
+        # cùng nhìn thấy một số dư cũ rồi cùng lọt qua.
+        _kiem_ban_ghi_no(db, khach, total)
 
     new_order = models.Order(
         shop_id=shop_id,
@@ -405,7 +500,11 @@ def create_order(
         payment_method=order.payment_method,
         customer_id=customer_id,
         # Đơn được giảm về 0đ không có giao dịch ngân hàng dương để chờ.
-        status=STATUS_PAID if total <= MONEY_EPSILON else STATUS_PENDING,
+        status=(
+            STATUS_PAID
+            if total <= MONEY_EPSILON
+            else (STATUS_DEBT if ghi_no else STATUS_PENDING)
+        ),
     )
     db.add(new_order)
     try:
@@ -499,7 +598,14 @@ def pay_order(
     require_shop_access(db, order.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_SALE)
 
-    if order.payment_method != "cash":
+    if order.payment_method == PAYMENT_METHOD_DEBT:
+        # Nói đúng đường phải đi, thay vì để rơi vào câu "chờ ngân hàng xác
+        # nhận" ở dưới - câu đó sai hoàn toàn với đơn ghi nợ.
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Đơn ghi nợ thu tiền qua chức năng thu nợ"),
+        )
+    if order.payment_method != PAYMENT_METHOD_CASH:
         raise HTTPException(
             status_code=409,
             detail=tr("Đơn chuyển khoản phải chờ ngân hàng xác nhận tự động"),
@@ -724,6 +830,188 @@ def cash_topup(
     }
     response.update(payment_summary(order))
     return response
+
+
+def debt_payment(
+    db: Session,
+    current_user: models.User,
+    order_id: int,
+    request: DebtPayment,
+) -> Dict[str, Any]:
+    """Khách trả bớt nợ. Trả bao nhiêu cũng được, trả nhiều lần cũng được.
+
+    Đủ tiền thì đơn tự chuyển sang `PAID` - và chỉ khi đó doanh thu mới ghi
+    nhận, đúng nguyên tắc thực thu đang dùng cho cả app.
+    """
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy đơn hàng"))
+    require_shop_access(db, order.shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_SALE)
+
+    operation_id = (request.operation_id or "").strip()
+    if len(operation_id) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Mã thao tác thu nợ không hợp lệ"),
+        )
+    operation_key = (
+        "debt:" + hashlib.sha256(operation_id.encode("utf-8")).hexdigest()
+    )
+
+    so_tien = float(request.amount or 0)
+    if not math.isfinite(so_tien) or so_tien <= MONEY_EPSILON:
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Số tiền thu phải lớn hơn 0"),
+        )
+
+    da_ghi = (
+        db.query(models.OrderPayment)
+        .filter(models.OrderPayment.idempotency_key == operation_key)
+        .first()
+    )
+    if da_ghi is not None:
+        if da_ghi.order_id == order_id and da_ghi.entry_type in (
+            ENTRY_DEBT_CASH,
+            ENTRY_DEBT_TRANSFER,
+        ):
+            return _ket_qua_thu_no(order, lap_lai=True)
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Mã thao tác thu nợ đã được dùng cho một giao dịch khác"),
+        )
+
+    shift = None
+    if request.method == "cash":
+        # Tiền mặt vào két phải thuộc về ca của người đang đứng quầy, giống hệt
+        # mọi khoản tiền mặt khác. Ghi ENTRY_DEBT_CASH và `shift_id` là đủ để
+        # `_expected_cash` của shift_service tự cộng vào.
+        shift = _current_cash_shift(
+            db,
+            current_user,
+            order.shop_id,
+            required_for_everyone=True,
+            lock_for_cash_write=True,
+        )
+        db.refresh(order)
+
+    if order.status != STATUS_DEBT:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Chỉ thu nợ được cho đơn đang ghi nợ"),
+        )
+
+    da_tra = _so_tien(order.paid_amount) + _so_tien(order.cash_paid_amount)
+    con_thieu = max(_so_tien(order.total_amount) - da_tra, 0.0)
+    if con_thieu <= MONEY_EPSILON:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Đơn này không còn nợ"))
+    if so_tien > con_thieu + MONEY_EPSILON:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=tr(
+                "Khách chỉ còn nợ {amount}; không thu quá số đó",
+                amount=f"{con_thieu:,.0f}",
+            ),
+        )
+
+    tien_mat = request.method == "cash"
+    db.add(
+        models.OrderPayment(
+            order_id=order_id,
+            entry_type=ENTRY_DEBT_CASH if tien_mat else ENTRY_DEBT_TRANSFER,
+            amount=so_tien,
+            idempotency_key=operation_key,
+            created_by_user_id=current_user.id,
+            shift_id=shift.id if shift else None,
+            note=(request.note or "").strip()[:500] or None,
+            reference=(request.reference or "").strip()[:128] or None,
+        )
+    )
+    try:
+        db.flush()
+    except IntegrityError:
+        # Unique idempotency_key: một request song song cùng mã đã ghi trước.
+        db.rollback()
+        fresh = db.query(models.Order).filter(models.Order.id == order_id).first()
+        da_ghi = (
+            db.query(models.OrderPayment)
+            .filter(models.OrderPayment.idempotency_key == operation_key)
+            .first()
+        )
+        if fresh and da_ghi and da_ghi.order_id == order_id:
+            return _ket_qua_thu_no(fresh, lap_lai=True)
+        raise
+
+    # Cộng dồn vào đúng cột mà `payment_summary` đang đọc, thay vì dựng thêm một
+    # bộ đếm riêng: hai nguồn số liệu về cùng một khoản tiền là chỉ chờ ngày lệch.
+    cot = "cash_paid_amount" if tien_mat else "paid_amount"
+    ket_qua = db.execute(
+        text(
+            f"UPDATE orders SET {cot} = COALESCE({cot}, 0) + :so_tien "
+            "WHERE id = :order_id AND status = :dang_no "
+            f"AND COALESCE(paid_amount, 0) + COALESCE(cash_paid_amount, 0) "
+            "+ :so_tien <= total_amount + :epsilon"
+        ),
+        {
+            "so_tien": so_tien,
+            "order_id": order_id,
+            "dang_no": STATUS_DEBT,
+            "epsilon": MONEY_EPSILON,
+        },
+    )
+    if ket_qua.rowcount != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Số nợ vừa thay đổi; vui lòng tải lại rồi thu lại"),
+        )
+
+    db.refresh(order)
+    con_thieu_moi = max(
+        _so_tien(order.total_amount)
+        - _so_tien(order.paid_amount)
+        - _so_tien(order.cash_paid_amount),
+        0.0,
+    )
+    tra_het = con_thieu_moi <= MONEY_EPSILON
+    if tra_het and not apply_transition(db, order_id, DEBT_PAY_FROM, STATUS_PAID):
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Trạng thái đơn vừa thay đổi; vui lòng tải lại"),
+        )
+
+    _them_nhat_ky(
+        db,
+        current_user.id,
+        "DEBT_PAYMENT",
+        f"Order {order_id}: thu nợ {so_tien:,.0f}đ bằng "
+        f"{'tiền mặt' if tien_mat else 'chuyển khoản'}"
+        f", còn nợ {con_thieu_moi:,.0f}đ"
+        + (" - ĐÃ TRẢ HẾT" if tra_het else ""),
+    )
+    db.commit()
+    db.refresh(order)
+    return _ket_qua_thu_no(order, lap_lai=False)
+
+
+def _ket_qua_thu_no(order: models.Order, lap_lai: bool) -> Dict[str, Any]:
+    ket_qua = {
+        "msg": tr(
+            "Lần thu nợ này đã được ghi nhận trước đó"
+            if lap_lai
+            else "Đã ghi nhận thu nợ"
+        ),
+        "id": order.id,
+        "status": order.status,
+        "total_amount": order.total_amount,
+    }
+    ket_qua.update(payment_summary(order))
+    return ket_qua
 
 
 def complete_refund(
@@ -1102,6 +1390,22 @@ def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[
 
     if order.status == STATUS_CANCELLED:
         return _ket_qua_huy(order_id, restored=0, unrestored=0, voucher_released=False)
+
+    # Đơn ghi nợ đã thu được một phần thì KHÔNG hủy được: hủy sẽ hoàn tồn kho
+    # cho số hàng khách đã cầm về, và biến khoản tiền đã thu thành tiền vô chủ -
+    # nằm trong két nhưng không thuộc đơn nào. Trả lại tiền cho khách trước, rồi
+    # mới xử lý đơn.
+    if order.status == STATUS_DEBT:
+        da_thu = _so_tien(order.paid_amount) + _so_tien(order.cash_paid_amount)
+        if da_thu > MONEY_EPSILON:
+            raise HTTPException(
+                status_code=409,
+                detail=tr(
+                    "Đơn nợ này đã thu {amount}; không hủy được. "
+                    "Hoàn tiền cho khách trước rồi mới xử lý đơn.",
+                    amount=f"{da_thu:,.0f}đ",
+                ),
+            )
 
     # Giữ lại trước khi commit vì commit sẽ expire ORM object.
     shop_id = order.shop_id

@@ -519,6 +519,55 @@ bao giờ nghi mình gõ nhầm địa chỉ.
 có thật còn ghi DB. Yếu hơn hẳn mức 3.522ms so với 4ms lúc đầu nhưng chưa phải
 bằng 0; đóng nốt thì phải đẩy cả phần ghi DB ra nền.
 
+### 20. Bán ghi nợ: `DEBT` là trạng thái RIÊNG, không phải `PENDING`
+
+Đơn ghi nợ nằm ở `STATUS_DEBT`. Dùng lại `PENDING` cho tiện là hỏng hai chỗ,
+và cả hai đều lọc đúng chuỗi `"PENDING"`:
+
+| Cỗ máy | Hậu quả nếu đơn nợ ở PENDING |
+|---|---|
+| `cancel_expired_pending_orders` | Hủy sạch đơn nợ quá hạn và **hoàn tồn kho** số hàng khách đã cầm về. Job đang TẮT mặc định nên quả mìn này nằm im chờ ngày ai đó bật. |
+| `close_shift` | Không cho đóng ca khi còn đơn PENDING tiền mặt → **thu ngân không bao giờ kết ca được**, vì đơn nợ treo hàng tuần là bình thường. Quả này nổ ngay ngày đầu. |
+
+`tests/test_cong_no.py` có hai test mang tên
+`test_job_tu_huy_don_treo_KHONG_dung_toi_don_no` và
+`test_don_no_khong_chan_ket_ca` để canh đúng chuyện này — đổi `STATUS_DEBT` về
+`PENDING` là chúng đỏ.
+
+**Năm điều bắt buộc giữ:**
+
+**Đơn nợ bắt buộc có `customer_id`.** Nợ mà không biết ai nợ thì không đòi được.
+
+**`payment_method` được chốt danh sách** (`PAYMENT_METHODS`). Trước F4 trường này
+không kiểm gì cả — client gửi chuỗi nào cũng lưu thẳng vào DB. Có hình thức mang
+hệ quả tài chính thật thì không để mở như vậy được nữa.
+
+**Tiền thu nợ cộng vào `paid_amount` / `cash_paid_amount`** — đúng hai cột mà
+`payment_summary` đang đọc, chứ không dựng bộ đếm thứ hai. Hai nguồn số liệu về
+cùng một khoản tiền là chỉ chờ ngày lệch.
+
+**`DEBT_CASH` đã khai vào `CASH_PAYMENT_IN_TYPES`** của `shift_service`, nên tiền
+mặt trả nợ tự vào két đúng ca. **Đừng** thêm `CashMovement` cho khoản này, sẽ
+cộng hai lần.
+
+**Đơn nợ đã thu một phần thì KHÔNG hủy được.** Hủy sẽ hoàn tồn kho số hàng khách
+đã cầm về, và biến khoản đã thu thành tiền vô chủ — nằm trong két nhưng không
+thuộc đơn nào.
+
+**Doanh thu vẫn chỉ tính đơn `PAID`.** Nợ chưa thu KHÔNG vào doanh thu; nó đứng
+riêng ở `receivable_amount`. Con số đó cố ý **không lọc theo khoảng ngày** — nợ
+là số dư tại thời điểm hiện tại, không phải phát sinh trong kỳ.
+
+Hạn mức (`customers.credit_limit`): `NULL` = không giới hạn, `0` = cấm nợ hoàn
+toàn. Hai giá trị đó khác nhau, đừng gộp. Kiểm hạn mức nằm **sau**
+`_lock_shop_for_order` nên hai đơn nợ cùng lúc của một khách không cùng nhìn một
+số dư cũ rồi cùng lọt.
+
+Còn thiếu: webhook ngân hàng chưa nhận thanh toán cho đơn `DEBT`
+(`WEBHOOK_PAY_FROM` vẫn chỉ có `PENDING`). Đơn nợ không sinh mã QR nên khách
+không có đường chuyển khoản kèm mã đơn; thu nợ chuyển khoản đi qua endpoint
+`debt-payment` và người bán tự đối chiếu.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

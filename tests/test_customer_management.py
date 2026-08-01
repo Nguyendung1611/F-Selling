@@ -20,7 +20,11 @@ def test_tao_khach_du_truong(client):
     )
     assert res.status_code == 200, res.text
     body = res.json()
-    assert set(body.keys()) == {"id", "shop_id", "name", "phone", "address", "note"}
+    assert set(body.keys()) == {
+        "id", "shop_id", "name", "phone", "address", "note",
+        # F4: trần công nợ. None = không giới hạn (mặc định).
+        "credit_limit",
+    }
     assert body["name"] == "Trần B"
     assert body["address"] == "12 Lê Lợi"
     assert body["note"] == "thích cà phê"

@@ -6,6 +6,7 @@ from ..dependencies import get_current_user, get_db
 from ..schemas.order import (
     CashPayment,
     CashTopup,
+    DebtPayment,
     OrderCreate,
     OrderReturnCreate,
     RefundComplete,
@@ -42,6 +43,16 @@ def get_order_detail(
 ):
     chi_tiet = order_service.get_order_detail(db, current_user, order_id)
     return return_service.bo_sung_thong_tin_tra_hang(db, chi_tiet)
+
+
+@router.post("/{order_id}/debt-payment")
+def debt_payment(
+    order_id: int,
+    payload: DebtPayment,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return order_service.debt_payment(db, current_user, order_id, payload)
 
 
 @router.post("/{order_id}/returns")

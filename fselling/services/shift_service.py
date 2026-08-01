@@ -36,7 +36,10 @@ DIRECTION_OUT = "OUT"
 
 # order_service hiện dùng CASH_TOPUP cho cả lần thu tiền mặt đủ của đơn và lần
 # bù thiếu. Giữ thêm hai tên tường minh để ledger vẫn đúng khi tách loại sau.
-CASH_PAYMENT_IN_TYPES = ("CASH_TOPUP", "CASH_IN", "SALE_CASH")
+# DEBT_CASH là tiền mặt khách mang tới trả nợ. Khai vào đây là `_expected_cash`
+# tự cộng vào két của đúng ca đã thu - không cần thêm CashMovement, và cũng
+# không được thêm, kẻo cộng hai lần.
+CASH_PAYMENT_IN_TYPES = ("CASH_TOPUP", "CASH_IN", "SALE_CASH", "DEBT_CASH")
 # RETURN_CASH là tiền mặt trả lại khách khi khách mang hàng trả. Ghi vào đây là
 # đủ để tiền ra khỏi két được tính vào `_expected_cash` của đúng ca đó - không
 # cần thêm CashMovement, và cũng không được thêm, kẻo trừ hai lần.

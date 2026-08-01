@@ -78,6 +78,26 @@ def _loc_khoang_ngay(
     return query
 
 
+def _cong_no_phai_thu(db: Session, shop_id: int) -> float:
+    """Tổng tiền khách còn nợ shop, tại thời điểm hiện tại."""
+    rows = (
+        db.query(
+            models.Order.total_amount,
+            models.Order.paid_amount,
+            models.Order.cash_paid_amount,
+        )
+        .filter(
+            models.Order.shop_id == shop_id,
+            models.Order.status == order_service.STATUS_DEBT,
+        )
+        .all()
+    )
+    return sum(
+        max(float(tong or 0) - float(bank or 0) - float(tien_mat or 0), 0.0)
+        for tong, bank, tien_mat in rows
+    )
+
+
 def _phieu_tra_trong_ky(
     db: Session, shop_id: int, tu_ngay: Optional[str], den_ngay: Optional[str]
 ):
@@ -424,6 +444,11 @@ def shop_stats(
         # người dùng đã quen đọc.
         "returned_amount": tra_hang["returned_amount"],
         "net_revenue": total_rev - tra_hang["returned_amount"],
+        # F4: tổng tiền khách còn nợ. CỐ Ý đứng riêng, KHÔNG cộng vào doanh thu:
+        # doanh thu ở đây là tiền đã thực thu, còn đây là tiền mới hứa trả.
+        # Cũng CỐ Ý không lọc theo khoảng ngày - nợ là số dư tại thời điểm hiện
+        # tại, không phải phát sinh trong kỳ.
+        "receivable_amount": _cong_no_phai_thu(db, shop_id),
     }
     # MANAGER có PERMISSION_REPORT nên vẫn xem được doanh thu, nhưng lãi thì
     # không: biết lãi là suy ra được giá vốn. Khi không có quyền thì BỎ HẲN các

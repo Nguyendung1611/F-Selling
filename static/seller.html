@@ -688,6 +688,7 @@
                     <div class="form-group"><label data-i18n="seller.fields.phone_required">Số điện thoại *</label><div class="input-wrapper"><i class="ph ph-phone"></i><input type="text" id="custPhone" placeholder="SĐT" data-i18n-placeholder="seller.fields.phone_short"></div></div>
                     <div class="form-group"><label data-i18n="seller.fields.address">Địa chỉ</label><div class="input-wrapper"><i class="ph ph-map-pin"></i><input type="text" id="custAddress" placeholder="Địa chỉ (tùy chọn)" data-i18n-placeholder="seller.customers.address_placeholder"></div></div>
                     <div class="form-group"><label data-i18n="seller.fields.note">Ghi chú</label><div class="input-wrapper"><i class="ph ph-note"></i><input type="text" id="custNote" placeholder="Ghi chú (tùy chọn)" data-i18n-placeholder="seller.customers.note_placeholder"></div></div>
+                    <div class="form-group"><label data-i18n="seller.customers.credit_limit">Hạn mức nợ (VNĐ)</label><div class="input-wrapper"><i class="ph ph-notebook"></i><input type="number" id="custCreditLimit" placeholder="Để trống = không giới hạn" data-i18n-placeholder="seller.customers.credit_limit_placeholder"></div><small style="color:#64748B; font-size:0.75rem;" data-i18n="seller.customers.credit_limit_hint">Để trống là không giới hạn. Đặt 0 là không cho khách này nợ.</small></div>
                     <button id="btnSaveCustomer" onclick="saveCustomer()" style="width: 100%;"><i class="ph ph-plus"></i> <span data-seller-action-label="customer-save">Lưu khách</span></button>
                     <button id="btnCancelEditCustomer" class="btn-outline" onclick="cancelEditCustomer()" style="width: 100%; margin-top: 0.5rem; display: none;" data-i18n="common.cancel">Hủy</button>
                 </div>
@@ -1009,14 +1010,14 @@
     </div>
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
-    <script src="/js/locales/common.js?v=20260731-i18n4"></script>
-    <script src="/js/locales/seller.js?v=20260801-tra-hang"></script>
+    <script src="/js/locales/common.js?v=20260801-cong-no"></script>
+    <script src="/js/locales/seller.js?v=20260801-cong-no"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
-    <script src="/js/api.js?v=20260731-i18n4"></script>
+    <script src="/js/api.js?v=20260801-cong-no"></script>
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260801-tra-hang"></script>
+    <script src="/js/seller.js?v=20260801-cong-no"></script>
 </body>
 </html>

@@ -3,6 +3,7 @@ import datetime
 from sqlalchemy import (
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -21,6 +22,10 @@ class Customer(Base):
     phone = Column(String, index=True)
     address = Column(String, nullable=True)
     note = Column(String, nullable=True)
+    # F4: trần công nợ của khách này. NULL = không giới hạn (mặc định, giữ
+    # nguyên hành vi cho mọi khách đã có). Chặn ở lúc TẠO đơn nợ mới; đơn nợ đã
+    # phát sinh rồi thì hạ hạn mức không làm nó biến mất.
+    credit_limit = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     shop = relationship("Shop")
