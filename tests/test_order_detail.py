@@ -47,10 +47,24 @@ def test_chi_tiet_don_mot_san_pham(client):
         "subtotal",
         "items",
         "payments",
+        # F2: lịch sử trả hàng của đơn (rỗng khi chưa ai trả).
+        "returns",
+        "returned_total",
     } | PAYMENT_SUMMARY_KEYS
     assert len(body["items"]) == 1
     dong = body["items"][0]
-    assert set(dong.keys()) == {"product_id", "product_name", "price", "quantity", "line_total"}
+    assert set(dong.keys()) == {
+        "id",
+        "product_id",
+        "product_name",
+        "price",
+        "quantity",
+        "line_total",
+        # F2: phiếu trả định danh theo dòng đơn, và giao diện cần biết còn trả
+        # được bao nhiêu để không cho gõ quá số đã bán.
+        "returned_quantity",
+        "returnable_quantity",
+    }
     assert dong["product_id"] == ctx["product"]["id"]
     assert dong["price"] == 100000, "Giá lấy từ DB, không phải giá client gửi"
     assert dong["quantity"] == 2

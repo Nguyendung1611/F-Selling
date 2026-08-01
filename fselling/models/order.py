@@ -58,6 +58,7 @@ class Order(Base):
     payments = relationship("OrderPayment", back_populates="order")
     created_by = relationship("User", foreign_keys=[created_by_user_id])
     shift = relationship("CashShift", back_populates="orders")
+    returns = relationship("OrderReturn", back_populates="order")
 
 
 class OrderItem(Base):
@@ -79,6 +80,83 @@ class OrderItem(Base):
     cost_price = Column(Float, nullable=True)
     quantity = Column(Integer)
     order = relationship("Order", back_populates="items")
+
+
+class OrderReturn(Base):
+    """Một lần khách mang hàng trả lại. Một đơn có thể có nhiều lần.
+
+    CỐ Ý tách khỏi cụm `refund_*` trên `orders`: cụm đó là chu kỳ hoàn khoản
+    khách CHUYỂN THỪA (một lần duy nhất, `refund_due_amount` là số vô hướng).
+    Trả hàng là chuyện khác hẳn và xảy ra nhiều lần, nên phải có bảng riêng.
+
+    Đơn giữ nguyên trạng thái `PAID`: hóa đơn đã xuất là sự thật lịch sử, việc
+    khách trả lại là một sự kiện xảy ra SAU đó chứ không xóa đi lần bán.
+
+    `shop_id` lặp lại từ đơn để báo cáo lọc theo shop + ngày trả mà không phải
+    join; ngày ở đây là ngày TRẢ, không phải ngày bán.
+    """
+
+    __tablename__ = "order_returns"
+    __table_args__ = (
+        Index("ix_order_returns_order_id", "order_id"),
+        Index("ix_order_returns_shop_id_created_at", "shop_id", "created_at"),
+        Index(
+            "ux_order_returns_idempotency_key", "idempotency_key", unique=True
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False)
+    shop_id = Column(Integer, ForeignKey("shops.id"), nullable=False)
+    # Khóa chống bấm lặp nằm ở ĐÂY chứ không mượn của `order_payments`: phiếu
+    # trả có tiền hoàn bằng 0 (đơn giảm giá 100%) không sinh dòng ledger nào,
+    # mà vẫn phải chặn được lần bấm thứ hai.
+    idempotency_key = Column(String(128), nullable=True)
+    # Tiền thực hoàn cho khách, ĐÃ trừ phần giảm giá voucher phân bổ cho các
+    # dòng bị trả. Hoàn theo giá niêm yết là shop chịu trọn phần đã giảm.
+    refund_amount = Column(Float, nullable=False, default=0)
+    refund_method = Column(String(20), nullable=True)   # cash | transfer | None khi 0đ
+    reason = Column(String(200), nullable=True)
+    note = Column(String(500), nullable=True)
+    reference = Column(String(128), nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    shift_id = Column(Integer, ForeignKey("cash_shifts.id"), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    order = relationship("Order", back_populates="returns")
+    items = relationship("OrderReturnItem", back_populates="parent_return")
+
+
+class OrderReturnItem(Base):
+    """Một dòng hàng trong phiếu trả.
+
+    `unit_price` và `cost_price` đều là ảnh chụp lấy từ `order_items` lúc trả,
+    cùng lý do với ảnh chụp lúc bán: giá bán và giá vốn sau này đổi thì con số
+    của lần trả này không được đổi theo.
+
+    `restocked` phải là quyết định của TỪNG DÒNG. Áo khách mặc bẩn, sữa hết hạn
+    hay hộp móp thì vẫn hoàn tiền nhưng KHÔNG được cộng lại vào tồn bán được -
+    nếu không POS sẽ bán tiếp món đó cho người khác.
+    """
+
+    __tablename__ = "order_return_items"
+    __table_args__ = (
+        Index("ix_order_return_items_return_id", "return_id"),
+        Index("ix_order_return_items_order_item_id", "order_item_id"),
+    )
+    id = Column(Integer, primary_key=True)
+    return_id = Column(Integer, ForeignKey("order_returns.id"), nullable=False)
+    order_item_id = Column(Integer, ForeignKey("order_items.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
+    product_name = Column(String, nullable=True)
+    quantity = Column(Integer, nullable=False)
+    unit_price = Column(Float, nullable=False)
+    # Tiền hoàn của riêng dòng này sau khi phân bổ giảm giá. Tổng các dòng bằng
+    # đúng `refund_amount` của phiếu.
+    refund_amount = Column(Float, nullable=False, default=0)
+    cost_price = Column(Float, nullable=True)
+    restocked = Column(Integer, nullable=False, default=1)
+
+    parent_return = relationship("OrderReturn", back_populates="items")
 
 
 class OrderPayment(Base):

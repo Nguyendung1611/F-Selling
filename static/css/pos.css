@@ -509,6 +509,18 @@ button:disabled {
     border-color: #C2410C;
 }
 
+/* Modal trả hàng là modal DUY NHẤT có nội dung dài theo số dòng của đơn: đơn 8
+   món đẩy nút "Xác nhận trả hàng" xuống dưới tầm nhìn, và thu ngân đang đứng
+   trước mặt khách sẽ tưởng là bấm không được. Các modal ca có nội dung cố định
+   nên không cần, giữ nguyên. */
+#returnModal .pos-modal-actions {
+    position: sticky;
+    bottom: -1.2rem;            /* bù đúng padding dưới của .pos-modal-card */
+    margin-bottom: -1.2rem;
+    padding: 0.75rem 0 1.2rem;
+    background: #0F172A;        /* nền của card, để dòng bên dưới không lộ ra */
+}
+
 .btn-danger {
     background: #DC2626;
 }

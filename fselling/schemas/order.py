@@ -58,6 +58,37 @@ class CashPayment(BaseModel):
     tendered_amount: float
 
 
+class OrderReturnItemCreate(BaseModel):
+    """Một dòng khách mang trả.
+
+    Định danh bằng `order_item_id` chứ không phải `product_id`: dòng đơn mới là
+    thứ giữ giá bán và giá vốn đã chốt lúc bán, và là mốc để biết còn được trả
+    bao nhiêu.
+    """
+
+    order_item_id: int
+    quantity: int
+    # Hàng còn tốt thì cộng lại tồn kho; hàng hỏng/bẩn/hết hạn thì vẫn hoàn tiền
+    # nhưng KHÔNG được quay lại kệ.
+    restock: bool = True
+
+
+class OrderReturnCreate(BaseModel):
+    """Một lần nhận hàng trả. Server tự tính tiền hoàn, client không gửi số tiền.
+
+    `method` được phép bỏ trống khi tiền hoàn bằng 0 (đơn giảm giá 100%).
+    """
+
+    items: List[OrderReturnItemCreate]
+    method: Optional[Literal["cash", "transfer"]] = None
+    reason: Optional[str] = None
+    note: Optional[str] = None
+    reference: Optional[str] = None
+    # Một id cho đúng MỘT lần bấm nhận trả. Retry mạng dùng lại id này nên không
+    # thể vô tình tạo hai phiếu trả cho cùng một lần khách mang hàng đến.
+    operation_id: str = Field(min_length=8, max_length=128)
+
+
 class RefundComplete(BaseModel):
     """Ghi nhận shop đã hoàn đúng toàn bộ khoản đang chờ.
 

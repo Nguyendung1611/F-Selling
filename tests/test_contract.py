@@ -86,6 +86,9 @@ ROUTES_BO_SUNG = {
     # F1: giá vốn tách riêng khỏi GET /api/products/{shop_id} vì endpoint đó
     # KHÔNG yêu cầu đăng nhập. Route này có xác thực và chỉ chủ shop/ADMIN xem.
     ("GET", "/api/products/{shop_id}/costs"),
+    # F2: nhận hàng khách trả. Khác hủy đơn (đơn chưa thanh toán) và khác
+    # refund-complete (hoàn khoản chuyển thừa, hàng vẫn của khách).
+    ("POST", "/api/orders/{order_id}/returns"),
 }
 
 
@@ -207,3 +210,26 @@ def test_dashboard_seller_giu_nguyen_contract(client):
         "total_revenue", "orders", "page", "per_page", "total_orders", "has_more",
         "reconciliation_count",
     }
+
+
+# ---------- Cache-busting cho file tĩnh ----------
+def test_moi_file_js_css_deu_co_dau_phien_ban():
+    """Mọi <script src="/js/..."> và <link href="/css/..."> phải kèm `?v=`.
+
+    Trình duyệt cache JS/CSS rất dai (xem CLAUDE.md). Sửa file mà quên đổi dấu
+    phiên bản thì người dùng đang mở sẵn trang sẽ CHẠY CODE CŨ - trong im lặng,
+    không có lỗi nào cả, và mọi tính năng mới coi như không tồn tại với họ.
+    Test này chỉ bắt được ca "thêm file mới mà quên `?v=`"; việc BUMP dấu phiên
+    bản khi sửa file thì không máy nào kiểm hộ được, phải tự nhớ.
+    """
+    import re
+    from pathlib import Path
+
+    static_dir = Path(__file__).resolve().parent.parent / "static"
+    mau = re.compile(r'(?:src|href)="(/(?:js|css)/[^"]+)"')
+    thieu = []
+    for trang in sorted(static_dir.glob("*.html")):
+        for duong_dan in mau.findall(trang.read_text(encoding="utf-8")):
+            if "?v=" not in duong_dan:
+                thieu.append(f"{trang.name}: {duong_dan}")
+    assert not thieu, "File tĩnh thiếu dấu phiên bản: " + ", ".join(thieu)

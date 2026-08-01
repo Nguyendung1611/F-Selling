@@ -1052,6 +1052,10 @@ def get_order_detail(db: Session, current_user: models.User, order_id: int) -> D
         "subtotal": sum((i.price or 0) * (i.quantity or 0) for i in items),
         "items": [
             {
+                # `id` của dòng đơn: phiếu trả hàng định danh theo dòng chứ
+                # không theo sản phẩm, vì dòng mới là nơi giữ giá bán và giá vốn
+                # đã chốt lúc bán.
+                "id": i.id,
                 "product_id": i.product_id,
                 "product_name": i.product_name,
                 "price": i.price,

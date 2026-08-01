@@ -364,6 +364,63 @@ lượng. Hủy đơn hoàn tồn kho đúng số lượng đã trừ, mà số 
 vốn đã chốt, nên bình quân tự khớp lại - chạy lại công thức lúc hoàn mới là cái
 làm lệch.
 
+### 15. Trả hàng khác hẳn hủy đơn và khác hẳn hoàn khoản chuyển thừa
+
+Ba nghiệp vụ rất dễ nhầm, và đã có sẵn hai cái trước khi có cái thứ ba:
+
+| Nghiệp vụ | Đơn ở trạng thái | Hàng | Số lần |
+|---|---|---|---|
+| `cancel_order` | Chưa thanh toán (`PENDING`) | Chưa ra khỏi cửa | 1 |
+| `complete_refund` | Đã thanh toán, khách chuyển THỪA | Vẫn của khách | 1 |
+| `return_service.create_return` | Đã thanh toán (`PAID`) | Quay về shop | **Nhiều** |
+
+**Đơn giữ nguyên `PAID` sau khi trả hàng.** Hóa đơn đã xuất là sự thật lịch sử;
+việc khách trả lại là sự kiện xảy ra sau đó, nằm ở bảng `order_returns` chứ
+không xóa đi lần bán. Nhờ vậy máy trạng thái ở mục 8 không phải mở lại, và mọi
+chỗ đang lọc `status == PAID` (doanh thu, đối soát, Excel) không phải rà lại.
+
+**Cụm `refund_*` trên `orders` KHÔNG dùng cho trả hàng.** Cụm đó là chu kỳ hoàn
+khoản chuyển thừa, chỉ chạy một lần và `refund_due_amount` là số vô hướng. Trả
+hàng có bảng riêng vì xảy ra nhiều lần.
+
+**Bốn điều bắt buộc giữ khi sửa tiếp:**
+
+**Tiền hoàn phải phân bổ giảm giá theo tỷ trọng.** Đơn 100k giảm 10% còn 90k,
+khách trả 1 trong 2 món giá niêm yết 50k thì hoàn **45k**, không phải 50k. Hoàn
+theo giá niêm yết là shop chịu trọn phần đã giảm cho món khách vẫn giữ. Riêng
+ca trả HẾT được xử lý riêng để tổng khớp tuyệt đối - cộng dồn từng dòng đã làm
+tròn có thể lệch vài đồng, mà trả hết thì khách phải nhận đúng số đã trả.
+
+**`restocked` là quyết định của TỪNG DÒNG.** Áo khách mặc bẩn, sữa hết hạn, hộp
+móp: vẫn hoàn tiền nhưng không được cộng lại vào tồn bán được, nếu không POS sẽ
+bán tiếp món đó cho người khác. Trong báo cáo, dòng không nhập lại kho làm lãi
+giảm bằng **toàn bộ** tiền hoàn (mất trắng cả vốn), dòng có nhập lại chỉ giảm
+phần chênh giữa tiền hoàn và giá vốn thu hồi.
+
+**Nhập lại kho KHÔNG chạy lại công thức bình quân.** Số hàng đó ra đi với đúng
+giá vốn đã chốt trên dòng đơn nên khi quay về, đơn giá bình quân tự khớp lại -
+giống hệt lý do ở hủy đơn (mục 13).
+
+**Hoàn tiền mặt bắt buộc có ca OPEN, kể cả chủ shop.** Ledger ghi
+`entry_type = RETURN_CASH` kèm `shift_id`, và `RETURN_CASH` đã được khai vào
+`CASH_PAYMENT_OUT_TYPES` của `shift_service` nên `_expected_cash` tự trừ. **Đừng
+thêm `CashMovement` cho khoản này** - sẽ trừ hai lần.
+
+Điểm phụ thuộc một chiều: `return_service` import `order_service`, không bao giờ
+ngược lại. Chi tiết đơn kèm lịch sử trả được **router ghép hai service** nối
+tiếp (`orders.py::get_order_detail`) để không sinh vòng import.
+
+### 16. Sửa file trong `static/` thì phải bump dấu `?v=`
+
+Mọi `<script>` và `<link>` trong `static/*.html` đều mang query `?v=<ngày>-<mô tả>`.
+Sửa file mà quên đổi dấu đó thì trình duyệt của người dùng **chạy code cũ trong
+im lặng** - không lỗi, không cảnh báo, tính năng mới coi như không tồn tại với
+những người đã từng mở trang. Bản giá vốn (F1) đã bị đúng lỗi này một lần.
+
+`tests/test_contract.py::test_moi_file_js_css_deu_co_dau_phien_ban` chỉ bắt được
+ca thêm file mới mà quên `?v=`; việc BUMP khi sửa file thì không máy nào kiểm hộ
+được, phải tự nhớ.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

@@ -209,6 +209,11 @@ def test_stats_khong_loc_giu_nguyen_contract(client):
         "gross_margin",
         "orders_missing_cost",
         "revenue_missing_cost",
+        "returns_missing_cost",
+        # F2: hàng khách trả lại, tính theo ngày trả. Hai khóa này KHÔNG bị
+        # giới hạn quyền - chỉ số tiền lãi mới nhạy cảm.
+        "returned_amount",
+        "net_revenue",
     }
     assert len(body["trend_labels"]) == 7, "Mặc định vẫn là xu hướng 7 ngày"
 

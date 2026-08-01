@@ -213,4 +213,8 @@ def test_doanh_thu_chi_tinh_don_da_thanh_toan(client):
         "gross_margin",
         "orders_missing_cost",
         "revenue_missing_cost",
+        "returns_missing_cost",
+        # F2: hàng khách trả lại (ngày trả, không phải ngày bán).
+        "returned_amount",
+        "net_revenue",
     }

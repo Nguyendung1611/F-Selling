@@ -158,6 +158,19 @@ _MIGRATIONS = [
     # và nói ra, chứ không được đoán.
     "ALTER TABLE products ADD COLUMN cost_price FLOAT",
     "ALTER TABLE order_items ADD COLUMN cost_price FLOAT",
+    # F2: trả hàng. Hai bảng order_returns/order_return_items do create_all()
+    # tạo mới nên không cần ALTER; các index dưới đây phục vụ báo cáo lọc theo
+    # shop + NGÀY TRẢ và tra lịch sử trả của một đơn.
+    "CREATE INDEX IF NOT EXISTS ix_order_returns_order_id "
+    "ON order_returns(order_id)",
+    "CREATE INDEX IF NOT EXISTS ix_order_returns_shop_id_created_at "
+    "ON order_returns(shop_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_order_return_items_return_id "
+    "ON order_return_items(return_id)",
+    "CREATE INDEX IF NOT EXISTS ix_order_return_items_order_item_id "
+    "ON order_return_items(order_item_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_order_returns_idempotency_key "
+    "ON order_returns(idempotency_key)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
@@ -172,6 +185,7 @@ _REQUIRED_INDEXES = [
     "ux_orders_operation_id",
     "ux_cash_shifts_shop_user_open",
     "ux_cash_movements_operation_id",
+    "ux_order_returns_idempotency_key",
 ]
 
 _INDEX_EXISTS = (

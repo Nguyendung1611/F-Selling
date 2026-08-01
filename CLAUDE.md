@@ -34,6 +34,13 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   nguyên tồn, KHÔNG coi là 0. Và phải so `stock_snapshot` với tồn hiện tại để
   không nuốt mất số hàng vừa bán trong lúc đếm.
 - Tồn kho đổi qua `adjust_stock` (cộng trừ theo delta), không ghi đè.
+- **Trả hàng không phải hủy đơn.** Hủy là đơn chưa thanh toán; trả hàng là đơn
+  `PAID`, hàng quay về, và xảy ra được nhiều lần. Đơn **giữ nguyên `PAID`** sau
+  khi trả — việc trả nằm ở bảng `order_returns`. Tiền hoàn phải phân bổ giảm giá
+  theo tỷ trọng (trả 1 trong 2 món của đơn giảm 10% thì hoàn 45k chứ không 50k).
+  Hàng hỏng thì `restock=false`: vẫn hoàn tiền nhưng không lên kệ lại. Hoàn tiền
+  mặt bắt buộc có ca OPEN, ghi `RETURN_CASH` vào ledger — **đừng** thêm
+  `CashMovement`, sẽ trừ két hai lần.
 - **Giá vốn `NULL` không phải `0`.** `NULL` = chưa ai khai; `0` = hàng tặng,
   lãi bằng cả giá bán. Gộp lại là mọi sản phẩm cũ bỗng có lãi bằng giá bán và
   chủ shop tin là thật. Giá vốn phải **chốt vào `order_items` lúc bán**, và báo
@@ -71,6 +78,9 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   thẳng file vào `static/js/`.
 - **Trình duyệt cache JS rất dai.** Sửa xong mà test không thấy đổi thì gần như
   chắc chắn là cache — hard reload (`Ctrl + Shift + R`) trước khi kết luận.
+- **Sửa file trong `static/` thì phải bump `?v=` ở thẻ `<script>`/`<link>`
+  tương ứng trong `static/*.html`.** Quên là người dùng chạy code cũ trong im
+  lặng, không lỗi gì cả. Đã bị đúng lỗi này một lần ở bản giá vốn.
 
 **Bảo mật**
 

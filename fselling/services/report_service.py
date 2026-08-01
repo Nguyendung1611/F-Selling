@@ -53,8 +53,17 @@ def _parse_ngay(chuoi: Optional[str], ten_truong: str) -> Optional[datetime]:
         )
 
 
-def _loc_khoang_ngay(query, tu_ngay: Optional[str], den_ngay: Optional[str]):
-    """Lọc theo created_at. `den_ngay` tính trọn cả ngày đó (đến 23:59:59)."""
+def _loc_khoang_ngay(
+    query, tu_ngay: Optional[str], den_ngay: Optional[str], cot=None
+):
+    """Lọc theo created_at. `den_ngay` tính trọn cả ngày đó (đến 23:59:59).
+
+    `cot` cho phép lọc bảng khác: phiếu trả hàng phải tính theo NGÀY TRẢ, không
+    phải ngày bán - nếu không thì một lần trả hôm nay sẽ đi sửa ngược con số
+    lãi của tháng trước, thứ đã chốt sổ rồi.
+    """
+    if cot is None:
+        cot = models.Order.created_at
     bat_dau = _parse_ngay(tu_ngay, "tu_ngay")
     ket_thuc = _parse_ngay(den_ngay, "den_ngay")
     if bat_dau and ket_thuc and bat_dau > ket_thuc:
@@ -63,10 +72,80 @@ def _loc_khoang_ngay(query, tu_ngay: Optional[str], den_ngay: Optional[str]):
             detail=tr("tu_ngay không được lớn hơn den_ngay"),
         )
     if bat_dau:
-        query = query.filter(models.Order.created_at >= bat_dau)
+        query = query.filter(cot >= bat_dau)
     if ket_thuc:
-        query = query.filter(models.Order.created_at < ket_thuc + timedelta(days=1))
+        query = query.filter(cot < ket_thuc + timedelta(days=1))
     return query
+
+
+def _phieu_tra_trong_ky(
+    db: Session, shop_id: int, tu_ngay: Optional[str], den_ngay: Optional[str]
+):
+    """Query các phiếu trả hàng của shop theo NGÀY TRẢ."""
+    return _loc_khoang_ngay(
+        db.query(models.OrderReturn).filter(
+            models.OrderReturn.shop_id == shop_id
+        ),
+        tu_ngay,
+        den_ngay,
+        cot=models.OrderReturn.created_at,
+    )
+
+
+def _tra_hang_anh_huong_lai(
+    db: Session, shop_id: int, tu_ngay: Optional[str], den_ngay: Optional[str]
+) -> Dict[str, Any]:
+    """Phần lãi bị mất vì hàng trả lại, tính theo NGÀY TRẢ.
+
+    Lãi giảm đúng bằng: tiền đã hoàn - giá vốn thu hồi được.
+
+    "Thu hồi được" chỉ tính những dòng ĐÃ NHẬP LẠI KHO. Hàng hỏng, bẩn, hết hạn
+    không quay lại kệ nghĩa là shop mất trắng cả tiền hoàn lẫn vốn của món đó -
+    lãi phải giảm bằng toàn bộ tiền hoàn. Tính gộp cả hai kiểu là báo lãi cao
+    hơn thực tế đúng bằng giá vốn số hàng đã bỏ đi.
+
+    Phiếu nào còn dòng nhập lại kho mà không biết giá vốn thì bị loại khỏi phần
+    điều chỉnh và đếm riêng - cùng nguyên tắc "không đoán NULL là 0" ở `_lai_gop`.
+    """
+    phieu = _phieu_tra_trong_ky(db, shop_id, tu_ngay, den_ngay).all()
+    tong_hoan = sum(float(p.refund_amount or 0) for p in phieu)
+    if not phieu:
+        return {
+            "returned_amount": 0.0,
+            "profit_reduction": 0.0,
+            "returns_missing_cost": 0,
+        }
+
+    ids = [p.id for p in phieu]
+    dong_theo_phieu: Dict[int, List[models.OrderReturnItem]] = {}
+    for d in (
+        db.query(models.OrderReturnItem)
+        .filter(models.OrderReturnItem.return_id.in_(ids))
+        .all()
+    ):
+        dong_theo_phieu.setdefault(d.return_id, []).append(d)
+
+    giam_lai = 0.0
+    thieu_gia_von = 0
+    for p in phieu:
+        dong = dong_theo_phieu.get(p.id, [])
+        # Chỉ dòng nhập lại kho mới cần biết giá vốn; dòng bỏ đi thì mất trắng,
+        # không phải tra giá vốn làm gì.
+        if any(d.restocked and d.cost_price is None for d in dong):
+            thieu_gia_von += 1
+            continue
+        von_thu_hoi = sum(
+            float(d.cost_price or 0) * int(d.quantity or 0)
+            for d in dong
+            if d.restocked
+        )
+        giam_lai += float(p.refund_amount or 0) - von_thu_hoi
+
+    return {
+        "returned_amount": tong_hoan,
+        "profit_reduction": giam_lai,
+        "returns_missing_cost": thieu_gia_von,
+    }
 
 
 def _lai_gop(db: Session, paid_orders_subquery) -> Dict[str, Any]:
@@ -332,6 +411,7 @@ def shop_stats(
     trend_labels = sorted(revenue_by_date.keys())
     trend_data = [revenue_by_date[k] for k in trend_labels]
 
+    tra_hang = _tra_hang_anh_huong_lai(db, shop_id, tu_ngay, den_ngay)
     ket_qua = {
         "total_revenue": total_rev,
         "total_orders": total_orders,
@@ -339,13 +419,29 @@ def shop_stats(
         "top_products": top_products,
         "trend_labels": trend_labels,
         "trend_data": trend_data,
+        # `total_revenue` giữ nguyên nghĩa cũ là tiền bán ra trong kỳ; phần
+        # khách trả lại đứng riêng để không âm thầm đổi nghĩa một con số mà
+        # người dùng đã quen đọc.
+        "returned_amount": tra_hang["returned_amount"],
+        "net_revenue": total_rev - tra_hang["returned_amount"],
     }
     # MANAGER có PERMISSION_REPORT nên vẫn xem được doanh thu, nhưng lãi thì
     # không: biết lãi là suy ra được giá vốn. Khi không có quyền thì BỎ HẲN các
     # field này khỏi phản hồi, không trả 0 - ở đây 0 là một con số có nghĩa
     # (bán đúng bằng giá vốn), trả 0 là nói dối chứ không phải giấu.
     if has_cost_visibility(shop, current_user):
-        ket_qua.update(_lai_gop(db, paid_orders_subquery))
+        lai = _lai_gop(db, paid_orders_subquery)
+        lai["gross_profit"] -= tra_hang["profit_reduction"]
+        lai["returns_missing_cost"] = tra_hang["returns_missing_cost"]
+        # Tỷ suất tính lại trên doanh thu ĐÃ TRỪ hàng trả: giữ tử số mới mà mẫu
+        # số cũ sẽ ra một con số không nói lên điều gì.
+        mau_so = lai["revenue_with_cost"] - tra_hang["returned_amount"]
+        lai["gross_margin"] = (
+            (lai["gross_profit"] / mau_so * 100)
+            if mau_so > order_service.MONEY_EPSILON
+            else None
+        )
+        ket_qua.update(lai)
     return ket_qua
 
 

@@ -2464,8 +2464,58 @@ function renderChiTietDon(d) {
     }
     tongKet += `<div style="font-size: 1.2rem; margin-top: 0.5rem;">${escapeHtml(t('seller.order_detail.grand_total'))}: <strong>${escapeHtml(dinhDangTienDoiSoat(d.total_amount || 0))}</strong></div>`;
     document.getElementById('odTongKet').innerHTML = tongKet;
+    veLichSuTraHang(d);
 
     document.getElementById('orderDetailModal').style.display = 'flex';
+}
+
+/** Lịch sử khách trả hàng của đơn, hiện ngay dưới phần tổng kết.
+ *
+ *  Chỉ ĐỌC. Việc nhận trả nằm ở POS - đó mới là chỗ thu ngân đứng khi khách
+ *  mang hàng đến, và là nơi có ca thu ngân để trừ tiền mặt ra khỏi két. */
+function veLichSuTraHang(d) {
+    const khoi = document.getElementById('odTraHang');
+    if (!khoi) return;
+    const phieu = d.returns || [];
+    if (!phieu.length) {
+        khoi.style.display = 'none';
+        khoi.innerHTML = '';
+        return;
+    }
+
+    let html = `<div style="border-top:1px solid var(--border-color); padding-top:0.75rem;">
+        <strong style="color:#B91C1C;">${escapeHtml(t('seller.order_detail.returns_title'))}</strong>
+        <div style="margin-top:0.35rem; font-weight:600;">
+            ${escapeHtml(t('seller.order_detail.returned_total', {
+                amount: dinhDangTienDoiSoat(d.returned_total || 0)
+            }))}
+        </div>`;
+    phieu.forEach(p => {
+        const cach = p.refund_method
+            ? t(p.refund_method === 'cash'
+                ? 'common.payment.cash'
+                : 'common.payment.transfer')
+            : '—';
+        html += `<div style="margin-top:0.5rem; font-size:0.85rem; color:#475569;">
+            <div>${escapeHtml(dinhDangNgayGio(p.created_at))} • ${escapeHtml(cach)}
+                • <strong>${escapeHtml(dinhDangTienDoiSoat(p.refund_amount || 0))}</strong></div>`;
+        (p.items || []).forEach(i => {
+            // Nói rõ dòng nào KHÔNG quay lại kho: đó là hàng hỏng, và là phần
+            // chênh giữa tiền hoàn với vốn thu hồi được trong báo cáo lãi.
+            const kho = i.restocked
+                ? ''
+                : ` <span style="color:#B45309;">(${escapeHtml(t('seller.order_detail.not_restocked'))})</span>`;
+            html += `<div style="padding-left:0.75rem;">• ${escapeHtml(i.product_name || '')}
+                × ${escapeHtml(dinhDangSoSeller(i.quantity))}${kho}</div>`;
+        });
+        if (p.reason) {
+            html += `<div style="padding-left:0.75rem; font-style:italic;">${escapeHtml(p.reason)}</div>`;
+        }
+        html += '</div>';
+    });
+    html += '</div>';
+    khoi.innerHTML = html;
+    khoi.style.display = 'block';
 }
 
 async function xemChiTietDon(orderId) {

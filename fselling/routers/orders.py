@@ -3,8 +3,14 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..dependencies import get_current_user, get_db
-from ..schemas.order import CashPayment, CashTopup, OrderCreate, RefundComplete
-from ..services import order_service
+from ..schemas.order import (
+    CashPayment,
+    CashTopup,
+    OrderCreate,
+    OrderReturnCreate,
+    RefundComplete,
+)
+from ..services import order_service, return_service
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
@@ -34,7 +40,18 @@ def get_order_detail(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return order_service.get_order_detail(db, current_user, order_id)
+    chi_tiet = order_service.get_order_detail(db, current_user, order_id)
+    return return_service.bo_sung_thong_tin_tra_hang(db, chi_tiet)
+
+
+@router.post("/{order_id}/returns")
+def create_order_return(
+    order_id: int,
+    payload: OrderReturnCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return return_service.create_return(db, current_user, order_id, payload)
 
 
 @router.post("/{order_id}/pay")

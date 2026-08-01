@@ -1701,6 +1701,202 @@ function resetPOS() {
     loadProducts(); // refresh stock
 }
 
+// ===== F2: khách trả hàng =====
+//
+// Ba việc khác nhau, đừng nhầm: HỦY đơn là đơn chưa thanh toán; THU BÙ là đơn
+// chuyển thiếu; TRẢ HÀNG là hàng quay về và tiền đi ra, chỉ áp dụng cho đơn đã
+// thanh toán và làm được nhiều lần trên cùng một đơn.
+
+let donDangTra = null;          // chi tiết đơn đang mở trong modal trả hàng
+let maThaoTacTraHang = null;    // một mã cho đúng một lần bấm, retry dùng lại
+
+function moModalTraHang() {
+    donDangTra = null;
+    maThaoTacTraHang = null;
+    document.getElementById('returnOrderId').value = '';
+    document.getElementById('returnMsg').innerText = '';
+    document.getElementById('returnBody').style.display = 'none';
+    document.getElementById('btnSubmitReturn').disabled = true;
+    hienModalCa('returnModal', 'returnOrderId');
+}
+
+function dongModalTraHang() {
+    donDangTra = null;
+    maThaoTacTraHang = null;
+    dongModalCa('returnModal');
+}
+
+async function timDonDeTra() {
+    const raw = (document.getElementById('returnOrderId').value || '').trim();
+    const loi = document.getElementById('returnMsg');
+    const than = document.getElementById('returnBody');
+    loi.innerText = '';
+    than.style.display = 'none';
+    document.getElementById('btnSubmitReturn').disabled = true;
+    donDangTra = null;
+
+    const orderId = parseInt(raw, 10);
+    if (!raw || isNaN(orderId) || orderId <= 0) {
+        loi.innerText = dich('pos.return.order_id_required');
+        return;
+    }
+    try {
+        const d = await apiCall(`/orders/${orderId}/detail`);
+        if (String(d.shop_id) !== String(currentShopId)) {
+            loi.innerText = dich('pos.return.other_shop');
+            return;
+        }
+        if (d.status !== 'PAID') {
+            loi.innerText = dich('pos.return.not_paid');
+            return;
+        }
+        const conTraDuoc = (d.items || [])
+            .some(i => (i.returnable_quantity || 0) > 0);
+        if (!conTraDuoc) {
+            loi.innerText = dich('pos.return.nothing_left');
+            return;
+        }
+        donDangTra = d;
+        // Mã thao tác gắn với LẦN MỞ phiếu này. Bấm xác nhận hai lần vì mạng
+        // chậm sẽ dùng lại đúng mã đó nên server chỉ ghi một phiếu.
+        maThaoTacTraHang = taoOperationId();
+        veFormTraHang(d);
+        than.style.display = 'block';
+    } catch (e) {
+        loi.innerText = e.status === 404
+            ? dich('pos.return.not_found')
+            : (e.message || dich('pos.return.not_found'));
+    }
+}
+
+function veFormTraHang(d) {
+    const thongTin = document.getElementById('returnOrderInfo');
+    thongTin.innerText = dich('pos.return.order_info', {
+        id: d.id,
+        total: dinhDangTien(d.total_amount || 0),
+        date: dinhDangNgayGioHoaDon(d.created_at)
+    });
+
+    let html = '';
+    (d.items || []).forEach(i => {
+        const conLai = i.returnable_quantity || 0;
+        if (conLai <= 0) return;
+        html += `<div class="return-line" style="border:1px solid #334155; border-radius:8px; padding:0.5rem; margin-bottom:0.5rem;">
+            <div style="display:flex; justify-content:space-between; gap:0.5rem;">
+                <strong>${escapeHtml(i.product_name || '')}</strong>
+                <span style="white-space:nowrap;">${escapeHtml(dinhDangTien(i.price || 0))}</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.75rem; margin-top:0.4rem; flex-wrap:wrap;">
+                <label style="display:flex; align-items:center; gap:0.35rem; margin:0;">
+                    <span style="font-size:0.8rem; color:#94A3B8;">${escapeHtml(dich('pos.return.quantity'))}</span>
+                    <input type="number" min="0" max="${conLai}" value="0"
+                           data-return-item="${i.id}" data-unit-price="${i.price || 0}"
+                           oninput="capNhatFormTraHang()"
+                           style="width:5rem; padding:0.3rem; background:#0F172A; border:1px solid #334155; color:white; border-radius:4px; margin:0;">
+                </label>
+                <span style="font-size:0.8rem; color:#94A3B8;">${escapeHtml(dich('pos.return.remaining', { count: conLai }))}</span>
+                <label style="display:flex; align-items:center; gap:0.35rem; margin:0; font-size:0.8rem;">
+                    <input type="checkbox" data-return-restock="${i.id}" checked style="margin:0;">
+                    <span>${escapeHtml(dich('pos.return.restock'))}</span>
+                </label>
+            </div>
+        </div>`;
+    });
+    document.getElementById('returnLines').innerHTML = html;
+
+    // Đơn có giảm giá thì tiền hoàn tính theo tỷ lệ thực thu, không theo giá
+    // niêm yết - nói trước để thu ngân không bị khách thắc mắc tại quầy.
+    document.getElementById('returnDiscountNote').style.display =
+        (d.discount_amount || 0) > 0 ? 'block' : 'none';
+    document.getElementById('returnMethod').value = 'cash';
+    document.getElementById('returnReference').value = '';
+    document.getElementById('returnReason').value = '';
+    capNhatFormTraHang();
+}
+
+/** Các dòng đang được chọn trả, kèm số lượng và quyết định nhập lại kho. */
+function docDongTraHang() {
+    return [...document.querySelectorAll('[data-return-item]')]
+        .map(el => ({
+            order_item_id: Number(el.dataset.returnItem),
+            quantity: parseInt(el.value, 10) || 0,
+            unit_price: Number(el.dataset.unitPrice) || 0,
+            restock: document.querySelector(
+                `[data-return-restock="${el.dataset.returnItem}"]`
+            )?.checked !== false
+        }))
+        .filter(d => d.quantity > 0);
+}
+
+function capNhatFormTraHang() {
+    const chuyenKhoan = document.getElementById('returnMethod').value === 'transfer';
+    document.getElementById('returnReferenceWrap').style.display =
+        chuyenKhoan ? 'block' : 'none';
+    document.getElementById('returnCashHint').style.display =
+        chuyenKhoan ? 'none' : 'block';
+
+    const dong = docDongTraHang();
+    const tienHang = dong.reduce((t, d) => t + d.unit_price * d.quantity, 0);
+    // Ước tính hiển thị cho thu ngân. Con số CHỐT vẫn do server tính lại -
+    // đây chỉ là để khách nhìn thấy trước khi bấm.
+    const tongDon = Number(donDangTra?.total_amount || 0);
+    const tongHang = Number(donDangTra?.subtotal || 0);
+    const tyLe = tongHang > 0 ? tongDon / tongHang : 1;
+    document.getElementById('returnTotal').innerText =
+        dinhDangTien(Math.round(tienHang * tyLe));
+    document.getElementById('btnSubmitReturn').disabled = dong.length === 0;
+}
+
+async function ghiNhanTraHang() {
+    if (!donDangTra) return;
+    const dong = docDongTraHang();
+    if (!dong.length) return showToast(dich('pos.return.choose_line'));
+
+    const method = document.getElementById('returnMethod').value;
+    const soMon = dong.reduce((t, d) => t + d.quantity, 0);
+    // Dùng xacNhan() chứ KHÔNG dùng confirm(): Chrome cho người dùng tick chặn
+    // hộp thoại của trang, từ đó confirm() trả false lặng lẽ và nút chết câm.
+    const dongY = await xacNhan(
+        dich('pos.return.confirm_title'),
+        dich('pos.return.confirm_body', {
+            count: soMon,
+            id: donDangTra.id,
+            amount: document.getElementById('returnTotal').innerText,
+            method: dich(
+                method === 'cash' ? 'pos.return.method_cash' : 'pos.return.method_transfer'
+            )
+        })
+    );
+    if (!dongY) return;
+
+    datNutDangXuLy('btnSubmitReturn', true);
+    try {
+        const res = await apiCall(`/orders/${donDangTra.id}/returns`, 'POST', {
+            items: dong.map(d => ({
+                order_item_id: d.order_item_id,
+                quantity: d.quantity,
+                restock: d.restock
+            })),
+            method,
+            reason: document.getElementById('returnReason').value.trim() || null,
+            reference: method === 'transfer'
+                ? (document.getElementById('returnReference').value.trim() || null)
+                : null,
+            operation_id: maThaoTacTraHang
+        });
+        showToast(dich('pos.return.done', {
+            amount: dinhDangTien(res.return?.refund_amount || 0)
+        }));
+        dongModalTraHang();
+        loadProducts();          // tồn kho vừa đổi vì hàng nhập lại
+        loadCurrentShift(false); // hoàn tiền mặt vừa trừ vào két của ca
+    } catch (e) {
+        showToast(e.message);
+    } finally {
+        datNutDangXuLy('btnSubmitReturn', false);
+    }
+}
+
 // ===== C2d: gắn khách hàng vào đơn ở POS =====
 function boChonKhach() {
     if (dangKhoaChinhSuaDon()) return;
