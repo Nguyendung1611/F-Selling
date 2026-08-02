@@ -11,11 +11,15 @@ Hai test ở mục "Hai quả mìn" dưới đây tồn tại để chứng minh
 """
 import uuid
 
+import pytest
 from conftest import _unique, auth, new_seller, new_staff, seller_with_shop
 
 from fselling import models
 from fselling.core.database import SessionLocal
+from fselling.routers import webhooks
 from fselling.services import maintenance_service
+
+WEBHOOK_SECRET = "webhook-secret-cong-no"
 
 
 def _op() -> str:
@@ -503,3 +507,137 @@ def test_shop_khac_khong_thu_no_ho_duoc(client):
     assert _thu_no(
         client, ctx, order_id, 10000, token=nguoi_khac
     ).status_code == 403
+
+
+# ---------- Quả mìn thứ ba: webhook ngân hàng ----------
+#
+# `WEBHOOK_PAY_FROM` được khai từ F4 nhưng KHÔNG chỗ nào đọc, nên nó trông như
+# một ràng buộc đang có hiệu lực trong khi webhook thực ra nhận mọi trạng thái.
+# Hậu quả đo được: chuyển 40k cho đơn nợ 100k đẩy đơn sang UNRECONCILED, mà
+# `receivable_amount` lọc đúng chuỗi "DEBT" nên 60k khách còn nợ biến mất khỏi
+# sổ - shop mất dấu khoản phải thu trong im lặng.
+
+
+@pytest.fixture
+def webhook_secret(monkeypatch):
+    monkeypatch.setattr(webhooks, "get_webhook_secret", lambda: WEBHOOK_SECRET)
+    return WEBHOOK_SECRET
+
+
+def _goi_webhook(client, payload):
+    return client.post(
+        "/api/orders/webhook",
+        json=payload,
+        headers={"X-Webhook-Secret": WEBHOOK_SECRET},
+    )
+
+
+def _phai_thu(client, ctx):
+    res = client.get(
+        f"/api/shops/{ctx['shop_id']}/stats", headers=auth(ctx["token"])
+    )
+    assert res.status_code == 200, res.text
+    return res.json()["receivable_amount"]
+
+
+def test_webhook_KHONG_dung_toi_don_no_khi_chuyen_thieu(client, webhook_secret):
+    """Đây là ca làm mất dấu sổ nợ. Đơn phải ở nguyên DEBT."""
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+    tong = _don(order_id).total_amount
+
+    res = _goi_webhook(client, {
+        "content": f"ORDER{order_id}", "transferAmount": tong / 2
+    })
+    assert res.status_code == 200, res.text
+    assert res.json()["rejected_order_ids"] == [order_id]
+
+    o = _don(order_id)
+    assert o.status == "DEBT", "Đơn nợ không được đổi trạng thái vì một webhook"
+    assert not o.paid_amount, "Không được cộng tiền vào đơn nợ qua webhook"
+    assert _phai_thu(client, ctx) == tong, "Sổ nợ phải còn nguyên"
+
+
+def test_webhook_KHONG_dung_toi_don_no_ke_ca_khi_chuyen_du(client, webhook_secret):
+    """Chuyển đủ tiền cũng không được tự tất toán: khoản đó phải đi qua ledger
+    thu nợ để vào đúng ca và đúng cột, chứ không nhảy thẳng sang PAID."""
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+    tong = _don(order_id).total_amount
+
+    res = _goi_webhook(client, {
+        "content": f"ORDER{order_id}", "transferAmount": tong
+    })
+    assert res.json()["order_ids"] == []
+    assert res.json()["rejected_order_ids"] == [order_id]
+    assert _don(order_id).status == "DEBT"
+    assert _phai_thu(client, ctx) == tong
+
+
+def test_webhook_tu_choi_don_no_van_tra_200(client, webhook_secret):
+    """Trả 4xx/5xx thì ngân hàng retry vô hạn (luật ở mục 8 KIEN_TRUC.md)."""
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+
+    res = _goi_webhook(client, {"content": f"ORDER{order_id}", "transferAmount": 1000})
+    assert res.status_code == 200
+
+
+def test_webhook_ghi_ly_do_tu_choi_vao_system_log(client, webhook_secret):
+    """Tiền về mà không xử lý được thì phải để lại dấu vết tra được."""
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+    _goi_webhook(client, {"content": f"ORDER{order_id}", "transferAmount": 1000})
+
+    session = SessionLocal()
+    try:
+        log = (
+            session.query(models.SystemLog)
+            .filter(
+                models.SystemLog.action == "WEBHOOK_TU_CHOI",
+                models.SystemLog.details.like(f"%Order {order_id}%"),
+            )
+            .all()
+        )
+    finally:
+        session.close()
+    assert len(log) == 1
+    assert "DEBT" in log[0].details
+
+
+def test_thu_no_van_chay_binh_thuong_sau_khi_webhook_bi_chan(client, webhook_secret):
+    """Chặn webhook không được chặn luôn đường thu nợ thật."""
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+    tong = _don(order_id).total_amount
+    _goi_webhook(client, {"content": f"ORDER{order_id}", "transferAmount": tong})
+
+    res = _thu_no(client, ctx, order_id, tong)
+    assert res.status_code == 200, res.text
+    assert _don(order_id).status == "PAID"
+    assert _phai_thu(client, ctx) == 0
+
+
+def test_webhook_van_chay_dung_cho_don_PENDING(client, webhook_secret):
+    """Danh sách trạng thái cho phép mà liệt kê thiếu là chặn nhầm đường chính."""
+    ctx = seller_with_shop(client)
+    order_id = client.post(
+        f"/api/orders/{ctx['shop_id']}",
+        json={"items": [
+            {"product_id": ctx["product"]["id"],
+             "price": ctx["product"]["price"], "quantity": 1}
+        ]},
+        headers=auth(ctx["token"]),
+    ).json()["order_id"]
+    tong = _don(order_id).total_amount
+
+    res = _goi_webhook(client, {
+        "content": f"ORDER{order_id}", "transferAmount": tong
+    })
+    assert res.json()["order_ids"] == [order_id]
+    assert _don(order_id).status == "PAID"

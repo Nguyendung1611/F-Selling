@@ -214,6 +214,8 @@ là một số tiền thật và sai. Gộp hai ca này lại là mở lại đ�
 **Giao dịch bị từ chối vẫn trả HTTP 200.** Ngân hàng retry vô hạn khi nhận
 4xx/5xx. Lý do từ chối nằm ở `SystemLog` và khóa `rejected_order_ids`.
 
+**Webhook chỉ được đụng vào trạng thái trong `WEBHOOK_PAY_FROM`** (mục 25).
+
 **Đừng đặt unique index lên `bank_txn_id`.** Ngân hàng gửi lại cùng một giao
 dịch là bình thường. Khi hỗ trợ khách chuyển nhiều lần, máy trạng thái KHÔNG
 còn đủ để chống lặp: mọi khoản tiền vào/tiền mặt/hoàn tiền nằm trong ledger
@@ -572,9 +574,9 @@ toàn. Hai giá trị đó khác nhau, đừng gộp. Kiểm hạn mức nằm *
 `_lock_shop_for_order` nên hai đơn nợ cùng lúc của một khách không cùng nhìn một
 số dư cũ rồi cùng lọt.
 
-Còn thiếu: webhook ngân hàng chưa nhận thanh toán cho đơn `DEBT`
-(`WEBHOOK_PAY_FROM` vẫn chỉ có `PENDING`). Đơn nợ không sinh mã QR nên khách
-không có đường chuyển khoản kèm mã đơn; thu nợ chuyển khoản đi qua endpoint
+**Webhook ngân hàng KHÔNG tự xử lý đơn `DEBT`** — và cho tới F6 thì đó chỉ là ý
+định chứ không phải sự thật, xem mục 25. Đơn nợ không sinh mã QR nên khách không
+có đường chuyển khoản kèm mã đơn; thu nợ chuyển khoản đi qua endpoint
 `debt-payment` và người bán tự đối chiếu.
 
 ### 21. Lô hàng và hạn sử dụng: bảng lô là sự thật, `Product.stock` là bản sao
@@ -806,6 +808,49 @@ sai một chữ số là cả lô còn tốt bị bỏ đi, mà hủy thì khôn
 
 **Còn để ngỏ:** phiếu hủy chưa có màn xem lại lịch sử trên giao diện (endpoint
 `GET /api/products/{shop_id}/write-offs` đã có), và chưa vào file Excel xuất ra.
+
+### 25. Một hằng số không ai đọc là lời nói dối nằm ngay trong code
+
+`WEBHOOK_PAY_FROM = (STATUS_PENDING,)` được khai từ F4, đọc lên nghe rất rõ:
+"webhook chỉ xử lý đơn PENDING". Tài liệu ghi theo nó, và bản bàn giao giữa hai
+đợt cũng ghi theo nó. **Không chỗ nào trong code đọc hằng số đó.**
+
+Sự thật cho tới F6: `_apply_bank_transaction` rẽ nhánh theo `previous_status` và
+theo tổng tiền, không theo danh sách nào cả — nên nó nhận **mọi** trạng thái, kể
+cả `DEBT`. Đo được:
+
+| Giao dịch trỏ tới đơn nợ 100k | Kết quả trước F6 |
+|---|---|
+| Chuyển 40k | `DEBT` → `UNRECONCILED/UNDERPAID`, và `receivable_amount` **tụt về 0** |
+| Chuyển đủ 100k | `DEBT` → `PAID`, nhưng đi vòng qua ledger thu nợ |
+
+Ca thứ nhất là mất tiền thật: `_cong_no_phai_thu` lọc đúng chuỗi `"DEBT"` nên
+60k khách còn nợ **biến mất khỏi sổ** trong im lặng, đúng kiểu hỏng mà mục 20 đã
+liệt kê hai lần rồi (job hủy đơn treo, chặn kết ca) — lần này là cỗ máy thứ ba,
+và là cỗ duy nhất không được ai canh.
+
+Nay hằng số được kiểm thật, ngay trong vòng lặp của `apply_webhook_payment` và
+**trước khi ghi ledger** — một khi `OrderPayment` đã vào thì tiền đã cộng và
+trạng thái đã bị suy lại từ tổng lũy kế, không lùi được nữa.
+
+**Danh sách cho phép phải liệt kê ĐỦ**, không phải chỉ `PENDING`: webhook vốn xử
+lý đúng cả `UNRECONCILED` (chuyển thêm cho đơn thiếu), `CANCELLED` (tiền về sau
+khi hủy → LATE_PAYMENT) và `PAID` (chuyển trùng → OVERPAID). Liệt kê thiếu là
+chặn nhầm những đường đang chạy tốt — nguy hiểm ngang việc không chặn gì.
+
+Kiểm ở vòng lặp mà không kiểm lại sau khi lấy khóa ghi là **an toàn ở đây**:
+`DEBT` chỉ được đặt lúc tạo đơn, không có đường nào đẩy một đơn đang chạy vào
+`DEBT`. `CANCELLED` thì có race thật, nhưng nó nằm trong danh sách cho phép nên
+`_apply_bank_transaction` tự xử như cũ.
+
+**Chưa làm:** webhook thu nợ tự động (chuyển khoản trỏ tới đơn nợ được ghi nhận
+như một lần thu nợ, giữ `DEBT` khi chưa đủ). Đó là tính năng, không phải sửa
+lỗi, và phải nối webhook vào ledger thu nợ rồi rà lại idempotency, ca làm việc
+và tiền thừa. Hiện tiền vào cho đơn nợ bị từ chối kèm `SystemLog`, người bán thu
+qua `debt-payment` — **và khoản đó chỉ nằm trong log, chưa nổi lên màn Đối Soát**,
+nên người bán không tự biết là có tiền về.
+
+`MANUAL_PAY_FROM` thì ngược lại: nó ĐƯỢC dùng thật ở `pay_order`. Đừng dọn nhầm.
 
 ## Phiên bản dependency
 

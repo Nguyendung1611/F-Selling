@@ -6,9 +6,9 @@ lần đã trả giá.
 ## Ba việc bắt buộc
 
 1. **Đọc `KIEN_TRUC.md` mục "Bẫy cần biết khi viết service mới"** trước khi
-   động vào `fselling/services/`. Có 24 bẫy, phần lớn không nhìn ra được từ code.
+   động vào `fselling/services/`. Có 25 bẫy, phần lớn không nhìn ra được từ code.
 2. **Commit bằng `.\test-commit.ps1 "mô tả"`**, không commit tay. Script chạy
-   toàn bộ 711 test rồi mới cho commit, và chặn `.env` / `*.db` lọt lên Git.
+   toàn bộ 717 test rồi mới cho commit, và chặn `.env` / `*.db` lọt lên Git.
 3. **Sửa giao diện thì phải tự mắt nhìn.** Test không thấy được màu sắc, bố cục
    hay việc một cái nút bấm vào không ra gì. Xem `QUY_TRINH_LAM_VIEC.md`.
 
@@ -24,6 +24,10 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   "không có số tiền", đó là hai ca khác nhau.
 - Giao dịch bị từ chối **vẫn trả HTTP 200**. Trả 4xx/5xx thì ngân hàng retry vô
   hạn. Lý do ghi vào `SystemLog` và khóa `rejected_order_ids`.
+- Webhook **chỉ được đụng vào trạng thái trong `WEBHOOK_PAY_FROM`**, kiểm
+  **trước khi ghi ledger**. Đơn `DEBT` bị từ chối — tiền vào cho đơn nợ mà tự
+  đổi trạng thái là làm mất dấu khoản phải thu. Danh sách đó phải liệt kê đủ
+  `PENDING`/`UNRECONCILED`/`CANCELLED`/`PAID`, thiếu là chặn nhầm đường đang chạy.
 - Giá và tổng tiền **luôn tính lại từ database**, không tin số client gửi.
 
 **Đơn hàng & kho**
@@ -168,7 +172,7 @@ lỗi giúp. Bộ test chạy ở máy là lưới an toàn duy nhất — càng
 
 | File | Nội dung |
 |---|---|
-| `KIEN_TRUC.md` | Kiến trúc + 24 bẫy khi viết service. **Đọc trước khi sửa backend** |
+| `KIEN_TRUC.md` | Kiến trúc + 25 bẫy khi viết service. **Đọc trước khi sửa backend** |
 | `QUY_TRINH_LAM_VIEC.md` | Quy trình sửa → test → nhìn thử → commit → push |
 | `HUONG_DAN_SU_DUNG.md` | Hướng dẫn cho người dùng cuối |
 | `DEPLOY_FLY.md` | Deploy lên Fly.io (xem cảnh báo secret ở trên) |

@@ -58,7 +58,22 @@ STATUS_UNRECONCILED = "UNRECONCILED"
 STATUS_DEBT = "DEBT"
 
 MANUAL_PAY_FROM: Tuple[str, ...] = (STATUS_PENDING,)
-WEBHOOK_PAY_FROM: Tuple[str, ...] = (STATUS_PENDING,)
+# Trạng thái mà webhook ngân hàng ĐƯỢC PHÉP đụng vào.
+#
+# Trước F6 hằng số này chỉ có `PENDING` và **không chỗ nào đọc nó** - trông như
+# một ràng buộc đang có hiệu lực trong khi thực tế webhook nhận mọi trạng thái.
+# Hậu quả thật: chuyển khoản 40k cho đơn nợ 100k đẩy đơn từ DEBT sang
+# UNRECONCILED/UNDERPAID, mà `receivable_amount` lọc đúng chuỗi "DEBT" nên 60k
+# khách còn nợ biến mất khỏi sổ. Nay hằng số được kiểm thật trong
+# `apply_webhook_payment`, và phải liệt kê ĐỦ các trạng thái mà máy trạng thái ở
+# `_apply_bank_transaction` vốn xử lý đúng - liệt kê thiếu là chặn nhầm những
+# đường đang chạy tốt:
+WEBHOOK_PAY_FROM: Tuple[str, ...] = (
+    STATUS_PENDING,        # ca thường: khách chuyển cho đơn vừa tạo
+    STATUS_UNRECONCILED,   # chuyển thêm cho đơn còn thiếu -> đủ thì PAID
+    STATUS_CANCELLED,      # tiền về sau khi hủy -> LATE_PAYMENT, KHÔNG hồi sinh
+    STATUS_PAID,           # chuyển trùng -> OVERPAID, mở khoản chờ hoàn
+)
 CANCEL_FROM: Tuple[str, ...] = (STATUS_PENDING, STATUS_DEBT)
 DEBT_PAY_FROM: Tuple[str, ...] = (STATUS_DEBT,)
 
@@ -1564,6 +1579,23 @@ def apply_webhook_payment(db: Session, request_data: Dict[str, Any]) -> Dict[str
             continue
         found_any = True
 
+        # Kiểm TRƯỚC khi ghi ledger: một khi `OrderPayment` đã vào thì tiền đã
+        # được cộng và trạng thái đã bị suy lại từ tổng lũy kế.
+        #
+        # An toàn khi kiểm ở đây chứ không kiểm lại sau khi lấy khóa ghi: DEBT
+        # chỉ được đặt lúc TẠO đơn (`create_order`), không có đường nào chuyển
+        # một đơn đang chạy sang DEBT, nên không có race đẩy đơn vào DEBT giữa
+        # chừng. Ngược lại CANCELLED thì có, và nó đã nằm trong danh sách cho
+        # phép rồi nên `_apply_bank_transaction` tự xử.
+        if order.status not in WEBHOOK_PAY_FROM:
+            _ghi_tu_choi(
+                db,
+                gd.order_id,
+                f"đơn đang ở trạng thái {order.status}, webhook không tự xử lý "
+                "(đơn ghi nợ thu qua chức năng thu nợ)",
+            )
+            rejected.add(gd.order_id)
+            continue
         if gd.direction == "out":
             _ghi_tu_choi(
                 db, gd.order_id, "giao dịch là tiền RA, không phải tiền vào"
