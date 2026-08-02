@@ -60,7 +60,11 @@ async def order_webhook(
     if unreconciled:
         msg += f" | Cần đối soát thủ công: {unreconciled}"
     if rejected:
-        msg += f" | Từ chối (tiền ra hoặc thiếu số tiền): {rejected}"
+        # Từ F6 có thêm lý do thứ ba (đơn ở trạng thái webhook không tự xử lý,
+        # thực tế là đơn ghi nợ), nên câu này không liệt kê lý do nữa - liệt kê
+        # thiếu còn tệ hơn không liệt kê, vì nó chỉ sai đường tra cứu.
+        # Lý do đầy đủ của TỪNG đơn nằm trong SystemLog `WEBHOOK_TU_CHOI`.
+        msg += f" | Từ chối, xem SystemLog: {rejected}"
 
     # CỐ Ý trả 200 cho cả giao dịch bị từ chối: ngân hàng sẽ retry vô hạn nếu
     # nhận 4xx/5xx. Lý do từ chối nằm trong SystemLog và trong `msg`.

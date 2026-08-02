@@ -843,12 +843,41 @@ Kiểm ở vòng lặp mà không kiểm lại sau khi lấy khóa ghi là **an 
 `DEBT`. `CANCELLED` thì có race thật, nhưng nó nằm trong danh sách cho phép nên
 `_apply_bank_transaction` tự xử như cũ.
 
+**Tiền về cho đơn nợ phải NHÌN THẤY ĐƯỢC.** Từ chối mà chỉ ghi `SystemLog` thì
+tiền về xong không ai biết để đi thu — đổi một lỗi mất tiền lấy một lỗi mất
+tiền khác. Khoản đó nay được ghi thành bút toán `ENTRY_BANK_UNAPPLIED` và nổi
+lên màn Đối Soát (`unapplied_transfer_amount` trên mỗi đơn của dashboard).
+
+Bốn điều bắt buộc giữ ở bút toán này:
+
+**Nó KHÔNG phải một khoản thu.** Không cộng `paid_amount`, không đổi trạng
+thái, không gắn `shift_id`. Nó nằm ngoài `CASH_PAYMENT_IN_TYPES` /
+`CASH_PAYMENT_OUT_TYPES` của `shift_service` — hai danh sách đó liệt kê tường
+minh, nên thêm nhầm `"BANK_UNAPPLIED"` vào là tiền ảo vào két và thu ngân lệch ca.
+
+**Dùng CHUNG `_bank_idempotency_key` với bút toán thật.** Đây là chỗ dễ sai
+nhất và hậu quả là tiền: khách chuyển 100k cho đơn nợ → ghi unapplied → người
+bán thu nợ tay, đơn thành `PAID` → ngân hàng gửi lại đúng giao dịch đó (chuyện
+bình thường) → `PAID` nằm trong `WEBHOOK_PAY_FROM` nên lần này giao dịch được
+xử lý THẬT. Khóa riêng thì nó không bị coi là trùng và đơn thành `OVERPAID` với
+100k chờ hoàn không có thật. Khóa chung thì lần gửi lại rơi vào nhánh trùng lặp
+và không đồng nào được cộng. `test_gui_lai_sau_khi_da_thu_no_KHONG_cong_tien_lan_hai`
+canh đúng chuyện này — đã kiểm bằng cách tạm đổi sang khóa riêng và nó đỏ.
+
+**Giao diện không được hiện nó như một khoản đã thu.** Màu hổ phách, KHÔNG có
+dấu `+`, kèm câu "chưa được cộng vào đơn". Hiện `+ 250.000` xanh lá cạnh các
+khoản thu thật là nói dối đúng chỗ nguy hiểm nhất.
+
+**Nhắc đến khi nào thì thôi.** Đơn rời khỏi màn Đối Soát khi có một lần thu nợ
+được ghi SAU bút toán tiền-về gần nhất — theo mốc thời gian, không theo số tiền.
+Khách chuyển 40k của khoản nợ 100k rồi người bán ghi nhận 40k thì đơn vẫn còn
+nợ, nhưng khoản chuyển đó đã xử lý xong. Nhắc mãi một việc đã xong thì người
+dùng học cách phớt lờ cả màn hình.
+
 **Chưa làm:** webhook thu nợ tự động (chuyển khoản trỏ tới đơn nợ được ghi nhận
 như một lần thu nợ, giữ `DEBT` khi chưa đủ). Đó là tính năng, không phải sửa
 lỗi, và phải nối webhook vào ledger thu nợ rồi rà lại idempotency, ca làm việc
-và tiền thừa. Hiện tiền vào cho đơn nợ bị từ chối kèm `SystemLog`, người bán thu
-qua `debt-payment` — **và khoản đó chỉ nằm trong log, chưa nổi lên màn Đối Soát**,
-nên người bán không tự biết là có tiền về.
+và tiền thừa.
 
 `MANUAL_PAY_FROM` thì ngược lại: nó ĐƯỢC dùng thật ở `pay_order`. Đừng dọn nhầm.
 

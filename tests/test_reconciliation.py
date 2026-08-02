@@ -874,6 +874,9 @@ def test_dashboard_reconciliation_only_loc_dung_ba_nhom_dang_mo(
             "date",
             "cashier_username",
             "shift_id",
+            # F6: tiền đã về cho đơn ghi nợ mà webhook không áp vào đơn. 0 với
+            # mọi đơn thường, nên thêm khóa này là thay đổi an toàn.
+            "unapplied_transfer_amount",
         }
         | PAYMENT_SUMMARY_KEYS
         for row in rows

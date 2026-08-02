@@ -305,6 +305,51 @@ def _lai_gop(db: Session, paid_orders_subquery) -> Dict[str, Any]:
     }
 
 
+def _don_co_tien_ve_chua_ghi_nhan(db: Session, shop_id: int):
+    """Query id các đơn có tiền về (`BANK_UNAPPLIED`) mà người bán CHƯA xử lý.
+
+    "Chưa xử lý" = kể từ bút toán tiền-về gần nhất, chưa có lần thu nợ nào được
+    ghi. Lấy mốc theo thời gian chứ không theo số tiền: khách chuyển 40k của
+    khoản nợ 100k rồi người bán ghi nhận 40k thì đơn vẫn còn nợ 60k, nhưng
+    khoản chuyển kia đã được xử lý xong và không việc gì phải nhắc mãi.
+
+    Trả về `Query` để caller đưa thẳng vào `in_()`; KHÔNG gọi `.subquery()`
+    (bẫy 12 - SQLAlchemy 2.0 tự coerce, gọi tay sinh SAWarning).
+    """
+    tien_ve = (
+        db.query(
+            models.OrderPayment.order_id.label("order_id"),
+            func.max(models.OrderPayment.created_at).label("moc"),
+        )
+        .filter(
+            models.OrderPayment.entry_type == order_service.ENTRY_BANK_UNAPPLIED
+        )
+        .group_by(models.OrderPayment.order_id)
+        .subquery()
+    )
+    da_xu_ly = (
+        db.query(models.OrderPayment.order_id)
+        .filter(
+            models.OrderPayment.entry_type.in_(
+                (
+                    order_service.ENTRY_DEBT_CASH,
+                    order_service.ENTRY_DEBT_TRANSFER,
+                )
+            ),
+            models.OrderPayment.order_id == tien_ve.c.order_id,
+            models.OrderPayment.created_at >= tien_ve.c.moc,
+        )
+    )
+    return (
+        db.query(models.Order.id)
+        .join(tien_ve, tien_ve.c.order_id == models.Order.id)
+        .filter(
+            models.Order.shop_id == shop_id,
+            ~models.Order.id.in_(da_xu_ly),
+        )
+    )
+
+
 def seller_dashboard(
     db: Session,
     current_user: models.User,
@@ -337,6 +382,10 @@ def seller_dashboard(
             models.Order.refund_due_amount > order_service.MONEY_EPSILON,
             models.Order.refund_completed_at.is_(None),
         ),
+        # F6: tiền đã về cho một đơn ghi nợ nhưng webhook không tự áp vào đơn
+        # (bẫy 25). Không đưa lên đây thì khoản đó chỉ nằm trong `SystemLog` -
+        # tiền về mà người bán không biết để đi thu.
+        models.Order.id.in_(_don_co_tien_ve_chua_ghi_nhan(db, shop_id)),
     )
     reconciliation_count = (
         db.query(models.Order)
@@ -369,9 +418,13 @@ def seller_dashboard(
         or 0
     )
 
+    # Chỉ hỏi tiền-về-chưa-ghi-nhận cho ĐÚNG các đơn của trang này, không quét
+    # cả shop: màn Đối Soát phân trang, mà số đơn thì lớn dần theo thời gian.
+    tien_ve = _tien_ve_chua_ghi_nhan_theo_don(db, [o.id for o in orders])
+
     return {
         "total_revenue": doanh_thu,
-        "orders": [_dashboard_order(o) for o in orders],
+        "orders": [_dashboard_order(o, tien_ve.get(o.id)) for o in orders],
         "page": page,
         "per_page": per_page,
         "total_orders": tong_don,
@@ -380,7 +433,31 @@ def seller_dashboard(
     }
 
 
-def _dashboard_order(order: models.Order) -> Dict[str, Any]:
+def _tien_ve_chua_ghi_nhan_theo_don(
+    db: Session, order_ids: List[int]
+) -> Dict[int, float]:
+    """Tổng tiền `BANK_UNAPPLIED` của từng đơn trong danh sách."""
+    if not order_ids:
+        return {}
+    hang = (
+        db.query(
+            models.OrderPayment.order_id,
+            func.sum(models.OrderPayment.amount),
+        )
+        .filter(
+            models.OrderPayment.order_id.in_(order_ids),
+            models.OrderPayment.entry_type
+            == order_service.ENTRY_BANK_UNAPPLIED,
+        )
+        .group_by(models.OrderPayment.order_id)
+        .all()
+    )
+    return {order_id: float(tong or 0) for order_id, tong in hang}
+
+
+def _dashboard_order(
+    order: models.Order, tien_ve_chua_ghi_nhan: Optional[float] = None
+) -> Dict[str, Any]:
     result = {
         "id": order.id,
         "total": order.total_amount,
@@ -388,6 +465,10 @@ def _dashboard_order(order: models.Order) -> Dict[str, Any]:
         "date": order.created_at,
         "cashier_username": order.created_by.username if order.created_by else None,
         "shift_id": order.shift_id,
+        # F6: tiền đã về tài khoản cho đơn này nhưng webhook KHÔNG áp vào đơn.
+        # 0 nghĩa là không có, chứ không phải "chưa biết" - đây là tổng của một
+        # tập bút toán đếm được.
+        "unapplied_transfer_amount": float(tien_ve_chua_ghi_nhan or 0),
     }
     result.update(order_service.payment_summary(order))
     return result

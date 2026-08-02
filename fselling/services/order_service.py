@@ -96,6 +96,16 @@ RECON_LATE_PAYMENT = "LATE_PAYMENT"
 RECON_LEGACY_REVIEW = "LEGACY_REVIEW"
 
 ENTRY_BANK = "BANK_IN"
+# Tiền ĐÃ về tài khoản nhưng webhook KHÔNG ghi vào đơn (đơn đang ở trạng thái
+# ngoài `WEBHOOK_PAY_FROM`, thực tế là đơn ghi nợ). Ghi lại để người bán nhìn
+# thấy trên màn Đối Soát - trước đó khoản này chỉ nằm trong `SystemLog` nên tiền
+# về mà không ai biết.
+#
+# Bút toán này KHÔNG phải một khoản thu: không cộng vào `paid_amount`, không đổi
+# trạng thái, không gắn `shift_id`. Nó nằm ngoài mọi danh sách cộng tiền
+# (`CASH_PAYMENT_IN_TYPES` / `CASH_PAYMENT_OUT_TYPES` của shift_service liệt kê
+# tường minh) nên không có đường nào cộng nhầm nó vào két hay vào doanh thu.
+ENTRY_BANK_UNAPPLIED = "BANK_UNAPPLIED"
 ENTRY_CASH = "CASH_TOPUP"
 ENTRY_REFUND_CASH = "REFUND_CASH"
 ENTRY_REFUND_TRANSFER = "REFUND_TRANSFER"
@@ -1588,6 +1598,9 @@ def apply_webhook_payment(db: Session, request_data: Dict[str, Any]) -> Dict[str
         # chừng. Ngược lại CANCELLED thì có, và nó đã nằm trong danh sách cho
         # phép rồi nên `_apply_bank_transaction` tự xử.
         if order.status not in WEBHOOK_PAY_FROM:
+            # Ghi nhận là tiền ĐÃ về, nhưng không áp vào đơn. Phải làm trước khi
+            # `_ghi_tu_choi` commit, để bút toán và dòng log cùng vào một lần.
+            _ghi_tien_ve_chua_ghi_nhan(db, order, gd)
             _ghi_tu_choi(
                 db,
                 gd.order_id,
@@ -1890,6 +1903,60 @@ def _reset_refund_completion(order: models.Order) -> None:
     order.refund_method = None
     order.refund_note = None
     order.refund_reference = None
+
+
+def _ghi_tien_ve_chua_ghi_nhan(db: Session, order: models.Order, gd: Any) -> None:
+    """Ghi một bút toán `BANK_UNAPPLIED`: tiền đã về nhưng KHÔNG áp vào đơn.
+
+    Chỉ ghi khi payload có số tiền hợp lệ; tiền RA hoặc payload thiếu số tiền
+    thì không có gì để báo cho người bán ngoài dòng log.
+
+    **Dùng CHUNG `_bank_idempotency_key` với bút toán thật, và đó là điều bắt
+    buộc.** Nếu đặt khóa riêng thì kịch bản sau cộng tiền hai lần: khách chuyển
+    100k cho đơn nợ -> webhook ghi unapplied -> người bán thu nợ tay, đơn thành
+    PAID -> ngân hàng gửi lại đúng giao dịch đó (chuyện bình thường) -> lúc này
+    PAID nằm trong `WEBHOOK_PAY_FROM` nên giao dịch được xử lý thật, và vì khóa
+    khác nhau nên không bị coi là trùng -> đơn thành OVERPAID với 100k chờ hoàn
+    không có thật. Dùng chung khóa thì lần gửi lại rơi vào nhánh trùng lặp và
+    không có đồng nào được cộng.
+    """
+    if gd.direction == "out" or gd.amount is None:
+        return
+    amount = float(gd.amount)
+    if not math.isfinite(amount) or amount <= 0:
+        return
+
+    configured_account = (
+        db.query(models.Shop.bank_account_no)
+        .filter(models.Shop.id == order.shop_id)
+        .scalar()
+    )
+    key = _bank_idempotency_key(gd, configured_account)
+    if (
+        db.query(models.OrderPayment)
+        .filter(models.OrderPayment.idempotency_key == key)
+        .first()
+    ):
+        return          # ngân hàng gửi lại: đã có dòng rồi, đừng nhân bản
+
+    db.add(
+        models.OrderPayment(
+            order_id=order.id,
+            entry_type=ENTRY_BANK_UNAPPLIED,
+            amount=amount,
+            idempotency_key=key,
+            provider=str(gd.provider) if gd.provider else None,
+            bank_txn_id=str(gd.txn_id) if gd.txn_id else None,
+            account_no=str(gd.account_no) if gd.account_no else None,
+            note="Tiền về cho đơn ghi nợ - chưa ghi nhận, cần thu nợ thủ công",
+        )
+    )
+    try:
+        db.flush()
+    except IntegrityError:
+        # Hai webhook song song cùng vượt qua query trên; unique index chặn.
+        # Không có gì phải cứu: dòng kia đã ghi đúng nội dung này rồi.
+        db.rollback()
 
 
 def _ghi_tu_choi(db: Session, order_id: int, ly_do: str) -> None:

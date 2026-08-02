@@ -8,7 +8,7 @@ lần đã trả giá.
 1. **Đọc `KIEN_TRUC.md` mục "Bẫy cần biết khi viết service mới"** trước khi
    động vào `fselling/services/`. Có 25 bẫy, phần lớn không nhìn ra được từ code.
 2. **Commit bằng `.\test-commit.ps1 "mô tả"`**, không commit tay. Script chạy
-   toàn bộ 717 test rồi mới cho commit, và chặn `.env` / `*.db` lọt lên Git.
+   toàn bộ 727 test rồi mới cho commit, và chặn `.env` / `*.db` lọt lên Git.
 3. **Sửa giao diện thì phải tự mắt nhìn.** Test không thấy được màu sắc, bố cục
    hay việc một cái nút bấm vào không ra gì. Xem `QUY_TRINH_LAM_VIEC.md`.
 
@@ -28,6 +28,11 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   **trước khi ghi ledger**. Đơn `DEBT` bị từ chối — tiền vào cho đơn nợ mà tự
   đổi trạng thái là làm mất dấu khoản phải thu. Danh sách đó phải liệt kê đủ
   `PENDING`/`UNRECONCILED`/`CANCELLED`/`PAID`, thiếu là chặn nhầm đường đang chạy.
+- Tiền về cho đơn nợ ghi thành bút toán **`BANK_UNAPPLIED`** để nổi lên màn Đối
+  Soát. Nó **không phải khoản thu**: không cộng `paid_amount`, không vào két,
+  giao diện không hiện dấu `+`. Và nó dùng **chung khóa idempotency** với bút
+  toán thật — khóa riêng thì ngân hàng gửi lại sau khi đã thu nợ tay sẽ đẻ ra
+  khoản chờ hoàn ảo.
 - Giá và tổng tiền **luôn tính lại từ database**, không tin số client gửi.
 
 **Đơn hàng & kho**

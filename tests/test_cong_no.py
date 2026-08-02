@@ -623,6 +623,216 @@ def test_thu_no_van_chay_binh_thuong_sau_khi_webhook_bi_chan(client, webhook_sec
     assert _phai_thu(client, ctx) == 0
 
 
+# ---------- Tiền về cho đơn nợ phải NHÌN THẤY ĐƯỢC ----------
+#
+# Chặn webhook mà chỉ ghi SystemLog thì tiền về mà người bán không biết để đi
+# thu. Khoản đó nay được ghi thành bút toán `BANK_UNAPPLIED` và nổi lên màn
+# Đối Soát. Bút toán này KHÔNG phải một khoản thu: không cộng vào paid_amount,
+# không đổi trạng thái, không vào két.
+
+
+def _but_toan(order_id):
+    session = SessionLocal()
+    try:
+        return (
+            session.query(models.OrderPayment)
+            .filter(models.OrderPayment.order_id == order_id)
+            .order_by(models.OrderPayment.id)
+            .all()
+        )
+    finally:
+        session.close()
+
+
+def _doi_soat(client, ctx, token=None):
+    res = client.get(
+        f"/api/dashboard/seller/{ctx['shop_id']}?reconciliation_only=true",
+        headers=auth(token or ctx["token"]),
+    )
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_tien_ve_cho_don_no_duoc_ghi_thanh_but_toan_rieng(client, webhook_secret):
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+
+    _goi_webhook(client, {"content": f"ORDER{order_id}", "transferAmount": 40000})
+
+    bt = _but_toan(order_id)
+    assert len(bt) == 1
+    assert bt[0].entry_type == "BANK_UNAPPLIED"
+    assert bt[0].amount == 40000
+    assert bt[0].shift_id is None, "Không được vào két của ca nào"
+
+    o = _don(order_id)
+    assert o.status == "DEBT"
+    assert not o.paid_amount, "Bút toán này KHÔNG phải một khoản thu"
+
+
+def test_don_no_co_tien_ve_noi_len_man_doi_soat(client, webhook_secret):
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+
+    truoc = _doi_soat(client, ctx)
+    assert all(o["id"] != order_id for o in truoc["orders"])
+
+    _goi_webhook(client, {"content": f"ORDER{order_id}", "transferAmount": 40000})
+
+    sau = _doi_soat(client, ctx)
+    the = [o for o in sau["orders"] if o["id"] == order_id]
+    assert len(the) == 1, "Đơn nợ có tiền về phải hiện trên màn Đối Soát"
+    assert the[0]["unapplied_transfer_amount"] == 40000
+    assert the[0]["status"] == "DEBT"
+    assert sau["reconciliation_count"] >= 1
+
+
+def test_thu_no_xong_thi_don_roi_khoi_man_doi_soat(client, webhook_secret):
+    """Nhắc mãi một khoản đã xử lý xong thì người bán sẽ học cách phớt lờ nó."""
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+    _goi_webhook(client, {"content": f"ORDER{order_id}", "transferAmount": 40000})
+
+    _thu_no(client, ctx, order_id, 40000)
+
+    sau = _doi_soat(client, ctx)
+    assert all(o["id"] != order_id for o in sau["orders"])
+    assert _don(order_id).status == "DEBT", "Mới thu một phần, vẫn còn nợ"
+
+
+def test_them_lan_chuyen_moi_thi_nhac_lai(client, webhook_secret):
+    """Đã thu lần trước không có nghĩa là lần chuyển sau cũng đã xử lý."""
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+    _goi_webhook(client, {"content": f"ORDER{order_id}", "transferAmount": 40000})
+    _thu_no(client, ctx, order_id, 40000)
+
+    _goi_webhook(client, {
+        "content": f"ORDER{order_id}", "transferAmount": 30000,
+        "referenceCode": "GD-KHAC",
+    })
+
+    the = [o for o in _doi_soat(client, ctx)["orders"] if o["id"] == order_id]
+    assert len(the) == 1
+    assert the[0]["unapplied_transfer_amount"] == 70000
+
+
+def test_ngan_hang_gui_lai_khong_nhan_ban_but_toan(client, webhook_secret):
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+    payload = {
+        "content": f"ORDER{order_id}",
+        "transferAmount": 40000,
+        "referenceCode": "GD-LAP-LAI",
+    }
+    _goi_webhook(client, payload)
+    _goi_webhook(client, payload)
+    _goi_webhook(client, payload)
+
+    assert len(_but_toan(order_id)) == 1
+
+
+def test_gui_lai_sau_khi_da_thu_no_KHONG_cong_tien_lan_hai(client, webhook_secret):
+    """Kịch bản nguy hiểm nhất, và là lý do bút toán chưa-ghi-nhận phải dùng
+    CHUNG khóa idempotency với bút toán thật.
+
+    Khách chuyển đủ -> webhook ghi unapplied -> người bán thu nợ tay, đơn thành
+    PAID -> ngân hàng gửi lại đúng giao dịch đó. Lúc này PAID nằm trong
+    WEBHOOK_PAY_FROM nên giao dịch được xử lý thật; nếu khóa khác nhau thì nó
+    không bị coi là trùng và đơn thành OVERPAID với một khoản chờ hoàn không có
+    thật.
+    """
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+    tong = _don(order_id).total_amount
+    payload = {
+        "content": f"ORDER{order_id}",
+        "transferAmount": tong,
+        "referenceCode": "GD-TRA-DU",
+    }
+
+    _goi_webhook(client, payload)
+    _thu_no(client, ctx, order_id, tong)
+    assert _don(order_id).status == "PAID"
+
+    _goi_webhook(client, payload)
+
+    o = _don(order_id)
+    assert o.status == "PAID"
+    assert not o.refund_due_amount, "Không được đẻ ra khoản chờ hoàn ảo"
+    assert o.reconciliation_reason != "OVERPAID"
+
+
+def test_tien_RA_cho_don_no_khong_ghi_but_toan(client, webhook_secret):
+    """Không có tiền nào về thì không có gì để báo cho người bán."""
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+
+    _goi_webhook(client, {
+        "content": f"hoan ORDER{order_id}",
+        "transferAmount": 40000,
+        "transferType": "out",
+    })
+    assert _but_toan(order_id) == []
+
+
+def test_payload_thieu_so_tien_khong_ghi_but_toan(client, webhook_secret):
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+
+    _goi_webhook(client, {"order_id": order_id})
+    assert _but_toan(order_id) == []
+
+
+def test_but_toan_chua_ghi_nhan_khong_vao_ket_ca(client, webhook_secret):
+    """`CASH_PAYMENT_IN_TYPES` liệt kê tường minh nên loại này nằm ngoài - test
+    canh đúng chỗ đó, vì thêm nhầm một chuỗi vào danh sách kia là tiền ảo vào
+    két và thu ngân lệch ca."""
+    ctx = seller_with_shop(client)
+    shift_id = _mo_ca(client, ctx)
+    kh = _tao_khach(client, ctx)
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+
+    truoc = client.get(
+        f"/api/shifts/{shift_id}", headers=auth(ctx["token"])
+    ).json()["expected_cash_amount"]
+    _goi_webhook(client, {"content": f"ORDER{order_id}", "transferAmount": 40000})
+    sau = client.get(
+        f"/api/shifts/{shift_id}", headers=auth(ctx["token"])
+    ).json()["expected_cash_amount"]
+
+    assert sau == truoc, "Két không được đổi vì một khoản chưa ghi nhận"
+
+
+def test_don_thuong_khong_co_but_toan_chua_ghi_nhan(client, webhook_secret):
+    """Đơn PENDING chạy đường cũ: tiền được áp thẳng, không sinh loại bút toán
+    mới nào."""
+    ctx = seller_with_shop(client)
+    order_id = client.post(
+        f"/api/orders/{ctx['shop_id']}",
+        json={"items": [
+            {"product_id": ctx["product"]["id"],
+             "price": ctx["product"]["price"], "quantity": 1}
+        ]},
+        headers=auth(ctx["token"]),
+    ).json()["order_id"]
+    tong = _don(order_id).total_amount
+
+    _goi_webhook(client, {"content": f"ORDER{order_id}", "transferAmount": tong})
+
+    loai = [b.entry_type for b in _but_toan(order_id)]
+    assert "BANK_UNAPPLIED" not in loai
+    assert loai == ["BANK_IN"]
+
+
 def test_webhook_van_chay_dung_cho_don_PENDING(client, webhook_secret):
     """Danh sách trạng thái cho phép mà liệt kê thiếu là chặn nhầm đường chính."""
     ctx = seller_with_shop(client)

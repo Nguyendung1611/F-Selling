@@ -607,6 +607,18 @@ function thongTinLoaiDoiSoat(reason) {
             stateClass: 'review',
             stateLabel: t('seller.reconciliation.review_state'),
             note: t('seller.reconciliation.legacy_note')
+        },
+        // F6: tiền về cho đơn ghi nợ. KHÔNG phải một lý do do server đặt vào
+        // `reconciliation_reason` - đơn nợ giữ nguyên reason NULL. Khóa này do
+        // `taoTheDoiSoat` tự suy ra từ `unapplied_transfer_amount`, vì nếu để
+        // rơi vào nhánh mặc định thì thẻ hiện "đơn đối soát cũ không đủ dữ
+        // liệu" - sai hoàn toàn và làm người bán không biết phải làm gì.
+        DEBT_TRANSFER_NOTICE: {
+            title: t('seller.reconciliation.debt_transfer_title'),
+            cardClass: 'underpaid',
+            stateClass: 'waiting',
+            stateLabel: t('seller.reconciliation.debt_transfer_state'),
+            note: t('seller.reconciliation.debt_transfer_note')
         }
     };
     return loai[reason] || {
@@ -763,7 +775,12 @@ function renderDoiSoat(orders) {
 
 function taoTheDoiSoat(order) {
     const orderId = Number(order.id);
-    const reason = String(order.reconciliation_reason || 'LEGACY_REVIEW');
+    const tienVeChuaGhi = Math.max(Number(order.unapplied_transfer_amount) || 0, 0);
+    // Đơn nợ có tiền về giữ `reconciliation_reason` NULL, nên phải suy ra khóa
+    // ở đây - để nó rơi vào nhánh mặc định là hiện nhầm thành "đối soát cũ".
+    const reason = tienVeChuaGhi > 0 && !order.reconciliation_reason
+        ? 'DEBT_TRANSFER_NOTICE'
+        : String(order.reconciliation_reason || 'LEGACY_REVIEW');
     const meta = thongTinLoaiDoiSoat(reason);
     const tongDon = Number(order.total) || 0;
     const tienNganHang = Number(order.bank_paid_amount) || 0;
@@ -775,7 +792,10 @@ function taoTheDoiSoat(order) {
 
     let nhanChenhLech = t('seller.reconciliation.received');
     let tienChenhLech = daNhan;
-    if (reason === 'UNDERPAID') {
+    if (reason === 'DEBT_TRANSFER_NOTICE') {
+        nhanChenhLech = t('seller.reconciliation.transferred_not_recorded');
+        tienChenhLech = tienVeChuaGhi;
+    } else if (reason === 'UNDERPAID') {
         nhanChenhLech = t('seller.reconciliation.remaining');
         tienChenhLech = conThieu;
     } else if (reason === 'OVERPAID') {
@@ -2754,7 +2774,10 @@ function nhanLoaiButToan(entryType) {
         BANK_IN: t('seller.ledger.bank_in'),
         CASH_TOPUP: t('seller.ledger.cash_topup'),
         REFUND_CASH: t('seller.ledger.refund_cash'),
-        REFUND_TRANSFER: t('seller.ledger.refund_transfer')
+        REFUND_TRANSFER: t('seller.ledger.refund_transfer'),
+        DEBT_CASH: t('seller.ledger.debt_cash'),
+        DEBT_TRANSFER: t('seller.ledger.debt_transfer'),
+        BANK_UNAPPLIED: t('seller.ledger.bank_unapplied')
     };
     return nhan[entryType] || entryType || t('seller.ledger.transaction');
 }
@@ -2774,8 +2797,15 @@ function veChiTietDoiSoat(d) {
     const paymentList = document.getElementById('odThanhToanList');
     if (!box || !tomTat || !paymentSection || !paymentList) return;
 
+    // Đơn ghi nợ có tiền về giữ `reconciliation_reason` NULL và không
+    // `reconciliation_pending`, nên nếu chỉ xét hai cờ đó thì bấm "Xem chi
+    // tiết" ra một khung trống - đúng lúc người bán cần mã giao dịch để tra
+    // sao kê.
+    const coTienVeChuaGhi = (d.payments || []).some(
+        p => String(p.entry_type) === 'BANK_UNAPPLIED'
+    );
     const reason = d.reconciliation_reason;
-    if (!reason && !d.reconciliation_pending) {
+    if (!reason && !d.reconciliation_pending && !coTienVeChuaGhi) {
         box.style.display = 'none';
         tomTat.innerHTML = '';
         paymentSection.style.display = 'none';
@@ -2783,7 +2813,9 @@ function veChiTietDoiSoat(d) {
         return;
     }
 
-    const meta = thongTinLoaiDoiSoat(reason);
+    const meta = thongTinLoaiDoiSoat(
+        reason || (coTienVeChuaGhi ? 'DEBT_TRANSFER_NOTICE' : reason)
+    );
     let chenhLech = `${escapeHtml(t('seller.reconciliation.received'))}: <strong>${escapeHtml(dinhDangTienDoiSoat(d.received_amount))}</strong>`;
     if (reason === 'UNDERPAID') {
         chenhLech = `${escapeHtml(t('seller.reconciliation.remaining'))}: <strong style="color:#B45309;">${escapeHtml(dinhDangTienDoiSoat(d.remaining_amount))}</strong>`;
@@ -2809,6 +2841,10 @@ function veChiTietDoiSoat(d) {
     paymentList.innerHTML = payments.map(payment => {
         const entryType = String(payment.entry_type || '');
         const laHoan = entryType === 'REFUND_CASH' || entryType === 'REFUND_TRANSFER';
+        // Tiền đã về nhưng CHƯA được ghi vào đơn. Hiện dấu '+' màu xanh như các
+        // khoản thu thật là nói dối đúng chỗ nguy hiểm nhất - người bán đọc
+        // lướt sẽ tưởng đơn đã thu được khoản đó rồi.
+        const chuaGhiNhan = entryType === 'BANK_UNAPPLIED';
         const metaParts = [];
         if (payment.created_at) metaParts.push(dinhDangNgayGio(payment.created_at));
         if (payment.bank_txn_id) {
@@ -2826,13 +2862,20 @@ function veChiTietDoiSoat(d) {
                 value: nhanGhiChuButToan(payment.note)
             }));
         }
+        const mau = chuaGhiNhan ? '#B45309' : (laHoan ? '#B91C1C' : '#166534');
+        const dau = chuaGhiNhan ? '' : (laHoan ? '− ' : '+ ');
+        const ghiChuThem = chuaGhiNhan
+            ? `<div class="doi-soat-payment-meta" style="color:#B45309;">`
+              + `${escapeHtml(t('seller.ledger.bank_unapplied_hint'))}</div>`
+            : '';
         return `
             <div class="doi-soat-payment-row">
                 <strong>${escapeHtml(nhanLoaiButToan(entryType))}</strong>
-                <strong style="text-align:right; color:${laHoan ? '#B91C1C' : '#166534'};">
-                    ${laHoan ? '− ' : '+ '}${dinhDangTienDoiSoat(payment.amount)}
+                <strong style="text-align:right; color:${mau};">
+                    ${dau}${dinhDangTienDoiSoat(payment.amount)}
                 </strong>
                 <div class="doi-soat-payment-meta">${escapeHtml(metaParts.join(' · '))}</div>
+                ${ghiChuThem}
             </div>`;
     }).join('');
 
