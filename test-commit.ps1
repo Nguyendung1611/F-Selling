@@ -30,6 +30,37 @@ if (-not $TestOnly -and [string]::IsNullOrWhiteSpace($Message)) {
     exit 2
 }
 
+# ---------- 0. Kiem cu phap JS ----------
+# File locale da vo cu phap HAI lan (chuoi bi xuong dong that thay vi hai ky tu
+# \n). Mot file locale vo la TOAN BO ban dich cua trang do khong nap duoc, va
+# nguoi dung nhin thay 'seller.page_title' thay vi chu tieng Viet.
+# tests/test_i18n.py chi kiem 4 file locale; buoc nay kiem het moi file JS.
+# Chay TRUOC pytest vi no mat chua toi mot giay.
+$node = Get-Command node -ErrorAction SilentlyContinue
+if ($node) {
+    Write-Host ""
+    Write-Host "==> Kiem cu phap JS..." -ForegroundColor Cyan
+    $jsLoi = @()
+    Get-ChildItem -Path static\js -Recurse -Filter *.js | ForEach-Object {
+        & node --check $_.FullName 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { $jsLoi += $_.FullName }
+    }
+    if ($jsLoi.Count -gt 0) {
+        Write-Host ""
+        Write-Host "======================================" -ForegroundColor Red
+        Write-Host " JS VO CU PHAP - KHONG commit:" -ForegroundColor Red
+        $jsLoi | ForEach-Object {
+            Write-Host "   $_" -ForegroundColor Red
+            & node --check $_
+        }
+        Write-Host "======================================" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "JS OK" -ForegroundColor Green
+} else {
+    Write-Host "(Khong tim thay node - bo qua buoc kiem cu phap JS)" -ForegroundColor DarkGray
+}
+
 # ---------- 1. Chay test ----------
 Write-Host ""
 Write-Host "==> Dang chay test..." -ForegroundColor Cyan

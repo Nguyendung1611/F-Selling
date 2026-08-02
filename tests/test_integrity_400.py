@@ -110,7 +110,7 @@ def test_session_van_dung_duoc_sau_khi_bi_tu_choi(client, monkeypatch):
     monkeypatch.undo()
 
     assert _tao(client, ctx, "Race G", code="RACE-10").status_code == 200
-    ds = client.get(f"/api/products/{ctx['shop_id']}")
+    ds = client.get(f"/api/products/{ctx['shop_id']}", headers=auth(ctx["token"]))
     assert ds.status_code == 200
     ma = sorted(p["code"] for p in ds.json() if p["code"].startswith("RACE-"))
     assert ma == ["RACE-09", "RACE-10"]

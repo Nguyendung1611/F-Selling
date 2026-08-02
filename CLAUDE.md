@@ -6,9 +6,9 @@ lần đã trả giá.
 ## Ba việc bắt buộc
 
 1. **Đọc `KIEN_TRUC.md` mục "Bẫy cần biết khi viết service mới"** trước khi
-   động vào `fselling/services/`. Có 12 bẫy, phần lớn không nhìn ra được từ code.
+   động vào `fselling/services/`. Có 22 bẫy, phần lớn không nhìn ra được từ code.
 2. **Commit bằng `.\test-commit.ps1 "mô tả"`**, không commit tay. Script chạy
-   toàn bộ 410 test rồi mới cho commit, và chặn `.env` / `*.db` lọt lên Git.
+   toàn bộ 631 test rồi mới cho commit, và chặn `.env` / `*.db` lọt lên Git.
 3. **Sửa giao diện thì phải tự mắt nhìn.** Test không thấy được màu sắc, bố cục
    hay việc một cái nút bấm vào không ra gì. Xem `QUY_TRINH_LAM_VIEC.md`.
 
@@ -57,8 +57,8 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   chủ shop tin là thật. Giá vốn phải **chốt vào `order_items` lúc bán**, và báo
   cáo lãi **loại nguyên đơn** nào còn dòng thiếu giá vốn — loại nửa vời sẽ đẩy
   lãi lên. Chỉ chủ shop và ADMIN xem được giá vốn/lãi (`has_cost_visibility`);
-  `GET /api/products/{shop_id}` không có xác thực nên tuyệt đối không trả giá
-  vốn ở đó.
+  `GET /api/products/{shop_id}` nay có xác thực nhưng **nhân viên vẫn đọc
+  được**, nên tuyệt đối không trả giá vốn ở đó.
 
 **Database**
 
@@ -108,6 +108,9 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   y nguyên câu trả lời (`MSG_DA_GUI_MA`) cho mọi ca: email có thật, email lạ, hay
   đang trong thời gian chờ. Cooldown phải **im lặng** — trả 429 cho lần bấm thứ
   hai là tự mở lại kênh rò rỉ.
+- **Mọi endpoint có `{shop_id}` phải đi qua `require_shop_access`.**
+  `GET /api/products/{shop_id}` từng thiếu: `shop_id` là số nguyên nhỏ, dò từ 1
+  lên là đọc trọn danh mục hàng, giá bán và tồn kho của cửa hàng bất kỳ.
 - Secret chỉ lấy từ biến môi trường. **Không bao giờ** đặt API key trong
   JavaScript — ai mở devtools cũng lấy được.
 - Không commit `.env`, `*.db`, `request_log.txt`.
@@ -154,7 +157,7 @@ lỗi giúp. Bộ test chạy ở máy là lưới an toàn duy nhất — càng
 
 | File | Nội dung |
 |---|---|
-| `KIEN_TRUC.md` | Kiến trúc + 12 bẫy khi viết service. **Đọc trước khi sửa backend** |
+| `KIEN_TRUC.md` | Kiến trúc + 22 bẫy khi viết service. **Đọc trước khi sửa backend** |
 | `QUY_TRINH_LAM_VIEC.md` | Quy trình sửa → test → nhìn thử → commit → push |
 | `HUONG_DAN_SU_DUNG.md` | Hướng dẫn cho người dùng cuối |
 | `DEPLOY_FLY.md` | Deploy lên Fly.io (xem cảnh báo secret ở trên) |

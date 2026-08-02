@@ -95,7 +95,7 @@ def test_danh_sach_sp_tra_ve_ma_vach(client):
     ctx = seller_with_shop(client)
     _tao_sp(client, ctx["token"], ctx["shop_id"], ctx["category_id"], "Nước ngọt", "8935001234567")
 
-    res = client.get(f"/api/products/{ctx['shop_id']}")
+    res = client.get(f"/api/products/{ctx['shop_id']}", headers=auth(ctx["token"]))
     assert res.status_code == 200
     sp = [p for p in res.json() if p["name"] == "Nước ngọt"][0]
     assert sp["barcode"] == "8935001234567"

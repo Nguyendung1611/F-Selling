@@ -22,8 +22,8 @@ function coQuyenNhanVien(permission) {
 // coi cờ này là biện pháp bảo mật: sửa localStorage là qua được.
 const XEM_DUOC_GIA_VON = MY_ROLE === 'SELLER';
 
-// Giá vốn theo product_id, nạp riêng qua endpoint có xác thực. Danh sách sản
-// phẩm công khai KHÔNG kèm giá vốn nên phải ghép ở đây.
+// Giá vốn theo product_id, nạp riêng qua endpoint chỉ chủ shop gọi được. Danh
+// sách sản phẩm mở cho cả nhân viên nên KHÔNG kèm giá vốn - phải ghép ở đây.
 let giaVonTheoSanPham = {};
 let soSanPhamChuaKhaiGiaVon = 0;
 

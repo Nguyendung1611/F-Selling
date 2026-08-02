@@ -76,11 +76,15 @@ def create_product(
 
 
 @router.get("/{shop_id}")
-def get_products(shop_id: int, db: Session = Depends(get_db)):
-    """CỐ Ý không yêu cầu đăng nhập (hành vi sẵn có, POS đang dựa vào).
-    Vì vậy tuyệt đối KHÔNG trả `cost_price` ở đây - giá vốn đi qua
-    `GET /{shop_id}/costs`, nơi có xác thực và chỉ chủ shop xem được."""
-    return catalog_service.list_products(db, shop_id)
+def get_products(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Vẫn KHÔNG trả `cost_price` ở đây dù đã có xác thực (F6): nhân viên đọc
+    được endpoint này, còn giá vốn chỉ chủ shop được xem. Giá vốn đi qua
+    `GET /{shop_id}/costs`."""
+    return catalog_service.list_products(db, current_user, shop_id)
 
 
 @router.get("/{shop_id}/costs")

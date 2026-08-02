@@ -185,7 +185,7 @@ def test_export_seller_tra_dung_header(client):
 
 def test_danh_sach_san_pham_giu_nguyen_cac_truong(client):
     ctx = seller_with_shop(client)
-    res = client.get(f"/api/products/{ctx['shop_id']}")
+    res = client.get(f"/api/products/{ctx['shop_id']}", headers=auth(ctx["token"]))
     assert res.status_code == 200
     item = res.json()[0]
     assert set(item.keys()) == {

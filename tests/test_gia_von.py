@@ -514,13 +514,15 @@ def test_nhan_vien_khong_goi_duoc_endpoint_gia_von(client):
     assert res.status_code == 403
 
 
-def test_danh_sach_san_pham_cong_khai_khong_lo_gia_von(client):
-    """GET /api/products/{shop_id} KHÔNG yêu cầu đăng nhập. Giá vốn lọt vào đây
-    là ai đoán được shop_id cũng xem được."""
+def test_danh_sach_san_pham_khong_lo_gia_von(client):
+    """GET /api/products/{shop_id} đã có xác thực từ F6, nhưng NHÂN VIÊN vẫn đọc
+    được nó - còn giá vốn thì không. Giá vốn lọt vào đây là mọi thu ngân đều
+    xem được qua chính lưới hàng của POS."""
     ctx = seller_with_shop(client)
     _tao_sp_co_gia_von(client, ctx, gia_ban=50000, ton=10, gia_von=30000)
+    _, staff_token = new_staff(client, ctx, staff_role="CASHIER")
 
-    res = client.get(f"/api/products/{ctx['shop_id']}")
+    res = client.get(f"/api/products/{ctx['shop_id']}", headers=auth(staff_token))
     assert res.status_code == 200
     for sp in res.json():
         assert "cost_price" not in sp

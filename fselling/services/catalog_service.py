@@ -22,6 +22,7 @@ from ..core.config import (
 )
 from ..core.i18n import tr
 from ..dependencies import (
+    PERMISSION_CATALOG_READ,
     PERMISSION_INVENTORY,
     PERMISSION_SALE,
     has_cost_visibility,
@@ -510,7 +511,22 @@ def create_product(
     return p
 
 
-def list_products(db: Session, shop_id: int) -> List[Dict]:
+def list_products(
+    db: Session, current_user: models.User, shop_id: int
+) -> List[Dict]:
+    """Danh sách sản phẩm của shop. Bắt buộc đăng nhập và phải thuộc shop đó.
+
+    Trước F6 endpoint này mở cho mọi người: ai đoán được `shop_id` là đọc được
+    trọn danh mục hàng và tồn kho của một cửa hàng lạ. Không có ai đang gọi nó
+    trước lúc đăng nhập - POS và trang Kho đều gọi sau khi có token - nên chỗ mở
+    đó không đổi lấy được gì cả.
+
+    Dùng `PERMISSION_CATALOG_READ` vì đây là quyền đọc danh mục thuần túy, và cả
+    ba vai trò nhân viên đều có nó: thu ngân vẫn thấy lưới hàng để bán, thủ kho
+    vẫn thấy để nhập xuất.
+    """
+    require_shop_access(db, shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_CATALOG_READ)
     products = db.query(models.Product).filter(models.Product.shop_id == shop_id).all()
     res: List[Dict] = []
     for p in products:
@@ -541,9 +557,10 @@ def list_product_costs(
 ) -> Dict[str, Any]:
     """Giá vốn của toàn bộ sản phẩm trong shop. CHỈ chủ shop và ADMIN.
 
-    Tách hẳn khỏi `list_products` vì endpoint đó KHÔNG yêu cầu đăng nhập - POS
-    và trang bán hàng đang gọi nó tự do. Nhét giá vốn vào đó là đưa con số nhạy
-    cảm nhất của cửa hàng ra cho bất kỳ ai đoán được `shop_id`.
+    Vẫn tách hẳn khỏi `list_products` sau khi endpoint đó đã có xác thực (F6):
+    hai vòng người xem khác nhau thật sự. Danh sách sản phẩm mở cho cả nhân
+    viên, còn giá vốn chỉ chủ shop và ADMIN. Gộp lại là nhân viên đọc được giá
+    vốn qua chính lưới hàng của POS.
 
     `chua_khai` đếm riêng số sản phẩm còn NULL để giao diện nhắc chủ shop khai
     nốt - không có nó thì lãi gộp im lặng thiếu một phần và không ai biết.

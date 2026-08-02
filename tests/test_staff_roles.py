@@ -202,7 +202,9 @@ def test_cashier_duoc_pos_crm_nhung_khong_duoc_kho_voucher_bao_cao(client):
         client.get(f"/api/export/seller/{ctx['shop_id']}", headers=headers),
     ]
     assert {response.status_code for response in denied_calls} == {403}
-    product = client.get(f"/api/products/{ctx['shop_id']}").json()[0]
+    product = client.get(
+        f"/api/products/{ctx['shop_id']}", headers=auth(ctx["token"])
+    ).json()[0]
     assert product["stock"] == stock_before
 
 

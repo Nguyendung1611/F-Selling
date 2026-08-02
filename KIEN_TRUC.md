@@ -325,9 +325,10 @@ MANAGER có `PERMISSION_REPORT` nên vẫn xem doanh thu, nhưng biết lãi là
 phản hồi chứ không trả 0 - lãi bằng 0 là một con số có nghĩa (bán đúng bằng giá
 vốn), trả 0 là nói dối chứ không phải giấu.
 
-Hệ quả về route: `GET /api/products/{shop_id}` **không yêu cầu đăng nhập** (POS
-đang dựa vào), nên tuyệt đối không nhét `cost_price` vào đó. Giá vốn đi qua
-`GET /api/products/{shop_id}/costs` riêng, có xác thực.
+Hệ quả về route: `GET /api/products/{shop_id}` từ F6 đã có xác thực (mục 22),
+nhưng **nhân viên vẫn đọc được** nó, nên vẫn tuyệt đối không nhét `cost_price`
+vào đó. Giá vốn đi qua `GET /api/products/{shop_id}/costs` riêng, nơi
+`require_cost_visibility` chỉ cho chủ shop và ADMIN.
 
 ### 14. Bình quân gia quyền tính ngay trong câu UPDATE, và phụ thuộc SQLite
 
@@ -420,6 +421,14 @@ những người đã từng mở trang. Bản giá vốn (F1) đã bị đúng 
 `tests/test_contract.py::test_moi_file_js_css_deu_co_dau_phien_ban` chỉ bắt được
 ca thêm file mới mà quên `?v=`; việc BUMP khi sửa file thì không máy nào kiểm hộ
 được, phải tự nhớ.
+
+Riêng chuyện **file JS vỡ cú pháp** thì đã có máy canh: `test-commit.ps1` chạy
+`node --check` cho mọi file trong `static/js/` trước khi chạy pytest. Thêm bước
+này vì file locale đã vỡ hai lần (chuỗi bị xuống dòng thật thay vì hai ký tự
+`\n`), mà một file locale vỡ là toàn bộ bản dịch của trang đó không nạp được và
+người dùng nhìn thấy `seller.page_title` thay vì chữ tiếng Việt. Máy không cài
+Node thì bước này tự bỏ qua kèm dòng thông báo. Và **đừng sửa file JS bằng
+script Python chèn chuỗi** — đó là nguyên nhân của cả hai lần vỡ.
 
 ### 17. Chống dò mật khẩu và dò mã OTP: hai hình phạt khác nhau, có lý do
 
@@ -620,6 +629,47 @@ giờ ở phần hiển thị.
 **Chưa làm ở đợt này:** kiểm kê theo lô, phiếu hủy hàng hết hạn, màn hình báo
 cáo hạn sử dụng (endpoint `GET /api/products/{shop_id}/batches` đã có, giao diện
 thì chưa), và biến thể sản phẩm.
+
+### 22. Ba endpoint theo `{shop_id}` từng mở cho cả internet
+
+`shop_id` là số nguyên nhỏ tăng dần: dò từ 1 lên là quét sạch mọi cửa hàng
+trong hệ thống. Ba endpoint dưới đây không có `Depends(get_current_user)` từ
+bản đầu, và F6 đóng cả ba:
+
+| Endpoint | Lộ ra cái gì | Quyền mới |
+|---|---|---|
+| `GET /api/products/{shop_id}` | Danh mục hàng, giá bán, tồn kho của shop bất kỳ | `PERMISSION_CATALOG_READ` |
+| `GET /api/vouchers/{shop_id}` | **MÃ voucher**, giá trị giảm, số lượt còn lại | `PERMISSION_VOUCHER` |
+| `POST /api/vouchers/apply/{shop_id}` | Gõ mã bừa để dò ra mã có thật | `PERMISSION_SALE` |
+
+Cái thứ hai nặng nhất: đó là **tiền thật**. Lấy mã của shop lạ rồi đem dùng
+ngay ở POS của họ, không cần tài khoản, không để lại dấu vết nào ngoài một đơn
+được giảm giá.
+
+**Lý do cũ ghi trong code không còn đúng.** Comment ở `get_products` viết "POS
+đang dựa vào". Rà lại thì cả `pos.js` lẫn `seller.js` đều gọi qua `apiCall()` —
+hàm này tự gắn `Authorization` khi có token — và cả hai trang đều chặn người
+chưa đăng nhập ngay ở đầu file. Riêng `apply_voucher` được `pos.js` gọi bằng
+`fetch()` thô nhưng vẫn tự gắn header sẵn. Nghĩa là chỗ mở đó không đổi lấy
+được gì cả, và đã như vậy từ lâu.
+
+**Quyền chọn theo giao diện, không chọn theo cảm tính.** `CATALOG_READ` cho
+danh sách sản phẩm vì **cả ba vai trò nhân viên đều có nó**: thu ngân cần lưới
+hàng để bán, thủ kho cần để nhập xuất (hằng số này có từ trước mà chưa chỗ nào
+dùng — nó được đặt ra đúng cho endpoint này). `VOUCHER` cho danh sách voucher vì
+tab Khuyến Mãi trong `seller.js` chỉ hiện cho MANAGER. Còn `apply_voucher` phải
+là `SALE` chứ KHÔNG phải `VOUCHER`: áp mã là việc của người đứng quầy, siết
+nhầm sang `VOUCHER` là thu ngân không tính được giảm giá.
+
+**Vẫn KHÔNG được trả `cost_price` ở `GET /api/products/{shop_id}`.** Có xác
+thực không có nghĩa là an toàn để lộ giá vốn: vòng người đọc được endpoint này
+(mọi nhân viên) rộng hơn hẳn vòng được xem giá vốn (chủ shop và ADMIN — mục 13).
+
+Bài học chung: một comment `# CỐ Ý không yêu cầu đăng nhập` nêu lý do là "client
+đang dựa vào" thì phải kiểm lại client, đừng tin comment. Lý do đó có thể đúng
+lúc viết và hết đúng từ lâu. Kiểm nhanh toàn bộ: duyệt `fselling/routers/` tìm
+hàm không có `get_current_user` trong chữ ký — sau F6 chỉ còn `auth.py` (đăng
+ký/đăng nhập), `pages.py` (file tĩnh) và webhook (xác thực bằng secret header).
 
 ## Phiên bản dependency
 

@@ -95,7 +95,7 @@ def test_product_id_cua_shop_khac_bi_tu_choi(client):
     assert res.status_code == 404
 
     # Tồn kho shop 2 không được đụng tới.
-    ds = client.get(f"/api/products/{shop2}")
+    ds = client.get(f"/api/products/{shop2}", headers=auth(token2))
     assert [p for p in ds.json() if p["id"] == sp_shop2["id"]][0]["stock"] == 20
 
 

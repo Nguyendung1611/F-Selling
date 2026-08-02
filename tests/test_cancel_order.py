@@ -269,6 +269,7 @@ def test_huy_don_giai_phong_luot_cuoi_de_dung_lai_voucher(client):
     het_luot = client.post(
         f"/api/vouchers/apply/{ctx['shop_id']}",
         data={"subtotal": 100000, "voucher_code": "LIMIT1D"},
+        headers=auth(ctx["token"]),
     )
     assert het_luot.status_code == 400
 
@@ -277,6 +278,7 @@ def test_huy_don_giai_phong_luot_cuoi_de_dung_lai_voucher(client):
     dung_lai = client.post(
         f"/api/vouchers/apply/{ctx['shop_id']}",
         data={"subtotal": 100000, "voucher_code": "LIMIT1D"},
+        headers=auth(ctx["token"]),
     )
     assert dung_lai.status_code == 200, "Hủy đơn phải giải phóng lượt voucher"
 

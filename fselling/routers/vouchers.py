@@ -44,10 +44,17 @@ def apply_voucher(
     subtotal: float = Form(...),
     voucher_code: str = Form(...),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
-    return voucher_service.apply_voucher(db, shop_id, subtotal, voucher_code)
+    return voucher_service.apply_voucher(
+        db, current_user, shop_id, subtotal, voucher_code
+    )
 
 
 @router.get("/{shop_id}")
-def get_vouchers(shop_id: int, db: Session = Depends(get_db)):
-    return voucher_service.list_vouchers(db, shop_id)
+def get_vouchers(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return voucher_service.list_vouchers(db, current_user, shop_id)

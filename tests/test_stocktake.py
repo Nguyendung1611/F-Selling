@@ -30,8 +30,8 @@ def _kiem_ke(client, token, shop_id, items):
     )
 
 
-def _ton(client, shop_id, product_id):
-    ds = client.get(f"/api/products/{shop_id}").json()
+def _ton(client, token, shop_id, product_id):
+    ds = client.get(f"/api/products/{shop_id}", headers=auth(token)).json()
     return [p for p in ds if p["id"] == product_id][0]["stock"]
 
 
@@ -50,7 +50,7 @@ def test_dem_thieu_thi_giam_ton(client):
     assert body["tong_lech"] == -3
     assert body["da_dieu_chinh"][0]["truoc"] == 20
     assert body["da_dieu_chinh"][0]["sau"] == 17
-    assert _ton(client, ctx["shop_id"], sp["id"]) == 17
+    assert _ton(client, ctx["token"], ctx["shop_id"], sp["id"]) == 17
 
 
 def test_dem_thua_thi_tang_ton(client):
@@ -61,7 +61,7 @@ def test_dem_thua_thi_tang_ton(client):
         {"product_id": sp["id"], "counted": 8, "stock_snapshot": 5}
     ])
     assert res.json()["tong_lech"] == 3
-    assert _ton(client, ctx["shop_id"], sp["id"]) == 8
+    assert _ton(client, ctx["token"], ctx["shop_id"], sp["id"]) == 8
 
 
 def test_dem_dung_thi_khong_doi(client):
@@ -74,7 +74,7 @@ def test_dem_dung_thi_khong_doi(client):
     body = res.json()
     assert body["khong_doi"] == 1
     assert body["da_dieu_chinh"] == []
-    assert _ton(client, ctx["shop_id"], sp["id"]) == 12
+    assert _ton(client, ctx["token"], ctx["shop_id"], sp["id"]) == 12
 
 
 def test_dem_ve_khong(client):
@@ -86,7 +86,7 @@ def test_dem_ve_khong(client):
         {"product_id": sp["id"], "counted": 0, "stock_snapshot": 9}
     ])
     assert res.status_code == 200, res.text
-    assert _ton(client, ctx["shop_id"], sp["id"]) == 0
+    assert _ton(client, ctx["token"], ctx["shop_id"], sp["id"]) == 0
 
 
 def test_nhieu_san_pham_cung_luc(client):
@@ -104,8 +104,8 @@ def test_nhieu_san_pham_cung_luc(client):
     assert len(body["da_dieu_chinh"]) == 2
     assert body["khong_doi"] == 1
     assert body["tong_lech"] == 1          # -2 +3
-    assert _ton(client, ctx["shop_id"], a["id"]) == 8
-    assert _ton(client, ctx["shop_id"], c["id"]) == 33
+    assert _ton(client, ctx["token"], ctx["shop_id"], a["id"]) == 8
+    assert _ton(client, ctx["token"], ctx["shop_id"], c["id"]) == 33
 
 
 # ---------- Nguyên tắc an toàn ----------
@@ -120,7 +120,7 @@ def test_sp_khong_dem_toi_thi_giu_nguyen(client):
     _kiem_ke(client, ctx["token"], ctx["shop_id"], [
         {"product_id": dem["id"], "counted": 9, "stock_snapshot": 10}
     ])
-    assert _ton(client, ctx["shop_id"], quen["id"]) == 77
+    assert _ton(client, ctx["token"], ctx["shop_id"], quen["id"]) == 77
 
 
 def test_ton_doi_giua_chung_thi_bo_qua_dong_do(client):
@@ -142,7 +142,7 @@ def test_ton_doi_giua_chung_thi_bo_qua_dong_do(client):
     assert "đã đổi" in body["bo_qua"][0]["ly_do"]
     assert body["bo_qua"][0]["name"] == "SP dang ban"
     # Tồn giữ nguyên 16, KHÔNG bị đẩy ngược lên 20.
-    assert _ton(client, ctx["shop_id"], sp["id"]) == 16
+    assert _ton(client, ctx["token"], ctx["shop_id"], sp["id"]) == 16
 
 
 def test_dong_hop_le_van_duoc_ap_dung_khi_dong_khac_bi_bo_qua(client):
@@ -160,8 +160,8 @@ def test_dong_hop_le_van_duoc_ap_dung_khi_dong_khac_bi_bo_qua(client):
     body = res.json()
     assert len(body["da_dieu_chinh"]) == 1
     assert len(body["bo_qua"]) == 1
-    assert _ton(client, ctx["shop_id"], ok["id"]) == 7
-    assert _ton(client, ctx["shop_id"], doi["id"]) == 8
+    assert _ton(client, ctx["token"], ctx["shop_id"], ok["id"]) == 7
+    assert _ton(client, ctx["token"], ctx["shop_id"], doi["id"]) == 8
 
 
 def test_so_dem_am_bi_tu_choi(client):
@@ -172,7 +172,7 @@ def test_so_dem_am_bi_tu_choi(client):
         {"product_id": sp["id"], "counted": -1, "stock_snapshot": 10}
     ])
     assert res.status_code == 400
-    assert _ton(client, ctx["shop_id"], sp["id"]) == 10
+    assert _ton(client, ctx["token"], ctx["shop_id"], sp["id"]) == 10
 
 
 def test_phieu_rong_bi_tu_choi(client):
@@ -190,7 +190,7 @@ def test_sp_trung_nhau_trong_phieu_bi_tu_choi(client):
         {"product_id": sp["id"], "counted": 7, "stock_snapshot": 10},
     ])
     assert res.status_code == 400
-    assert _ton(client, ctx["shop_id"], sp["id"]) == 10
+    assert _ton(client, ctx["token"], ctx["shop_id"], sp["id"]) == 10
 
 
 def test_sp_khong_ton_tai_thi_bo_qua_khong_vo_ca_phieu(client):
@@ -203,7 +203,7 @@ def test_sp_khong_ton_tai_thi_bo_qua_khong_vo_ca_phieu(client):
     ])
     assert res.status_code == 200, res.text
     assert len(res.json()["bo_qua"]) == 1
-    assert _ton(client, ctx["shop_id"], sp["id"]) == 6
+    assert _ton(client, ctx["token"], ctx["shop_id"], sp["id"]) == 6
 
 
 # ---------- Phân quyền ----------
@@ -218,7 +218,7 @@ def test_khong_kiem_ke_duoc_shop_khac(client):
         {"product_id": sp["id"], "counted": 0, "stock_snapshot": 10}
     ])
     assert res.status_code == 403
-    assert _ton(client, ctx1["shop_id"], sp["id"]) == 10
+    assert _ton(client, ctx1["token"], ctx1["shop_id"], sp["id"]) == 10
 
 
 def test_khong_kiem_ke_duoc_sp_cua_shop_khac(client):
@@ -234,7 +234,7 @@ def test_khong_kiem_ke_duoc_sp_cua_shop_khac(client):
     ])
     assert res.status_code == 200, res.text
     assert len(res.json()["bo_qua"]) == 1
-    assert _ton(client, shop2, sp2["id"]) == 50
+    assert _ton(client, token2, shop2, sp2["id"]) == 50
 
 
 def test_nhan_vien_duoc_kiem_ke(client):
@@ -246,7 +246,7 @@ def test_nhan_vien_duoc_kiem_ke(client):
         {"product_id": sp["id"], "counted": 9, "stock_snapshot": 10}
     ])
     assert res.status_code == 200, res.text
-    assert _ton(client, ctx["shop_id"], sp["id"]) == 9
+    assert _ton(client, ctx["token"], ctx["shop_id"], sp["id"]) == 9
 
 
 def test_can_dang_nhap(client):

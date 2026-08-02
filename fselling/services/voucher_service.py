@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..core.i18n import tr
 from ..dependencies import (
+    PERMISSION_SALE,
     PERMISSION_VOUCHER,
     has_shop_operator_access,
     require_shop_access,
@@ -172,13 +173,40 @@ def delete_voucher(db: Session, current_user: models.User, voucher_id: int) -> D
     return {"msg": "Deleted"}
 
 
-def list_vouchers(db: Session, shop_id: int) -> List[models.Voucher]:
+def list_vouchers(
+    db: Session, current_user: models.User, shop_id: int
+) -> List[models.Voucher]:
+    """Danh sách voucher của shop. Cùng quyền với tạo/xóa: `PERMISSION_VOUCHER`.
+
+    Trước F6 endpoint này mở cho mọi người, và nó trả về MÃ voucher kèm giá trị
+    giảm và số lượt còn lại - tức là ai đoán được `shop_id` thì lấy mã của một
+    cửa hàng lạ rồi đem dùng thẳng ở POS của họ. Lỗ này mất tiền thật, khác với
+    danh sách sản phẩm chỉ mất thông tin.
+
+    Dùng đúng `PERMISSION_VOUCHER` như `create_voucher`/`delete_voucher` để
+    khớp với giao diện: tab Khuyến Mãi trong `seller.js` chỉ hiện cho MANAGER.
+    Thu ngân không cần danh sách - họ gõ mã khách đưa rồi gọi `apply_voucher`.
+    """
+    require_shop_access(db, shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_VOUCHER)
     return db.query(models.Voucher).filter(models.Voucher.shop_id == shop_id).all()
 
 
 def apply_voucher(
-    db: Session, shop_id: int, subtotal: float, voucher_code: str
+    db: Session, current_user: models.User, shop_id: int, subtotal: float,
+    voucher_code: str
 ) -> Dict[str, float]:
+    """Thử áp một mã voucher lên tạm tính, trả về số tiền giảm.
+
+    Quyền là `PERMISSION_SALE` chứ KHÔNG phải `PERMISSION_VOUCHER`: đây là thao
+    tác của người đứng quầy, còn `PERMISSION_VOUCHER` là quyền quản lý mã.
+
+    Trước F6 endpoint này cũng mở: gõ mã bừa vào đây là dò ra mã nào có thật của
+    shop bất kỳ, không cần tài khoản. POS đã gửi sẵn `Authorization` từ trước
+    nên siết lại không đổi gì ở giao diện.
+    """
+    require_shop_access(db, shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_SALE)
     voucher = (
         db.query(models.Voucher)
         .filter(models.Voucher.code == voucher_code, models.Voucher.shop_id == shop_id)
