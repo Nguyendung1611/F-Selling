@@ -617,18 +617,16 @@ bịa ra một hạn không có thật; dồn vào lô bất kỳ là làm sai c
 Hoàn theo thứ tự ngược với lúc xuất để trả một phần không đẩy hàng cận hạn quay
 lại kệ trước hàng dài hạn.
 
-**Kiểm kê hiện TỪ CHỐI sản phẩm theo lô.** `apply_stocktake` gán thẳng
-`prod.stock = counted`, làm vậy với hàng có lô là phá vỡ ràng buộc tổng mà không
-biết cộng trừ vào lô nào. Từ chối kèm thông báo rõ, còn hơn im lặng làm hỏng dữ
-liệu. Kiểm kê theo lô là việc của đợt sau.
+**Kiểm kê hàng theo lô phải đếm theo TỪNG LÔ** (F6, xem mục 24). Gán thẳng
+`prod.stock = counted` cho hàng có lô là phá vỡ ràng buộc tổng mà không biết
+cộng trừ vào lô nào — dạng dòng đó vẫn bị từ chối.
 
 `expiry_date` lưu dạng chuỗi `'YYYY-MM-DD'` (như `Voucher.expires_at`): so sánh
 chuỗi theo định dạng đó là so sánh đúng thứ tự ngày, và tránh hẳn bài toán múi
 giờ ở phần hiển thị.
 
-**Chưa làm ở đợt này:** kiểm kê theo lô, phiếu hủy hàng hết hạn, và màn hình báo
-cáo hạn sử dụng (endpoint `GET /api/products/{shop_id}/batches` đã có, giao diện
-thì chưa). Biến thể sản phẩm đã làm ở F6 — xem mục 23.
+**Đã làm nốt ở F6:** biến thể sản phẩm (mục 23), kiểm kê theo lô và phiếu hủy
+hàng (mục 24).
 
 ### 22. Ba endpoint theo `{shop_id}` từng mở cho cả internet
 
@@ -734,6 +732,80 @@ một mình là chuyện thường — lúc đó không đọc ra được nó l
 thể chứ không cộng gộp theo nhóm. Đó là lựa chọn có chủ ý ở đợt này — biết size
 nào bán chạy là thông tin có ích thật — nhưng chủ shop muốn xem doanh số cả
 nhóm thì hiện phải tự cộng.
+
+### 24. Kiểm kê theo lô, và phiếu hủy hàng là nghiệp vụ THỨ TƯ
+
+**Kiểm kê theo lô.** `StocktakeItem` có hai dạng dòng **loại trừ nhau**: hàng
+thường gửi `counted` + `stock_snapshot`, hàng `track_batches` gửi `batches[]`
+với `counted` + `quantity_snapshot` của TỪNG lô. Khai lẫn lộn thì bị từ chối cả
+phiếu — hai nguồn sự thật cho cùng một con số là chỉ chờ ngày lệch.
+
+Ba nguyên tắc của kiểm kê (mục 10) được giữ nguyên, chỉ **hạ xuống mức lô**:
+
+- So `quantity_snapshot` ở mức LÔ chứ không mức tổng. Hai lô đổi ngược chiều
+  nhau (bán 3 của lô cũ, nhập 3 vào lô mới) làm tổng đứng yên trong khi cả hai
+  lô đều đã khác.
+- `Product.stock` được tính lại bằng **TỔNG của mọi lô**, kể cả lô không có
+  trong phiếu — không cộng dồn chênh lệch. Cộng dồn thì một lô bị bỏ qua vì đã
+  đổi giữa chừng sẽ làm tổng lệch khỏi bảng lô, đúng thứ mà
+  `inventory_service.doi_chieu_ton_kho()` sinh ra để bắt.
+- **Đếm ra hàng không thuộc lô nào đang có thì TỪ CHỐI**, không tự tạo lô. Mỗi
+  hộp có hạn in trên bao bì nên hàng thừa luôn thuộc một hạn cụ thể; hạn đó chưa
+  có lô nghĩa là lần nhập trước bị sót, và đường đúng là Nhập kho. Tự tạo lô
+  không hạn còn tệ hơn: lô không hạn xếp SAU CÙNG khi trừ FEFO nên số hàng đó
+  nằm lại trên kệ lâu nhất — đúng thứ sẽ hỏng trước.
+
+Màn kiểm kê nạp `GET /api/products/{shop_id}/stocktake/batches` một lần khi mở
+tab (khác `/batches`, vốn chỉ trả lô sắp/đã hết hạn cho màn cảnh báo). Quét một
+sản phẩm theo lô thì đưa **tất cả** lô của nó vào phiếu với số đếm bắt đầu từ 0,
+không tự cộng 1 như hàng thường: máy quét đọc mã sản phẩm chứ không đọc ra hạn,
+cộng bừa vào một lô là ghi sai hạn của số hàng đang cầm.
+
+**Phiếu hủy hàng.** Đây là nghiệp vụ thứ tư, cạnh ba cái ở mục 15:
+
+| Nghiệp vụ | Hàng đi đâu | Tiền |
+|---|---|---|
+| Bán | Ra khỏi kho, tới khách | Vào |
+| Xuất kho (`adjust_stock` delta âm) | Ra khỏi kho, không nói đi đâu | Không ghi nhận gì |
+| Trả hàng | Từ khách quay về kho | Ra |
+| **Hủy** | Ra khỏi kho, bỏ đi | **Lỗ đúng bằng giá vốn** |
+
+**Vì sao không dùng lại phiếu xuất kho.** Xuất kho không ghi lý do và không chốt
+giá vốn ở đâu, nên số hàng hết hạn đi qua đường đó **biến mất khỏi báo cáo**:
+tồn giảm, doanh thu không đổi, lãi gộp cao hơn thực tế đúng bằng phần vốn vừa
+mất. Sai theo hướng làm người xem yên tâm — cùng kiểu với bẫy 13.
+
+**Năm điều bắt buộc giữ:**
+
+**`cost_price` CHỐT xuống từng dòng lúc hủy, lấy từ ĐÚNG lô bị hủy.** Lô nhập
+đắt hỏng trên kệ là mất đúng số tiền của lô đó, không phải bình quân của sản
+phẩm. Tra ngược `Product.cost_price` lúc làm báo cáo thì mỗi lần nhập lô giá
+khác là số lỗ các tháng trước tự đổi (mục 13).
+
+**Phiếu còn dòng chưa khai giá vốn thì bị loại NGUYÊN PHIẾU và đếm riêng**
+(`write_offs_missing_cost`). Cộng phần biết được rồi trình bày như tổng thiệt
+hại là báo lỗ THẤP hơn thực tế — vẫn sai theo đúng hướng đó. Riêng **số lượng**
+thì đếm đủ mọi phiếu: "bỏ đi bao nhiêu món" luôn biết chắc.
+
+**Chỉ chủ shop và ADMIN** (`require_cost_visibility`), hẹp hơn hẳn quyền kho.
+Hủy hàng là đường duy nhất làm tồn giảm mà không sinh doanh thu, nên nó cũng là
+đường thuận tiện nhất để che hàng thất thoát. Nới ra sau này dễ; thu lại thì
+hàng đã đi rồi. Vì cùng lý do, `write_off_loss` chỉ hiện cho người xem được giá
+vốn — số lỗ chính là giá vốn nhân số lượng.
+
+**Bấm hai lần là TRỪ KHO HAI LẦN**, và phiếu hủy không có máy trạng thái nào để
+chặn. Chống lặp bằng `idempotency_key` riêng như phiếu trả hàng (mục 8). Frontend
+**không được xóa `operation_id` khi gặp lỗi**: bấm lại sau lỗi mạng phải dùng
+đúng mã cũ, nếu không lần trước đã ghi được mà lần này trừ thêm lần nữa.
+
+**Lô hủy về 0 thì GIỮ dòng lô lại**, không xóa: đó là lịch sử, và
+`order_item_batches` của các đơn cũ còn trỏ vào nó.
+
+`GET /write-off/expired` chỉ **ĐỀ XUẤT** các lô quá hạn, không tự hủy. Hạn nhập
+sai một chữ số là cả lô còn tốt bị bỏ đi, mà hủy thì không có đường lùi.
+
+**Còn để ngỏ:** phiếu hủy chưa có màn xem lại lịch sử trên giao diện (endpoint
+`GET /api/products/{shop_id}/write-offs` đã có), và chưa vào file Excel xuất ra.
 
 ## Phiên bản dependency
 

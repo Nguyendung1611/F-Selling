@@ -201,6 +201,9 @@ function switchTab(tabId, buttonEl = null) {
     const nutTab = buttonEl || document.querySelector(`.tab-btn[data-main-tab="${tabId}"]`);
     if (nutTab) nutTab.classList.add('active');
     if (tabId === 'reconciliation') loadDoiSoat();
+    // Nạp lô mỗi lần MỞ tab chứ không nạp một lần lúc khởi động: hàng nhập vào
+    // giữa buổi phải đếm được, và số lượng của lô là thứ thay đổi liên tục.
+    if (tabId === 'kiemke') kkNapLo();
 }
 
 // Live Preview Logic
@@ -386,8 +389,28 @@ function veTheLaiGop(stats) {
             amount: dinhDangTienDoiSoat(stats.revenue_missing_cost || 0)
         }));
     }
+    // Lỗ do hủy hàng ĐÃ được trừ khỏi `gross_profit` ở server. Nói ra để chủ
+    // shop biết lãi tụt vì hàng hỏng chứ không phải vì bán kém - hai chuyện đó
+    // dẫn tới hai quyết định khác hẳn nhau.
+    if (stats.write_off_loss) {
+        phan.push(t('seller.dashboard.write_off_loss', {
+            amount: dinhDangTienDoiSoat(stats.write_off_loss),
+            quantity: dinhDangSoSeller(stats.written_off_quantity || 0)
+        }));
+    }
+    // Phiếu chưa khai giá vốn KHÔNG được cộng vào số lỗ (không đoán NULL là 0),
+    // nên phải nói ra, nếu không số lỗ hiện ra thấp hơn thực tế trong im lặng.
+    if (stats.write_offs_missing_cost) {
+        phan.push(t('seller.dashboard.write_offs_missing_cost', {
+            count: stats.write_offs_missing_cost,
+            formattedCount: dinhDangSoSeller(stats.write_offs_missing_cost)
+        }));
+    }
     ghiChu.innerText = phan.join(' · ');
-    ghiChu.style.color = stats.orders_missing_cost ? '#B45309' : '#64748B';
+    ghiChu.style.color =
+        (stats.orders_missing_cost || stats.write_offs_missing_cost)
+            ? '#B45309'
+            : '#64748B';
 }
 
 function renderDashboardStats(stats) {
@@ -1264,6 +1287,15 @@ function veHanSuDung(d) {
     veTien('expiredValue', d.expired_value);
     veTien('soonValue', d.expiring_soon_value);
 
+    // Nút hủy chỉ hiện cho chủ shop VÀ chỉ khi thực sự có hàng hết hạn. Đây
+    // CHỈ là lớp giao diện cho gọn mắt - server mới là chỗ chặn thật
+    // (require_cost_visibility trong write_off_service).
+    const nutHuy = document.getElementById('btnHuyHetHan');
+    if (nutHuy) {
+        nutHuy.style.display =
+            (XEM_DUOC_GIA_VON && soHetHan > 0) ? 'inline-flex' : 'none';
+    }
+
     // Badge trên tab con: chỉ đếm hàng ĐÃ hỏng, đó mới là thứ phải xử lý ngay.
     const badge = document.getElementById('expiryBadge');
     if (badge) {
@@ -1293,6 +1325,95 @@ function veHanSuDung(d) {
             <td>${nhan}</td>
         </tr>`;
     });
+}
+
+// ===== F6: phiếu hủy hàng hết hạn =====
+//
+// Hàng hết hạn trước F6 chỉ có đường ra là xuất kho, mà đường đó không ghi lý do
+// và không chốt giá vốn - số hàng đó biến mất khỏi báo cáo và lãi bị thổi lên
+// đúng bằng phần vốn đã mất. Phiếu hủy ghi nhận khoản lỗ đó.
+
+// Một mã cho đúng một lần bấm. Bấm hai lần là TRỪ KHO HAI LẦN, nên giữ nguyên
+// mã khi người dùng bấm lại sau lỗi mạng - server trả về chính phiếu cũ.
+let maThaoTacHuyHang = null;
+let deXuatHuyHang = null;
+
+async function moPhieuHuyHetHan() {
+    const shopId = currentShopId;
+    if (!shopId) return;
+    const generation = currentShopGeneration;
+    let d;
+    try {
+        d = await apiCall(`/products/${shopId}/write-off/expired`);
+    } catch (e) {
+        return showToast(e.message);
+    }
+    if (generation !== currentShopGeneration || currentShopId !== shopId) return;
+
+    if (!d.items.length) {
+        return showToast(t('seller.writeoff.nothing_expired'));
+    }
+    deXuatHuyHang = d;
+    maThaoTacHuyHang = `wo-${shopId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Liệt kê tối đa 8 dòng: hộp xác nhận cuộn dài thì người ta bấm cho xong
+    // chứ không đọc, mà đây là thao tác KHÔNG có đường lùi.
+    const dong = d.items.slice(0, 8)
+        .map(r => `• ${r.product_name} — HSD ${r.expiry_date} — ${dinhDangSoSeller(r.quantity)}`)
+        .join('\n');
+    const con_lai = d.items.length > 8
+        ? '\n' + t('seller.writeoff.more_lines', {
+            count: dinhDangSoSeller(d.items.length - 8)
+        })
+        : '';
+    // Giá trị NULL nghĩa là có lô chưa khai giá vốn - nói ra chứ đừng hiện 0.
+    const tien = d.total_cost === null || d.total_cost === undefined
+        ? t('seller.writeoff.cost_unknown')
+        : dinhDangTienDoiSoat(d.total_cost);
+
+    showCustomConfirm(
+        t('seller.writeoff.confirm_title', {
+            count: dinhDangSoSeller(d.items.length)
+        }),
+        t('seller.writeoff.confirm_message', {
+            quantity: dinhDangSoSeller(d.total_quantity),
+            cost: tien
+        }) + '\n\n' + dong + con_lai,
+        () => guiPhieuHuy(shopId, generation),
+        t('seller.writeoff.confirm_button')
+    );
+}
+
+async function guiPhieuHuy(shopId, generation) {
+    if (!deXuatHuyHang || generation !== currentShopGeneration
+        || currentShopId !== shopId) return;
+    const items = deXuatHuyHang.items.map(r => ({
+        product_id: r.product_id,
+        batch_id: r.batch_id,
+        quantity: r.quantity
+    }));
+    try {
+        const res = await apiCall(`/products/${shopId}/write-off`, 'POST', {
+            reason: 'EXPIRED',
+            items,
+            operation_id: maThaoTacHuyHang
+        });
+        if (generation !== currentShopGeneration || currentShopId !== shopId) return;
+        showToast(t(
+            res.repeated ? 'seller.writeoff.already_done' : 'seller.writeoff.done',
+            { quantity: dinhDangSoSeller(res.total_quantity) }
+        ));
+        deXuatHuyHang = null;
+        maThaoTacHuyHang = null;
+        loadHanSuDung();
+        loadProducts();
+    } catch (e) {
+        // KHÔNG xóa `maThaoTacHuyHang`: bấm lại sau lỗi mạng phải dùng lại đúng
+        // mã đó, nếu không lần trước đã ghi được mà lần này trừ kho thêm lần nữa.
+        if (generation === currentShopGeneration && currentShopId === shopId) {
+            showToast(e.message);
+        }
+    }
 }
 
 function renderCategories(cats) {
@@ -1793,25 +1914,56 @@ function xuLyQuetKho(ma) {
 
 // ===== Kiểm kê =====
 
-// Phiếu đếm đang mở: product_id -> { counted, stock_snapshot, name }
-// `stock_snapshot` là tồn kho lúc sản phẩm này được đếm LẦN ĐẦU. Server so lại
-// với tồn hiện tại lúc áp dụng; lệch nghĩa là có bán/nhập xen vào giữa và dòng
+// Phiếu đếm đang mở. Hai dạng dòng, phân biệt bằng cờ `theoLo`:
+//
+//   { theoLo: false, name, counted, stock_snapshot }
+//   { theoLo: true,  name, lo: { <batch_id>: { counted, quantity_snapshot,
+//                                              expiry_date } } }
+//
+// `stock_snapshot` / `quantity_snapshot` là số lúc BẮT ĐẦU đếm. Server so lại
+// với số hiện tại lúc áp dụng; lệch nghĩa là có bán/nhập xen vào giữa và dòng
 // đó bị bỏ qua thay vì ghi đè làm mất số hàng vừa bán.
+//
+// Hàng theo lô so ở mức LÔ chứ không mức tổng: hai lô đổi ngược chiều nhau (bán
+// 3 của lô cũ, nhập 3 vào lô mới) làm tổng đứng yên trong khi cả hai đã khác.
 let phieuKiemKe = {};
+
+// product_id -> [{batch_id, expiry_date, quantity}], nạp một lần khi mở tab.
+// Hỏi từng sản phẩm lúc quét là mỗi lượt quét một vòng mạng, giữa lúc người ta
+// đang cầm máy quét chạy dọc kệ hàng.
+let loKiemKeTheoSanPham = {};
 
 function _kiemKeDangMo() {
     const tab = document.getElementById('kiemke');
     return !!tab && tab.classList.contains('active');
 }
 
+/** Nạp danh sách lô để đếm. Lỗi thì bỏ qua im lặng: hàng KHÔNG theo lô vẫn
+ *  đếm được bình thường, chặn cả màn vì phần lô là thiệt hại lớn hơn. */
+async function kkNapLo() {
+    const shopId = currentShopId;
+    if (!shopId) return;
+    try {
+        const d = await apiCall(`/products/${shopId}/stocktake/batches`);
+        if (currentShopId !== shopId) return;
+        const bang = {};
+        (d.products || []).forEach(p => { bang[p.product_id] = p.batches || []; });
+        loKiemKeTheoSanPham = bang;
+    } catch (e) {
+        loKiemKeTheoSanPham = {};
+    }
+}
+
 function kkDem(sp, soLuong) {
     if (!damBaoCacheShopHienTai(currentProductsShopId)) return;
+    if (sp.track_batches) return kkThemTheoLo(sp);
     const cu = phieuKiemKe[sp.id];
-    if (cu) {
+    if (cu && !cu.theoLo) {
         cu.counted += soLuong;
         if (cu.counted < 0) cu.counted = 0;
     } else {
         phieuKiemKe[sp.id] = {
+            theoLo: false,
             counted: Math.max(0, soLuong),
             stock_snapshot: sp.stock,
             name: sp.name
@@ -1820,12 +1972,50 @@ function kkDem(sp, soLuong) {
     kkVeBang();
 }
 
+/** Quét một sản phẩm theo lô thì đưa TẤT CẢ lô của nó vào phiếu, số đếm bắt
+ *  đầu từ 0 để người đếm điền theo từng hạn.
+ *
+ *  Không tự cộng 1 như hàng thường: máy quét đọc mã sản phẩm chứ không đọc ra
+ *  hạn, mà cộng bừa vào một lô nào đó là ghi sai hạn của số hàng đang cầm. */
+function kkThemTheoLo(sp) {
+    const lo = loKiemKeTheoSanPham[sp.id] || [];
+    if (!lo.length) {
+        showToast(t('seller.stocktake.no_batch'));
+        return;
+    }
+    if (phieuKiemKe[sp.id]) {
+        showToast(t('seller.stocktake.batch_already_added'));
+        return;
+    }
+    const bang = {};
+    lo.forEach(b => {
+        bang[b.batch_id] = {
+            counted: 0,
+            quantity_snapshot: b.quantity,
+            expiry_date: b.expiry_date
+        };
+    });
+    phieuKiemKe[sp.id] = { theoLo: true, name: sp.name, lo: bang };
+    kkVeBang();
+}
+
 function kkDatSo(id, giaTri) {
     if (!damBaoCacheShopHienTai(currentProductsShopId)) return;
     const dong = phieuKiemKe[id];
-    if (!dong) return;
+    if (!dong || dong.theoLo) return;
     const n = parseInt(giaTri, 10);
     dong.counted = (isNaN(n) || n < 0) ? 0 : n;
+    kkVeBang();
+}
+
+function kkDatSoLo(productId, batchId, giaTri) {
+    if (!damBaoCacheShopHienTai(currentProductsShopId)) return;
+    const dong = phieuKiemKe[productId];
+    if (!dong || !dong.theoLo) return;
+    const lo = dong.lo[batchId];
+    if (!lo) return;
+    const n = parseInt(giaTri, 10);
+    lo.counted = (isNaN(n) || n < 0) ? 0 : n;
     kkVeBang();
 }
 
@@ -1842,28 +2032,70 @@ function kkXoaHet() {
     kkVeBang();
 }
 
+/** Mọi dòng sẽ hiện trên bảng, đã trải phẳng hàng theo lô thành từng lô. */
+function kkCacDong() {
+    const dong = [];
+    Object.entries(phieuKiemKe).forEach(([id, d]) => {
+        const productId = parseInt(id, 10);
+        if (!d.theoLo) {
+            dong.push({
+                productId,
+                batchId: null,
+                ten: d.name,
+                han: null,
+                truoc: d.stock_snapshot,
+                dem: d.counted
+            });
+            return;
+        }
+        Object.entries(d.lo).forEach(([batchId, l]) => {
+            dong.push({
+                productId,
+                batchId: parseInt(batchId, 10),
+                ten: d.name,
+                han: l.expiry_date,
+                truoc: l.quantity_snapshot,
+                dem: l.counted
+            });
+        });
+    });
+    return dong;
+}
+
 function kkVeBang() {
     const tbody = document.getElementById('kkList');
     if (!tbody) return;
-    const cacDong = Object.entries(phieuKiemKe);
+    const cacDong = kkCacDong();
     tbody.innerHTML = '';
 
     let thieu = 0, thua = 0, khop = 0;
-    cacDong.forEach(([id, d]) => {
-        const lech = d.counted - d.stock_snapshot;
+    cacDong.forEach(d => {
+        const lech = d.dem - d.truoc;
         if (lech < 0) thieu++; else if (lech > 0) thua++; else khop++;
         const mau = lech < 0 ? '#ef4444' : (lech > 0 ? 'var(--success)' : '#94A3B8');
+        // Dòng theo lô phải nêu HẠN, nếu không cùng một sản phẩm hiện mấy dòng
+        // trông giống hệt nhau và người đếm không biết điền vào ô nào.
+        const oTen = d.batchId === null
+            ? escapeHtml(d.ten)
+            : `${escapeHtml(d.ten)}<br><span style="font-size:0.75rem; color:#94A3B8;">`
+              + `<i class="ph ph-calendar-x"></i> ${escapeHtml(t('seller.stocktake.expiry', { date: d.han || '--' }))}</span>`;
+        const doiSo = d.batchId === null
+            ? `kkDatSo(${d.productId}, this.value)`
+            : `kkDatSoLo(${d.productId}, ${d.batchId}, this.value)`;
+        // Nút xóa gỡ cả sản phẩm: bỏ lẻ một lô rồi giữ các lô còn lại là chuyện
+        // chưa gặp trong thực tế, mà thêm nút riêng thì bảng chật thêm.
         tbody.innerHTML += `<tr>
-            <td>${escapeHtml(d.name)}</td>
-            <td>${dinhDangSoSeller(d.stock_snapshot)}</td>
-            <td><input type="number" min="0" value="${d.counted}" onchange="kkDatSo(${id}, this.value)"
+            <td>${oTen}</td>
+            <td>${dinhDangSoSeller(d.truoc)}</td>
+            <td><input type="number" min="0" value="${d.dem}" onchange="${doiSo}"
                        style="width:80px; padding:0.3rem; border-radius:6px; border:1px solid #334155; background:#0F172A; color:#F8FAFC;"></td>
             <td style="color:${mau}; font-weight:600;">${lech > 0 ? '+' : ''}${lech}</td>
-            <td><button class="btn-outline" onclick="kkBo(${id})" style="padding:0.2rem 0.5rem; color:#ef4444;"><i class="ph ph-x"></i></button></td>
+            <td><button class="btn-outline" onclick="kkBo(${d.productId})" style="padding:0.2rem 0.5rem; color:#ef4444;"><i class="ph ph-x"></i></button></td>
         </tr>`;
     });
 
-    document.getElementById('kkSoSP').innerText = dinhDangSoSeller(cacDong.length);
+    document.getElementById('kkSoSP').innerText =
+        dinhDangSoSeller(Object.keys(phieuKiemKe).length);
     document.getElementById('kkSoThieu').innerText = dinhDangSoSeller(thieu);
     document.getElementById('kkSoThua').innerText = dinhDangSoSeller(thua);
     document.getElementById('kkSoKhop').innerText = dinhDangSoSeller(khop);
@@ -1902,21 +2134,36 @@ async function kkApDung() {
     if (!damBaoCacheShopHienTai(currentProductsShopId)) return;
     const shopId = currentShopId;
     const generation = currentShopGeneration;
-    const items = Object.entries(phieuKiemKe).map(([id, d]) => ({
-        product_id: parseInt(id, 10),
-        counted: d.counted,
-        stock_snapshot: d.stock_snapshot
-    }));
+    // Hàng theo lô gửi `batches`, hàng thường gửi số tổng. Hai dạng loại trừ
+    // nhau - server từ chối dòng nào khai lẫn lộn.
+    const items = Object.entries(phieuKiemKe).map(([id, d]) => (
+        d.theoLo
+            ? {
+                product_id: parseInt(id, 10),
+                batches: Object.entries(d.lo).map(([batchId, l]) => ({
+                    batch_id: parseInt(batchId, 10),
+                    counted: l.counted,
+                    quantity_snapshot: l.quantity_snapshot
+                }))
+            }
+            : {
+                product_id: parseInt(id, 10),
+                counted: d.counted,
+                stock_snapshot: d.stock_snapshot
+            }
+    ));
     if (!items.length) return;
 
-    const soLech = items.filter(i => i.counted !== i.stock_snapshot).length;
+    const cacDong = kkCacDong();
+    const soLech = cacDong.filter(d => d.dem !== d.truoc).length;
 
     // Nêu thẳng mức thay đổi của TỔNG tồn kho. Chỉ nói "N sản phẩm bị lệch" là
     // không đủ: quét thử mỗi món một lần rồi bấm Áp dụng sẽ đặt tồn về 1 cho
     // tất cả, tổng tồn có thể tụt từ vài trăm xuống vài đơn vị mà con số đó
-    // không hiện ra ở đâu cả.
-    const tongTon = items.reduce((s, i) => s + i.stock_snapshot, 0);
-    const tongDem = items.reduce((s, i) => s + i.counted, 0);
+    // không hiện ra ở đâu cả. Với hàng theo lô còn nguy hơn: quét xong mà chưa
+    // điền ô nào thì mọi lô của nó đang là 0.
+    const tongTon = cacDong.reduce((s, d) => s + d.truoc, 0);
+    const tongDem = cacDong.reduce((s, d) => s + d.dem, 0);
     const chenh = tongDem - tongTon;
     const moTaChenh = chenh === 0
         ? t('seller.stocktake.no_change')
@@ -1927,7 +2174,7 @@ async function kkApDung() {
 
     showCustomConfirm(
         t('seller.stocktake.confirm_title', {
-            count: dinhDangSoSeller(items.length)
+            count: dinhDangSoSeller(cacDong.length)
         }),
         t('seller.stocktake.confirm_message', {
             stock: dinhDangSoSeller(tongTon),

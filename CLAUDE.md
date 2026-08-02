@@ -6,9 +6,9 @@ lần đã trả giá.
 ## Ba việc bắt buộc
 
 1. **Đọc `KIEN_TRUC.md` mục "Bẫy cần biết khi viết service mới"** trước khi
-   động vào `fselling/services/`. Có 23 bẫy, phần lớn không nhìn ra được từ code.
+   động vào `fselling/services/`. Có 24 bẫy, phần lớn không nhìn ra được từ code.
 2. **Commit bằng `.\test-commit.ps1 "mô tả"`**, không commit tay. Script chạy
-   toàn bộ 631 test rồi mới cho commit, và chặn `.env` / `*.db` lọt lên Git.
+   toàn bộ 711 test rồi mới cho commit, và chặn `.env` / `*.db` lọt lên Git.
 3. **Sửa giao diện thì phải tự mắt nhìn.** Test không thấy được màu sắc, bố cục
    hay việc một cái nút bấm vào không ra gì. Xem `QUY_TRINH_LAM_VIEC.md`.
 
@@ -37,8 +37,14 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
 - **Hàng có `track_batches`: bảng lô là sự thật, `Product.stock` là bản sao.**
   Bán và xuất trừ theo **FEFO** (hạn gần nhất trước), "còn hàng" chỉ tính phần
   chưa hết hạn, giá vốn lấy từ đúng lô đã xuất, hoàn kho về đúng lô đã xuất
-  (`order_item_batches`). Kiểm kê hiện **từ chối** hàng theo lô. Sản phẩm tắt cờ
-  chạy y như cũ — đừng làm hỏng điều đó.
+  (`order_item_batches`), kiểm kê đếm **theo từng lô** (so snapshot ở mức lô,
+  rồi dựng lại `stock` bằng tổng mọi lô). Sản phẩm tắt cờ chạy y như cũ — đừng
+  làm hỏng điều đó.
+- **Hủy hàng KHÔNG phải xuất kho.** Xuất kho không ghi lý do và không chốt giá
+  vốn, nên hàng hết hạn đi đường đó biến mất khỏi báo cáo và lãi bị thổi lên
+  đúng bằng phần vốn đã mất. Phiếu hủy chốt `cost_price` từ **đúng lô bị hủy**,
+  trừ vào lãi gộp, chỉ chủ shop/ADMIN được bấm, và chống bấm hai lần bằng
+  `idempotency_key` — bấm hai lần là trừ kho hai lần.
 - **Đơn ghi nợ ở trạng thái `DEBT`, KHÔNG phải `PENDING`.** Để ở `PENDING` thì
   `cancel_expired_pending_orders` xóa sạch sổ nợ và hoàn kho hàng đã giao, còn
   `close_shift` chặn thu ngân kết ca vĩnh viễn. Đơn nợ bắt buộc có khách; tiền
@@ -162,7 +168,7 @@ lỗi giúp. Bộ test chạy ở máy là lưới an toàn duy nhất — càng
 
 | File | Nội dung |
 |---|---|
-| `KIEN_TRUC.md` | Kiến trúc + 23 bẫy khi viết service. **Đọc trước khi sửa backend** |
+| `KIEN_TRUC.md` | Kiến trúc + 24 bẫy khi viết service. **Đọc trước khi sửa backend** |
 | `QUY_TRINH_LAM_VIEC.md` | Quy trình sửa → test → nhìn thử → commit → push |
 | `HUONG_DAN_SU_DUNG.md` | Hướng dẫn cho người dùng cuối |
 | `DEPLOY_FLY.md` | Deploy lên Fly.io (xem cảnh báo secret ở trên) |

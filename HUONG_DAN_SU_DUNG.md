@@ -84,6 +84,28 @@ danh sách nhưng bấm không được.
 
 > Báo cáo và Excel hiện đếm theo **từng biến thể**, chưa cộng gộp theo nhóm.
 
+### Kiểm kê hàng có hạn sử dụng
+
+Sản phẩm bật "Theo dõi hạn sử dụng theo lô" thì phải đếm **theo từng hạn**. Quét
+mã của nó ở tab Kiểm Kê, phiếu sẽ hiện ra một dòng cho mỗi hạn còn hàng — điền
+số đếm được vào đúng dòng có hạn tương ứng.
+
+> Đếm ra hàng thuộc một hạn **chưa có trong phiếu** thì đó là hàng nhập bị sót,
+> không phải việc của kiểm kê. Vào Kho hàng → Nhập kho và khai đúng hạn đó.
+
+### Hủy hàng hết hạn
+
+Kho hàng → tab **Hạn sử dụng** → nút **Hủy hàng hết hạn** (chỉ chủ cửa hàng
+thấy). Hệ thống liệt kê sẵn các lô đã quá hạn kèm số tiền vốn sẽ mất; xem lại
+rồi mới xác nhận.
+
+Số hàng hủy bị trừ khỏi kho và ghi thành **lỗ** trong báo cáo — dòng "Trừ ... hàng
+hủy" dưới ô Lãi gộp ở Dashboard. Đây là điểm khác quan trọng so với việc dùng
+Xuất kho: xuất kho làm tồn giảm mà lãi vẫn báo như cũ, tức là cao hơn thực tế.
+
+> Thao tác này **không hoàn tác được**, và lô nào chưa khai giá vốn thì phần lỗ
+> của nó không tính được — hệ thống sẽ nói rõ thay vì coi như bằng 0.
+
 ## 6. File cấu hình `.env`
 
 | Biến | Ý nghĩa |
