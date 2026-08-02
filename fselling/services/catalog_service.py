@@ -102,7 +102,71 @@ _RANG_BUOC_DUY_NHAT = {
     "products.code": "Mã sản phẩm vừa được sản phẩm khác dùng. Vui lòng thử lại.",
     "products.barcode": "Mã vạch vừa được sản phẩm khác dùng. Vui lòng thử lại.",
     "products.name": "Tên sản phẩm vừa được sản phẩm khác dùng. Vui lòng thử lại.",
+    # ux_products_shop_variant. SQLite nêu cả ba cột của index, và cột đầu tiên
+    # trong đó không phải `shop_id` mà là cột thứ hai khi khớp chuỗi con - nên
+    # bắt theo `products.variant_group` là đủ và không đụng khóa nào khác.
+    "products.variant_group": (
+        "Biến thể này vừa được tạo trong cùng nhóm. Vui lòng đổi tên biến thể."
+    ),
 }
+
+# Ghép "<nhóm> - <biến thể>" thành `Product.name`. Ký tự ngăn cách để dấu gạch
+# nối có khoảng trắng hai bên vì tên hàng tiếng Việt hay có sẵn dấu gạch trong
+# từ ("bánh mì - que"), còn " - " thì gần như không.
+_NGAN_CACH_BIEN_THE = " - "
+
+_DAI_TOI_DA_NHOM = 200
+_DAI_TOI_DA_BIEN_THE = 100
+
+
+def _chuan_hoa_ten_bien_the(raw: Optional[str]) -> Optional[str]:
+    """Tên biến thể đã cắt khoảng trắng, hoặc None nếu bỏ trống.
+
+    Rỗng và None đều quy về None ("sản phẩm đơn lẻ"): ô này là ô tùy chọn trên
+    form nên form cũ không gửi field, còn form mới gửi field rỗng khi người dùng
+    không dùng biến thể — hai đường đó phải ra cùng một kết quả (bẫy #3).
+    """
+    if raw is None:
+        return None
+    cleaned = " ".join(str(raw).split())
+    if not cleaned:
+        return None
+    if len(cleaned) > _DAI_TOI_DA_BIEN_THE:
+        raise HTTPException(
+            status_code=400,
+            detail=tr(
+                "Tên biến thể tối đa {n} ký tự", n=str(_DAI_TOI_DA_BIEN_THE)
+            ),
+        )
+    return cleaned
+
+
+def _ten_va_nhom(
+    ten_nguoi_dung: str, ten_bien_the: Optional[str]
+) -> tuple[str, Optional[str], Optional[str]]:
+    """(name lưu vào DB, variant_group, variant_name) từ dữ liệu trên form.
+
+    Ô "Tên sản phẩm" mang hai nghĩa tùy theo có khai biến thể hay không: không
+    khai thì nó là tên sản phẩm, có khai thì nó là **tên nhóm**. Làm vậy để form
+    chỉ phải thêm đúng MỘT ô, và để `variant_group` không bao giờ lệch khỏi tên
+    mà người dùng nhìn thấy.
+
+    `name` vẫn là cột thật và vẫn duy nhất theo shop: mọi chỗ đang đọc
+    `Product.name` (dòng đơn hàng, hóa đơn, Excel, log) tự có tên đầy đủ kèm
+    biến thể mà không phải sửa một dòng nào.
+    """
+    if not ten_bien_the:
+        return ten_nguoi_dung, None, None
+    if len(ten_nguoi_dung) > _DAI_TOI_DA_NHOM:
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Tên nhóm tối đa {n} ký tự", n=str(_DAI_TOI_DA_NHOM)),
+        )
+    return (
+        f"{ten_nguoi_dung}{_NGAN_CACH_BIEN_THE}{ten_bien_the}",
+        ten_nguoi_dung,
+        ten_bien_the,
+    )
 
 
 def _ghi_bat_trung(db: Session, ghi) -> None:
@@ -424,6 +488,10 @@ def lookup_by_barcode(
         "is_active": prod.is_active,
         "category_id": prod.category_id,
         "shop_id": prod.shop_id,
+        # Quét mã vạch của một biến thể phải ra đúng biến thể đó, và POS cần hai
+        # trường này để dựng lại đúng ô hàng khi danh sách trong bộ nhớ đã cũ.
+        "variant_group": prod.variant_group,
+        "variant_name": prod.variant_name,
     }
 
 
@@ -440,11 +508,18 @@ def create_product(
     image: Optional[UploadFile] = None,
     cost_price: Optional[float] = None,
     track_batches: bool = False,
+    variant_name: Optional[str] = None,
 ) -> models.Product:
     shop = _require_shop_operator_403(db, shop_id, current_user)
     if cost_price is not None:
         require_cost_visibility(shop, current_user)
         cost_price = _kiem_gia_von(cost_price)
+
+    # Khai biến thể thì `name` trở thành tên NHÓM và tên lưu vào DB là tên ghép.
+    # Phải làm trước phép kiểm trùng bên dưới, nếu không "Áo thun" nhóm sẽ đụng
+    # với sản phẩm đơn lẻ cùng tên trong khi hai cái đó không hề trùng nhau.
+    variant_name = _chuan_hoa_ten_bien_the(variant_name)
+    name, variant_group, variant_name = _ten_va_nhom(name, variant_name)
 
     existing_prod = (
         db.query(models.Product)
@@ -482,6 +557,8 @@ def create_product(
         code=code_stripped or None,
         barcode=barcode_value,
         name=name,
+        variant_group=variant_group,
+        variant_name=variant_name,
         price=price,
         cost_price=cost_price,
         track_batches=bool(track_batches),
@@ -547,6 +624,11 @@ def list_products(
                 "shop_id": p.shop_id,
                 "category_is_active": cat_active,
                 "track_batches": bool(p.track_batches),
+                # F6: cả hai NULL = sản phẩm đơn lẻ. Giao diện gom ô theo
+                # `variant_group`; `name` đã là tên đầy đủ nên chỗ nào không
+                # muốn gom thì cứ dùng `name` như trước, không phải sửa gì.
+                "variant_group": p.variant_group,
+                "variant_name": p.variant_name,
             }
         )
     return res
@@ -672,6 +754,7 @@ def update_product(
     barcode: Optional[str] = None,
     image: Optional[UploadFile] = None,
     cost_price: Optional[str] = None,
+    variant_name: Optional[str] = None,
 ) -> models.Product:
     """Sửa thông tin sản phẩm: tên, giá, giá vốn, mã, mã vạch, danh mục, ảnh.
 
@@ -685,6 +768,12 @@ def update_product(
     NULL, dùng khi khai nhầm), chuỗi số = đặt giá vốn mới. Sửa tay ở đây là
     đường ghi đè bình quân gia quyền - dùng khi khai sai, không phải đường
     thường xuyên (nhập hàng thì đi qua `adjust_stock` kèm đơn giá).
+
+    `variant_name` cũng có ba trạng thái, cùng lý do và cùng cách làm: `None` =
+    form không gửi (giữ nguyên biến thể), `""` = gửi rỗng (gỡ biến thể, sản phẩm
+    trở lại đơn lẻ), chuỗi = đặt tên biến thể mới. Gỡ biến thể KHÔNG xóa dữ liệu
+    nào khác - tồn kho, lô hạn và lịch sử bán đều gắn theo `product_id` nên
+    không bị ảnh hưởng, chỉ tên và cách gom nhóm trên giao diện đổi.
 
     CỐ Ý KHÔNG đụng vào `stock`. Ghi đè tồn kho từ form sửa gây mất hàng khi
     có bán song song (seller mở form thấy tồn 100, POS bán vài đơn, seller bấm
@@ -713,6 +802,19 @@ def update_product(
             status_code=400,
             detail=tr("Giá sản phẩm phải lớn hơn 0"),
         )
+
+    # `variant_name` là None khi form KHÔNG gửi field (client cũ, hoặc form chỉ
+    # sửa vài trường): giữ nguyên biến thể đang có. Ghép lại tên dù giữ nguyên,
+    # vì ô "Tên sản phẩm" lúc này mang tên NHÓM và người dùng có thể vừa đổi nó
+    # - đổi tên nhóm phải kéo theo tên đầy đủ của biến thể.
+    ten_bien_the = (
+        prod.variant_name
+        if variant_name is None
+        else _chuan_hoa_ten_bien_the(variant_name)
+    )
+    name_stripped, nhom_moi, ten_bien_the = _ten_va_nhom(
+        name_stripped, ten_bien_the
+    )
 
     category = (
         db.query(models.Category)
@@ -754,6 +856,8 @@ def update_product(
         _ensure_code_unique(db, prod.shop_id, code_stripped, exclude_product_id=product_id)
         prod.code = code_stripped
     prod.name = name_stripped
+    prod.variant_group = nhom_moi
+    prod.variant_name = ten_bien_the
     prod.price = price
     prod.category_id = category_id
     ghi_chu_gia_von = ""

@@ -192,6 +192,19 @@ _MIGRATIONS = [
     "ON order_item_batches(order_item_id)",
     "CREATE INDEX IF NOT EXISTS ix_order_item_batches_batch_id "
     "ON order_item_batches(batch_id)",
+    # F6: biến thể (size/màu). Mỗi biến thể vẫn là một dòng products đầy đủ, nên
+    # hai cột này là toàn bộ phần lược đồ phải thêm - không có bảng mới, không
+    # có backfill, và mọi sản phẩm đang có giữ nguyên NULL nghĩa là "đơn lẻ".
+    "ALTER TABLE products ADD COLUMN variant_group VARCHAR(200)",
+    "ALTER TABLE products ADD COLUMN variant_name VARCHAR(100)",
+    "CREATE INDEX IF NOT EXISTS ix_products_shop_variant_group "
+    "ON products(shop_id, variant_group)",
+    # Hai biến thể trùng tên trong cùng một nhóm là lỗi nhập liệu, và nếu lọt
+    # thì thu ngân không phân biệt được hai ô giống hệt nhau trên lưới POS.
+    # SQLite coi mỗi NULL là một giá trị KHÁC NHAU nên vô số sản phẩm đơn lẻ
+    # (cả hai cột NULL) vẫn cùng tồn tại được dưới index này.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_products_shop_variant "
+    "ON products(shop_id, variant_group, variant_name)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
@@ -202,6 +215,7 @@ _REQUIRED_INDEXES = [
     "ix_products_shop_barcode",
     "ix_products_shop_code",
     "ix_products_shop_name",
+    "ux_products_shop_variant",
     "ux_order_payments_idempotency_key",
     "ux_orders_operation_id",
     "ux_cash_shifts_shop_user_open",

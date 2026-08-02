@@ -31,6 +31,18 @@ async def barcode_field(request: Request) -> Optional[str]:
     return str(form.get("barcode") or "")
 
 
+async def variant_name_field(request: Request) -> Optional[str]:
+    """Lấy tên biến thể từ form, cùng lý do và cùng cách làm với `barcode_field`.
+
+    Trả về `None` = giữ nguyên biến thể đang có (form cũ không có ô này), `""` =
+    gỡ biến thể để sản phẩm trở lại đơn lẻ, chuỗi khác = đặt tên biến thể mới.
+    """
+    form = await request.form()
+    if "variant_name" not in form:
+        return None
+    return str(form.get("variant_name") or "")
+
+
 async def cost_price_field(request: Request) -> Optional[str]:
     """Lấy giá vốn từ form, cùng lý do và cùng cách làm với `barcode_field`.
 
@@ -56,6 +68,10 @@ def create_product(
     image: UploadFile = File(None),
     cost_price: Optional[float] = Form(None),
     track_batches: bool = Form(False),
+    # Khai ô này thì `name` được hiểu là tên NHÓM, và tên lưu vào DB là tên
+    # ghép. Ở đây `Form(None)` là đủ (không dính bẫy #3) vì lúc tạo mới thì
+    # "không gửi" và "gửi rỗng" đều có nghĩa là sản phẩm đơn lẻ.
+    variant_name: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -72,6 +88,7 @@ def create_product(
         image=image,
         cost_price=cost_price,
         track_batches=track_batches,
+        variant_name=variant_name,
     )
 
 
@@ -129,6 +146,7 @@ def update_product(
     category_id: int = Form(...),
     image: UploadFile = File(None),
     cost_price: Optional[str] = Depends(cost_price_field),
+    variant_name: Optional[str] = Depends(variant_name_field),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -143,6 +161,7 @@ def update_product(
         barcode=barcode,
         image=image,
         cost_price=cost_price,
+        variant_name=variant_name,
     )
 
 

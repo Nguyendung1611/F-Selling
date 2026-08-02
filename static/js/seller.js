@@ -1525,34 +1525,98 @@ function dongGiaVon(productId) {
         + `${escapeHtml(dinhDangTienDoiSoat(gia))}</span>`;
 }
 
+// Ô "Tên sản phẩm" mang hai nghĩa tùy theo có khai biến thể hay không, nên nhãn
+// của nó phải nói ra nghĩa đang dùng. Không đổi nhãn thì người dùng gõ
+// "Áo thun đỏ L" vào ô tên rồi lại gõ "Đỏ / L" vào ô biến thể, ra tên đầy đủ
+// "Áo thun đỏ L - Đỏ / L" - sai mà không có gì báo.
+function capNhatNhanTenSanPham() {
+    const nhan = document.getElementById('prodNameLabel');
+    if (!nhan) return;
+    const coBienThe = Boolean(document.getElementById('prodVariant')?.value.trim());
+    nhan.innerText = t(
+        coBienThe ? 'seller.products.group_required' : 'seller.products.name_required'
+    );
+}
+
+// Khóa gom nhóm của một dòng. Sản phẩm đơn lẻ tự đứng thành nhóm một mình nên
+// đoạn sắp xếp bên dưới không cần rẽ nhánh.
+function _khoaNhom(p) {
+    return p.variant_group || p.name || '';
+}
+
+/** Sắp xếp để các biến thể cùng nhóm nằm liền nhau, và trong nhóm thì theo tên
+ *  biến thể. Không gộp thành một dòng: mỗi biến thể vẫn cần đủ nút sửa, nhập
+ *  xuất kho, bật tắt và xóa của riêng nó. */
+function _sapXepTheoNhom(danhSach) {
+    return [...danhSach].sort((a, b) => {
+        const nhom = _khoaNhom(a).localeCompare(_khoaNhom(b), 'vi');
+        if (nhom !== 0) return nhom;
+        return (a.variant_name || '').localeCompare(b.variant_name || '', 'vi');
+    });
+}
+
 function filterProducts() {
     const tbody = document.getElementById('prodList');
     if (!tbody) return;
     tbody.innerHTML = '';
     if (!cacheThuocShop(currentProductsShopId, currentShopId)) return;
     const filterCatId = document.getElementById('filterCatSelect').value;
-    
-    const filtered = filterCatId 
+
+    const filtered = filterCatId
         ? currentProducts.filter(p => p.category_id == filterCatId)
         : currentProducts;
-        
-    filtered.forEach(p => {
+
+    _sapXepTheoNhom(filtered).forEach(p => {
         const activeText = p.is_active
             ? `<span style="color:var(--success); font-weight:600; font-size: 0.8rem;">${escapeHtml(t('seller.status.active'))}</span>`
             : `<span style="color:#ef4444; font-weight:600; font-size: 0.8rem;">${escapeHtml(t('seller.status.inactive'))}</span>`;
+        // Tên nhóm mờ ở trên, tên biến thể đậm ở dưới. Nhắc lại tên nhóm ở MỌI
+        // dòng chứ không chỉ dòng đầu nhóm: bảng này cuộn được và lọc được theo
+        // danh mục, nên dòng "Size 32" đứng một mình là chuyện thường - lúc đó
+        // không đọc ra được nó là quần hay áo. Chữ mờ lặp lại vẫn đủ để mắt gom
+        // nhóm, mà không dòng nào mất nghĩa.
+        const oTen = p.variant_group
+            ? `<div style="color:#64748B; font-size:0.8rem;">${escapeHtml(p.variant_group)}</div>`
+              + `<b>${escapeHtml(p.variant_name)}</b>`
+            : escapeHtml(p.name);
+        const nutThemBienThe = p.variant_group
+            ? `<button class="btn-outline" onclick="themBienTheCungNhom(${p.id})" style="padding: 0.2rem 0.5rem;" title="${escapeHtml(t('seller.products.add_variant'))}" aria-label="${escapeHtml(t('seller.products.add_variant'))}"><i class="ph ph-copy"></i></button>`
+            : '';
         tbody.innerHTML += `<tr>
             <td>${escapeHtml(p.code||'--')}${p.barcode ? `<br><span style="font-size:0.75rem; color:#64748B;" title="${escapeHtml(t('seller.products.barcode'))}"><i class="ph ph-barcode"></i> ${escapeHtml(p.barcode)}</span>` : ''}</td>
-            <td>${escapeHtml(p.name)} <br>${activeText}</td>
+            <td>${oTen} <br>${activeText}</td>
             <td>${dinhDangTienDoiSoat(p.price)}${dongGiaVon(p.id)}</td>
             <td>${dinhDangSoSeller(p.stock)}</td>
-            <td style="display:flex; justify-content: center; align-items: center; gap:0.5rem; height: 7rem;">
+            <td style="display:flex; justify-content: center; align-items: center; gap:0.5rem; height: 7rem; flex-wrap: wrap;">
                 <button class="btn-outline" onclick="editProduct(${p.id})" style="padding: 0.2rem 0.5rem;" title="${escapeHtml(t('common.edit'))}" aria-label="${escapeHtml(t('common.edit'))}"><i class="ph ph-pencil-simple"></i></button>
+                ${nutThemBienThe}
                 <button class="btn-outline" onclick="nhapXuatKho(${p.id})" style="padding: 0.2rem 0.5rem;" title="${escapeHtml(t('seller.actions.stock_adjust'))}" aria-label="${escapeHtml(t('seller.actions.stock_adjust'))}"><i class="ph ph-stack"></i></button>
                 <button class="btn-outline" onclick="toggleProductStatus(${p.id})" style="padding: 0.2rem 0.5rem;" title="${escapeHtml(t('seller.actions.toggle'))}" aria-label="${escapeHtml(t('seller.actions.toggle'))}"><i class="ph ph-power"></i></button>
                 <button class="btn-outline" onclick="deleteProduct(${p.id})" style="padding: 0.2rem 0.5rem; color:#ef4444;" title="${escapeHtml(t('common.delete'))}" aria-label="${escapeHtml(t('common.delete'))}"><i class="ph ph-trash"></i></button>
             </td>
         </tr>`;
     });
+}
+
+/** Điền sẵn form để thêm một biến thể nữa vào cùng nhóm.
+ *
+ *  Khai tám size áo mà phải gõ lại tên nhóm, giá, danh mục tám lần thì đến size
+ *  thứ ba là bắt đầu có dòng lệch. CỐ Ý bỏ trống ô biến thể và ô mã vạch: đó là
+ *  đúng hai thứ bắt buộc phải khác nhau giữa các biến thể. */
+function themBienTheCungNhom(id) {
+    if (!damBaoCacheShopHienTai(currentProductsShopId)) return;
+    const goc = currentProducts.find(p => p.id === id);
+    if (!goc || !goc.variant_group) return;
+    cancelEditProduct();
+    document.getElementById('prodName').value = goc.variant_group;
+    document.getElementById('prodPrice').value = goc.price;
+    document.getElementById('catSelect').value = String(goc.category_id);
+    const oLo = document.getElementById('prodTrackBatches');
+    if (oLo) oLo.checked = Boolean(goc.track_batches);
+    const oBienThe = document.getElementById('prodVariant');
+    if (oBienThe) { oBienThe.value = ''; oBienThe.focus(); }
+    capNhatNhanTenSanPham();
+    showToast(t('seller.products.add_variant_ready', { group: goc.variant_group }));
 }
 
 // Khi SỬA sản phẩm, ô tồn kho bị khóa: thay đổi tồn kho đi qua nút Nhập/Xuất
@@ -1572,7 +1636,13 @@ function editProduct(id) {
     editingProductId = id;
     document.getElementById('prodCode').value = product.code || '';
     document.getElementById('prodBarcode').value = product.barcode || '';
-    document.getElementById('prodName').value = product.name;
+    // Với biến thể, ô tên mang tên NHÓM chứ không phải tên đầy đủ: điền
+    // "Áo thun - Đỏ / L" vào đây rồi bấm Lưu là server ghép thêm lần nữa thành
+    // "Áo thun - Đỏ / L - Đỏ / L".
+    document.getElementById('prodName').value = product.variant_group || product.name;
+    const oBienThe = document.getElementById('prodVariant');
+    if (oBienThe) oBienThe.value = product.variant_name || '';
+    capNhatNhanTenSanPham();
     document.getElementById('prodPrice').value = product.price;
     const oGiaVon = document.getElementById('prodCost');
     if (oGiaVon) {
@@ -1599,6 +1669,9 @@ function cancelEditProduct() {
     document.getElementById('prodCode').value = '';
     document.getElementById('prodBarcode').value = '';
     document.getElementById('prodName').value = '';
+    const oBienTheMoi = document.getElementById('prodVariant');
+    if (oBienTheMoi) oBienTheMoi.value = '';
+    capNhatNhanTenSanPham();
     document.getElementById('prodPrice').value = '';
     const oGiaVon = document.getElementById('prodCost');
     if (oGiaVon) oGiaVon.value = '';
@@ -2008,6 +2081,10 @@ async function createProduct() {
     // với "gửi rỗng" (xóa mã vạch). Xóa trắng ô phải thực sự gỡ được mã.
     formData.append('barcode', document.getElementById('prodBarcode').value);
     formData.append('name', document.getElementById('prodName').value);
+    // Luôn gửi, cùng lý do với mã vạch: rỗng nghĩa là GỠ biến thể để sản phẩm
+    // trở lại đơn lẻ. Không gửi thì backend hiểu là giữ nguyên biến thể cũ, và
+    // người dùng xóa trắng ô sẽ thấy nó tự hiện lại sau khi lưu.
+    formData.append('variant_name', document.getElementById('prodVariant')?.value ?? '');
     const priceStr = document.getElementById('prodPrice').value;
     const stockStr = document.getElementById('prodStock').value;
     

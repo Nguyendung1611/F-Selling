@@ -504,8 +504,13 @@
                             </div>
                         </div>
                         <div class="form-group">
-                            <label data-i18n="seller.products.name_required">Tên sản phẩm *</label>
+                            <label id="prodNameLabel" data-i18n="seller.products.name_required">Tên sản phẩm *</label>
                             <div class="input-wrapper"><i class="ph ph-package"></i><input type="text" id="prodName" placeholder="Tên SP" data-i18n-placeholder="seller.products.name_placeholder"></div>
+                        </div>
+                        <div class="form-group">
+                            <label data-i18n="seller.products.variant_label">Tên biến thể (Tùy chọn - VD: Đỏ / L)</label>
+                            <div class="input-wrapper"><i class="ph ph-squares-four"></i><input type="text" id="prodVariant" placeholder="Để trống nếu hàng không có size/màu" data-i18n-placeholder="seller.products.variant_placeholder" oninput="capNhatNhanTenSanPham()"></div>
+                            <small style="color:#64748B; font-size:0.75rem;" data-i18n="seller.products.variant_hint">Khai ô này thì ô Tên sản phẩm ở trên được hiểu là tên nhóm. Mỗi biến thể có tồn kho, giá, giá vốn và mã vạch riêng.</small>
                         </div>
                         <div class="form-group">
                             <label data-i18n="seller.products.price_required">Giá bán (VNĐ) *</label>
@@ -1070,13 +1075,13 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260802-han-su-dung"></script>
+    <script src="/js/locales/seller.js?v=20260802-bien-the"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260801-cong-no"></script>
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260802-auth-danh-sach-sp"></script>
+    <script src="/js/seller.js?v=20260802-bien-the"></script>
 </body>
 </html>

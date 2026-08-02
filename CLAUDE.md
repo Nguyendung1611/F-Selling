@@ -6,7 +6,7 @@ lần đã trả giá.
 ## Ba việc bắt buộc
 
 1. **Đọc `KIEN_TRUC.md` mục "Bẫy cần biết khi viết service mới"** trước khi
-   động vào `fselling/services/`. Có 22 bẫy, phần lớn không nhìn ra được từ code.
+   động vào `fselling/services/`. Có 23 bẫy, phần lớn không nhìn ra được từ code.
 2. **Commit bằng `.\test-commit.ps1 "mô tả"`**, không commit tay. Script chạy
    toàn bộ 631 test rồi mới cho commit, và chặn `.env` / `*.db` lọt lên Git.
 3. **Sửa giao diện thì phải tự mắt nhìn.** Test không thấy được màu sắc, bố cục
@@ -52,6 +52,11 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   Hàng hỏng thì `restock=false`: vẫn hoàn tiền nhưng không lên kệ lại. Hoàn tiền
   mặt bắt buộc có ca OPEN, ghi `RETURN_CASH` vào ledger — **đừng** thêm
   `CashMovement`, sẽ trừ két hai lần.
+- **Biến thể (size/màu) là DÒNG `Product`, không phải bảng con.** `variant_group`
+  + `variant_name` luôn đi cùng nhau (cùng NULL = hàng đơn lẻ), và `name` do
+  **server ghép** thành `"<nhóm> - <biến thể>"`. Form sửa phải điền
+  `variant_group` vào ô tên, KHÔNG điền `name` — điền `name` là ghép chồng lên
+  nhau. Ô biến thể có ba trạng thái như `barcode`: không gửi = giữ, rỗng = gỡ.
 - **Giá vốn `NULL` không phải `0`.** `NULL` = chưa ai khai; `0` = hàng tặng,
   lãi bằng cả giá bán. Gộp lại là mọi sản phẩm cũ bỗng có lãi bằng giá bán và
   chủ shop tin là thật. Giá vốn phải **chốt vào `order_items` lúc bán**, và báo
@@ -157,7 +162,7 @@ lỗi giúp. Bộ test chạy ở máy là lưới an toàn duy nhất — càng
 
 | File | Nội dung |
 |---|---|
-| `KIEN_TRUC.md` | Kiến trúc + 22 bẫy khi viết service. **Đọc trước khi sửa backend** |
+| `KIEN_TRUC.md` | Kiến trúc + 23 bẫy khi viết service. **Đọc trước khi sửa backend** |
 | `QUY_TRINH_LAM_VIEC.md` | Quy trình sửa → test → nhìn thử → commit → push |
 | `HUONG_DAN_SU_DUNG.md` | Hướng dẫn cho người dùng cuối |
 | `DEPLOY_FLY.md` | Deploy lên Fly.io (xem cảnh báo secret ở trên) |

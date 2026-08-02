@@ -52,6 +52,18 @@ class Product(Base):
     # hàng vô cớ. Sản phẩm tắt cờ này chạy y hệt như trước khi có F5.
     track_batches = Column(Boolean, nullable=False, default=False)
 
+    # F6: biến thể (size/màu). Mỗi biến thể là một DÒNG Product đầy đủ, không
+    # phải một bảng con - nhờ vậy tồn kho, lô hạn, giá vốn, đơn hàng, trả hàng
+    # và kiểm kê chạy y nguyên như cũ mà không phải sửa gì.
+    #
+    # Hai cột luôn ĐI CÙNG NHAU: cả hai NULL = sản phẩm đơn lẻ (đại đa số hàng
+    # trong tiệm tạp hóa), cả hai có giá trị = một biến thể của nhóm.
+    # `variant_group` chính là tên người dùng gõ ở ô "Tên sản phẩm", còn `name`
+    # được server ghép thành "<nhóm> - <biến thể>" để giữ nguyên ràng buộc tên
+    # duy nhất theo shop (ix_products_shop_name) mà không bắt ai gõ hai lần.
+    variant_group = Column(String(200), nullable=True, index=True)
+    variant_name = Column(String(100), nullable=True)
+
     category = relationship("Category", back_populates="products")
     shop = relationship("Shop", back_populates="products")
     batches = relationship("ProductBatch", back_populates="product")

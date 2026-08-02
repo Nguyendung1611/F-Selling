@@ -60,6 +60,9 @@
         'pos.products.exceeds_stock': 'Vượt quá số lượng tồn kho!',
         'pos.products.add_error': 'Lỗi hệ thống khi thêm sản phẩm.',
 
+        'pos.variants.eyebrow': 'CHỌN LOẠI',
+        'pos.variants.count': '{{count}} loại',
+
         'pos.cart.title': 'Giỏ hàng',
         'pos.cart.empty': 'Giỏ hàng đang trống',
         'pos.cart.locked_created': 'Đơn đã tạo, hãy hoàn tất hoặc hủy đơn trước khi chỉnh sửa',
@@ -311,6 +314,9 @@
         'pos.products.out_of_stock': 'This product is out of stock!',
         'pos.products.exceeds_stock': 'Quantity exceeds available stock!',
         'pos.products.add_error': 'Could not add the product because of a system error.',
+
+        'pos.variants.eyebrow': 'PICK A VARIANT',
+        'pos.variants.count': '{{count}} variants',
 
         'pos.cart.title': 'Cart',
         'pos.cart.empty': 'The cart is empty',

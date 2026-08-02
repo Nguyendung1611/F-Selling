@@ -58,6 +58,32 @@ Từ đó app không tự đổi nữa, bạn quản lý mật khẩu bằng ch�
 - Mở **POS** để bán hàng: chọn sản phẩm, áp voucher, thanh toán (chuyển khoản QR hoặc tiền mặt).
 - Xem **Dashboard**: doanh thu, số đơn, sản phẩm bán chạy, biểu đồ.
 
+### Hàng có nhiều size / màu (biến thể)
+
+Trong **Kho hàng**, ô **Tên biến thể** ngay dưới ô tên sản phẩm là chỗ khai
+size/màu. Khai ô đó thì ô tên ở trên được hiểu là **tên nhóm**:
+
+| Tên sản phẩm | Tên biến thể | Kết quả |
+|---|---|---|
+| Áo thun cổ tròn | Đỏ / L | Áo thun cổ tròn - Đỏ / L |
+| Áo thun cổ tròn | Xanh / M | Áo thun cổ tròn - Xanh / M |
+| Nước suối 500ml | *(để trống)* | Nước suối 500ml |
+
+Mỗi biến thể là một mặt hàng riêng: **tồn kho, giá bán, giá vốn, mã vạch và hạn
+sử dụng đều tính riêng**. Khai xong biến thể đầu tiên thì bấm nút **copy** ở
+dòng đó trong bảng để thêm size tiếp theo — tên nhóm, giá và danh mục được điền
+sẵn, chỉ cần gõ tên biến thể mới.
+
+Ở màn **POS**, các biến thể cùng nhóm gom lại thành **một ô**; bấm vào ô đó rồi
+chọn đúng size/màu. Ô nhóm hiện tổng tồn của cả nhóm và khoảng giá (ví dụ
+"150.000 ₫ – 165.000 ₫" khi các size khác giá). Size hết hàng vẫn hiện trong
+danh sách nhưng bấm không được.
+
+> Muốn bỏ biến thể để món hàng thành hàng đơn lẻ: sửa sản phẩm, **xóa trắng ô
+> Tên biến thể** rồi lưu. Tồn kho và lịch sử bán không bị ảnh hưởng.
+
+> Báo cáo và Excel hiện đếm theo **từng biến thể**, chưa cộng gộp theo nhóm.
+
 ## 6. File cấu hình `.env`
 
 | Biến | Ý nghĩa |

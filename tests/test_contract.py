@@ -203,6 +203,10 @@ def test_danh_sach_san_pham_giu_nguyen_cac_truong(client):
         # F5: cờ theo dõi lô + hạn sử dụng. POS cần biết để cảnh báo khi tồn
         # khả dụng thấp hơn tổng tồn vì có hàng quá hạn.
         "track_batches",
+        # F6: biến thể. Cả hai NULL với sản phẩm đơn lẻ, nên client cũ đọc
+        # `name` như trước vẫn đúng - `name` đã là tên đầy đủ kèm biến thể.
+        "variant_group",
+        "variant_name",
     }
 
 

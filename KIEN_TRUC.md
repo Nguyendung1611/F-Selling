@@ -626,9 +626,9 @@ liệu. Kiểm kê theo lô là việc của đợt sau.
 chuỗi theo định dạng đó là so sánh đúng thứ tự ngày, và tránh hẳn bài toán múi
 giờ ở phần hiển thị.
 
-**Chưa làm ở đợt này:** kiểm kê theo lô, phiếu hủy hàng hết hạn, màn hình báo
+**Chưa làm ở đợt này:** kiểm kê theo lô, phiếu hủy hàng hết hạn, và màn hình báo
 cáo hạn sử dụng (endpoint `GET /api/products/{shop_id}/batches` đã có, giao diện
-thì chưa), và biến thể sản phẩm.
+thì chưa). Biến thể sản phẩm đã làm ở F6 — xem mục 23.
 
 ### 22. Ba endpoint theo `{shop_id}` từng mở cho cả internet
 
@@ -670,6 +670,70 @@ Bài học chung: một comment `# CỐ Ý không yêu cầu đăng nhập` nêu
 lúc viết và hết đúng từ lâu. Kiểm nhanh toàn bộ: duyệt `fselling/routers/` tìm
 hàm không có `get_current_user` trong chữ ký — sau F6 chỉ còn `auth.py` (đăng
 ký/đăng nhập), `pages.py` (file tĩnh) và webhook (xác thực bằng secret header).
+
+### 23. Biến thể là DÒNG `Product`, không phải bảng con
+
+Size/màu được làm bằng đúng hai cột thêm vào `products`, không có bảng
+`product_variants` nào cả:
+
+| Cột | Nghĩa |
+|---|---|
+| `variant_group` | Tên nhóm, ví dụ "Áo thun cổ tròn". NULL = sản phẩm đơn lẻ |
+| `variant_name` | Tên biến thể, ví dụ "Đỏ / L". NULL = sản phẩm đơn lẻ |
+
+**Vì sao không tách bảng.** Tách ra thì `Product` thành cha còn tồn kho, giá,
+mã vạch và giá vốn phải chuyển xuống bảng con — mà những thứ đó là đúng những
+thứ mà lưới POS, tra mã vạch, kiểm kê, đơn hàng, trả hàng, giá vốn bình quân và
+lô hạn đang đọc. Tức là gần như mọi thứ đã xây ở F1–F5 phải sửa lại, kèm
+migration dữ liệu. Làm theo cách này thì **không có gì phải sửa**: mỗi biến thể
+là một `Product` đầy đủ nên nó tự có tồn kho riêng, lô hạn riêng, giá vốn riêng,
+mã vạch riêng. `tests/test_bien_the.py` canh đúng chuyện đó chứ không chỉ canh
+hai cột mới.
+
+**Ba điều bắt buộc giữ:**
+
+**Hai cột luôn đi cùng nhau, và `name` do SERVER ghép.** Ô "Tên sản phẩm" trên
+form mang hai nghĩa: không khai biến thể thì nó là tên sản phẩm, có khai thì nó
+là tên **nhóm**, và `name` lưu vào DB là `"<nhóm> - <biến thể>"`
+(`_ten_va_nhom` trong `catalog_service`). Nhờ vậy `ix_products_shop_name` vẫn
+đúng nguyên, và mọi chỗ đang đọc `Product.name` — dòng đơn hàng, hóa đơn, Excel,
+log, phiếu kiểm kê — tự có tên đầy đủ kèm size mà không phải sửa dòng nào.
+
+Hệ quả dễ vấp khi sửa frontend: form SỬA phải điền `variant_group` vào ô tên,
+KHÔNG điền `name`. Điền tên đầy đủ vào đó rồi bấm Lưu là server ghép thêm lần
+nữa thành `"Áo thun - Đỏ / L - Đỏ / L"`.
+
+**`variant_name` trên form sửa có ba trạng thái** (bẫy #3, cùng khuôn với
+`barcode_field`): không gửi = giữ nguyên biến thể, gửi rỗng = gỡ biến thể thành
+hàng đơn lẻ, có chuỗi = đặt tên mới. Client cũ không gửi field này mà bị hiểu là
+"gỡ" thì sửa mỗi cái giá cũng làm mất biến thể trong im lặng.
+
+**Unique index `ux_products_shop_variant`** trên `(shop_id, variant_group,
+variant_name)` chặn hai biến thể trùng tên trong một nhóm. Chỗ này dựa vào việc
+**SQLite coi mỗi NULL là một giá trị khác nhau** — nếu không thì cả shop chỉ tạo
+được đúng một sản phẩm đơn lẻ. Đổi sang database khác là phải kiểm lại ngay
+(`test_nhieu_san_pham_don_le_cung_ton_tai` nổ trước).
+
+**Giao diện: gom ô nhưng không gom số.** Lưới POS gộp các biến thể cùng nhóm
+thành MỘT ô (mười size áo chiếm mười ô là thu ngân phải cuộn tìm giữa giờ cao
+điểm), bấm vào mới chọn size. Ba điều đã cân nhắc:
+
+- Ô nhóm gom theo danh sách **đã lọc**, không theo cả kho: tìm "Đỏ" thì tổng tồn
+  hiện trên ô là tổng của riêng hàng đỏ. Hiện tổng cả nhóm lúc đó là nói dối về
+  số hàng người dùng đang nhìn.
+- Giá hiện thành **khoảng** khi các biến thể khác giá. Hiện đúng một con số là
+  thu ngân đọc nhầm giá cho khách.
+- **Không tự chọn biến thể đầu tiên.** Bán nhầm size thì khách phải quay lại
+  đổi, tốn nhiều hơn hẳn một lần bấm.
+
+Bảng Kho hàng thì ngược lại: **nhắc tên nhóm ở MỌI dòng**, không chỉ dòng đầu
+nhóm. Bảng đó cuộn được và lọc được theo danh mục nên một dòng "Size 32" đứng
+một mình là chuyện thường — lúc đó không đọc ra được nó là quần hay áo.
+
+**Còn để ngỏ:** báo cáo (top sản phẩm bán chạy, Excel) vẫn đếm theo TỪNG biến
+thể chứ không cộng gộp theo nhóm. Đó là lựa chọn có chủ ý ở đợt này — biết size
+nào bán chạy là thông tin có ích thật — nhưng chủ shop muốn xem doanh số cả
+nhóm thì hiện phải tự cộng.
 
 ## Phiên bản dependency
 

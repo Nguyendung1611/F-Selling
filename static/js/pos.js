@@ -248,24 +248,119 @@ function filterAndRenderProducts() {
     renderProducts(filtered);
 }
 
+const ANH_SP_MAC_DINH = 'https://placehold.co/150x150/1E293B/FFF?text=SP';
+
+/**
+ * Gom danh sách đã lọc thành các ô sẽ hiện trên lưới.
+ *
+ * Sản phẩm đơn lẻ ra một ô một sản phẩm. Các biến thể cùng `variant_group` gộp
+ * lại thành MỘT ô: mười size áo chiếm mười ô là thu ngân phải cuộn tìm giữa giờ
+ * cao điểm, mà đó đúng là lúc không có thời gian để tìm.
+ *
+ * Gom theo danh sách ĐÃ LỌC chứ không theo toàn bộ kho: tìm "Đỏ" thì ô chỉ còn
+ * đúng những biến thể đỏ, và tổng tồn hiện trên ô cũng là tổng của chừng ấy -
+ * hiện tổng của cả nhóm lúc đó là nói dối về số hàng người dùng đang nhìn.
+ *
+ * Giữ nguyên thứ tự xuất hiện đầu tiên của mỗi nhóm để lưới không nhảy chỗ
+ * giữa hai lần gõ phím.
+ */
+function gomONhom(list) {
+    const o = [];
+    const viTriNhom = new Map();
+    list.forEach(p => {
+        if (!p.variant_group) {
+            o.push({ nhom: null, sanPham: [p] });
+            return;
+        }
+        const daCo = viTriNhom.get(p.variant_group);
+        if (daCo !== undefined) {
+            o[daCo].sanPham.push(p);
+            return;
+        }
+        viTriNhom.set(p.variant_group, o.length);
+        o.push({ nhom: p.variant_group, sanPham: [p] });
+    });
+    return o;
+}
+
+/** Khoảng giá của một nhóm: "50.000" nếu mọi biến thể cùng giá, ngược lại
+ *  "50.000 – 70.000". Hiện đúng một con số khi giá khác nhau là để thu ngân
+ *  đọc nhầm giá cho khách. */
+function khoangGia(sanPham) {
+    const gia = sanPham.map(p => Number(p.price) || 0);
+    const min = Math.min(...gia);
+    const max = Math.max(...gia);
+    return min === max
+        ? dinhDangTien(min)
+        : `${dinhDangTien(min)} – ${dinhDangTien(max)}`;
+}
+
 function renderProducts(list) {
     const grid = document.getElementById('productGrid');
     grid.innerHTML = '';
-    list.forEach(p => {
-        const imgUrl = p.image_url ? p.image_url : 'https://placehold.co/150x150/1E293B/FFF?text=SP';
+    gomONhom(list).forEach(o => {
+        const dai = o.nhom !== null && o.sanPham.length > 1;
+        const dau = o.sanPham[0];
+        const tongTon = o.sanPham.reduce((s, p) => s + (Number(p.stock) || 0), 0);
+        const ten = dai ? o.nhom : dau.name;
+        const imgUrl = dau.image_url ? dau.image_url : ANH_SP_MAC_DINH;
         const div = document.createElement('div');
         div.className = 'product-card';
         div.innerHTML = `
-            <div class="product-stock" style="color: white;">${dichHtml('pos.products.stock', { count: p.stock })}</div>
+            <div class="product-stock" style="color: white;">${dichHtml('pos.products.stock', { count: tongTon })}</div>
             <img src="${imgUrl}" onerror="this.src='https://via.placeholder.com/150x150?text=Error'" class="product-img">
             <div class="product-info">
-                <div class="product-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</div>
-                <div class="product-price">${escapeHtml(dinhDangTien(p.price))}</div>
+                <div class="product-name" title="${escapeHtml(ten)}">${escapeHtml(ten)}</div>
+                <div class="product-price">${escapeHtml(khoangGia(o.sanPham))}</div>
+                ${dai ? `<div style="font-size:0.72rem; color:#94A3B8;">${dichHtml('pos.variants.count', { count: o.sanPham.length })}</div>` : ''}
             </div>
         `;
-        div.onclick = () => addToCart(p);
+        div.onclick = () => (dai ? moChonBienThe(o) : addToCart(dau));
         grid.appendChild(div);
     });
+}
+
+// ===== Chọn biến thể =====
+//
+// Bấm vào ô nhóm thì phải chọn đúng size/màu trước khi vào giỏ. CỐ Ý không tự
+// chọn biến thể đầu tiên: bán nhầm size là khách quay lại đổi, mất nhiều thời
+// gian hơn hẳn một lần bấm thêm.
+
+// CỐ Ý không giữ state "nhóm đang mở": Escape và bấm ra ngoài đi thẳng qua
+// `dongModalCa` dùng chung cho mọi `.pos-modal`, nên state nào đặt ở đây cũng
+// có đường thoát không dọn nó. Modal này chỉ cần dữ liệu lúc vẽ.
+function moChonBienThe(o) {
+    document.getElementById('variantGroupName').innerText = o.nhom;
+    const than = document.getElementById('variantList');
+    than.innerHTML = '';
+    o.sanPham.forEach(p => {
+        const het = (Number(p.stock) || 0) <= 0;
+        const nut = document.createElement('button');
+        nut.type = 'button';
+        nut.className = 'btn-outline';
+        nut.style.cssText = 'display:flex; justify-content:space-between; align-items:center;'
+            + ' gap:0.75rem; width:100%; margin-bottom:0.4rem; text-align:left;';
+        nut.disabled = het;
+        if (het) nut.style.opacity = '0.5';
+        nut.innerHTML = `
+            <span>${escapeHtml(p.variant_name || p.name)}</span>
+            <span style="white-space:nowrap;">
+                <b>${escapeHtml(dinhDangTien(p.price))}</b>
+                <span style="color:#94A3B8; font-size:0.78rem; margin-left:0.5rem;">${dichHtml('pos.products.stock', { count: p.stock })}</span>
+            </span>`;
+        nut.onclick = () => {
+            // Đóng trước rồi mới thêm: addToCart có thể hiện toast báo hết hàng,
+            // và toast nằm dưới lớp phủ của modal thì người dùng không đọc được.
+            dongChonBienThe();
+            addToCart(p);
+        };
+        than.appendChild(nut);
+    });
+    hienModalCa('variantModal', 'variantList');
+}
+
+function dongChonBienThe() {
+    dongModalCa('variantModal');
 }
 
 // Tìm kiếm
