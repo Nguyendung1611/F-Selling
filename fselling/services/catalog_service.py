@@ -495,6 +495,29 @@ def lookup_by_barcode(
     }
 
 
+def _kiem_danh_muc_thuoc_shop(db: Session, shop_id: int, category_id: int) -> None:
+    """Danh mục phải tồn tại VÀ thuộc đúng shop đang thao tác.
+
+    Hai điều kiện đi cùng một câu query, cùng lý do với `resolve_items` (bẫy
+    11): tách ra kiểm tồn tại trước rồi mới kiểm chủ sở hữu là để lộ việc
+    `category_id` nào có thật, và thông báo lỗi khác nhau giữa hai ca là đủ để
+    dò danh mục của cửa hàng khác.
+    """
+    category = (
+        db.query(models.Category)
+        .filter(
+            models.Category.id == category_id,
+            models.Category.shop_id == shop_id,
+        )
+        .first()
+    )
+    if not category:
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Danh mục không thuộc cửa hàng này"),
+        )
+
+
 def create_product(
     db: Session,
     current_user: models.User,
@@ -514,6 +537,12 @@ def create_product(
     if cost_price is not None:
         require_cost_visibility(shop, current_user)
         cost_price = _kiem_gia_von(cost_price)
+
+    # Danh mục phải thuộc CHÍNH shop này. `update_product` kiểm từ lâu còn ở đây
+    # thì không - đoán `category_id` là gắn được sản phẩm của mình vào danh mục
+    # của cửa hàng khác, và từ đó lưới POS lọc theo danh mục hiện ra một món
+    # không thuộc danh mục nào người dùng nhìn thấy được.
+    _kiem_danh_muc_thuoc_shop(db, shop_id, category_id)
 
     # Khai biến thể thì `name` trở thành tên NHÓM và tên lưu vào DB là tên ghép.
     # Phải làm trước phép kiểm trùng bên dưới, nếu không "Áo thun" nhóm sẽ đụng
@@ -816,19 +845,9 @@ def update_product(
         name_stripped, ten_bien_the
     )
 
-    category = (
-        db.query(models.Category)
-        .filter(
-            models.Category.id == category_id,
-            models.Category.shop_id == prod.shop_id,
-        )
-        .first()
-    )
-    if not category:
-        raise HTTPException(
-            status_code=400,
-            detail=tr("Danh mục không thuộc cửa hàng này"),
-        )
+    # Cùng một phép kiểm với `create_product`, gọi chung một hàm để hai đường
+    # không lệch nhau khi sau này ai đó sửa một bên.
+    _kiem_danh_muc_thuoc_shop(db, prod.shop_id, category_id)
 
     duplicate = (
         db.query(models.Product)

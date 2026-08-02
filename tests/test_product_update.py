@@ -125,6 +125,80 @@ def test_khong_gan_duoc_danh_muc_cua_shop_khac(client):
     assert "Danh mục" in res.json()["detail"]
 
 
+def test_khong_gan_duoc_danh_muc_khong_ton_tai(client):
+    ctx = seller_with_shop(client)
+    res = client.put(
+        f"/api/products/{ctx['product']['id']}",
+        data=_payload(ctx, category_id=999999),
+        headers=auth(ctx["token"]),
+    )
+    assert res.status_code == 400
+    assert "Danh mục" in res.json()["detail"]
+
+
+# ---------- Cùng phép kiểm đó, nhưng lúc TẠO sản phẩm ----------
+#
+# `update_product` kiểm danh mục từ lâu, `create_product` thì không - đoán
+# `category_id` là gắn được sản phẩm của mình vào danh mục của cửa hàng khác, và
+# từ đó lưới POS lọc theo danh mục hiện ra một món không thuộc danh mục nào
+# người dùng nhìn thấy được.
+
+
+def _tao_sp(client, token, shop_id, cat_id, ten="SP moi"):
+    return client.post(
+        "/api/products",
+        params={"shop_id": shop_id},
+        data={"name": ten, "price": 50000, "stock": 5, "category_id": cat_id},
+        headers=auth(token),
+    )
+
+
+def test_tao_sp_khong_gan_duoc_danh_muc_cua_shop_khac(client):
+    ctx = seller_with_shop(client)
+    _, token_b = new_seller(client)
+    shop_b = create_shop(client, token_b)
+    cat_b = create_category(client, token_b, shop_b, name="Danh muc shop B")
+
+    res = _tao_sp(client, ctx["token"], ctx["shop_id"], cat_b)
+
+    assert res.status_code == 400
+    assert "Danh mục" in res.json()["detail"]
+
+
+def test_tao_sp_khong_gan_duoc_danh_muc_khong_ton_tai(client):
+    ctx = seller_with_shop(client)
+    res = _tao_sp(client, ctx["token"], ctx["shop_id"], 999999)
+    assert res.status_code == 400
+    assert "Danh mục" in res.json()["detail"]
+
+
+def test_tao_sp_that_bai_thi_khong_de_lai_san_pham_nao(client):
+    """Từ chối phải xảy ra TRƯỚC khi tạo dòng Product, nếu không mã tự sinh đã
+    tiêu tốn một id và có thể còn sót bản ghi dở."""
+    ctx = seller_with_shop(client)
+    truoc = len(
+        client.get(
+            f"/api/products/{ctx['shop_id']}", headers=auth(ctx["token"])
+        ).json()
+    )
+
+    _tao_sp(client, ctx["token"], ctx["shop_id"], 999999, ten="SP hong")
+
+    sau = client.get(
+        f"/api/products/{ctx['shop_id']}", headers=auth(ctx["token"])
+    ).json()
+    assert len(sau) == truoc
+    assert all(p["name"] != "SP hong" for p in sau)
+
+
+def test_tao_sp_voi_danh_muc_dung_shop_van_chay(client):
+    ctx = seller_with_shop(client)
+    res = _tao_sp(client, ctx["token"], ctx["shop_id"], ctx["category_id"],
+                  ten="SP hop le")
+    assert res.status_code == 200, res.text
+    assert res.json()["category_id"] == ctx["category_id"]
+
+
 def test_khong_dat_trung_ten_voi_san_pham_khac_cung_shop(client):
     ctx = seller_with_shop(client)
     khac = create_product(
