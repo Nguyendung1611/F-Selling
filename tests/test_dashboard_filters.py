@@ -215,6 +215,11 @@ def test_stats_khong_loc_giu_nguyen_contract(client):
         "returned_amount",
         "net_revenue",
         # F4: công nợ phải thu. Đứng riêng, KHÔNG cộng vào doanh thu.
+        # F6: hủy hàng (hết hạn, hỏng vỡ, thất thoát). Lỗ đúng bằng giá vốn
+        # số hàng đã bỏ đi, và nó ĐÃ được trừ khỏi `gross_profit`.
+        "written_off_quantity",
+        "write_off_loss",
+        "write_offs_missing_cost",
         "receivable_amount",
     }
     assert len(body["trend_labels"]) == 7, "Mặc định vẫn là xu hướng 7 ngày"

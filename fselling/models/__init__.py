@@ -1,7 +1,14 @@
 """ORM models. Import tất cả ở đây để SQLAlchemy registry luôn đầy đủ
 (quan hệ khai báo bằng chuỗi tên class cần các class đã được nạp)."""
 from ..core.database import Base
-from .catalog import Category, Product, ProductBatch, Voucher
+from .catalog import (
+    Category,
+    Product,
+    ProductBatch,
+    StockWriteOff,
+    StockWriteOffItem,
+    Voucher,
+)
 from .customer import Customer
 from .order import (
     Order,
@@ -23,6 +30,8 @@ __all__ = [
     "Category",
     "Product",
     "ProductBatch",
+    "StockWriteOff",
+    "StockWriteOffItem",
     "Voucher",
     "Order",
     "OrderItem",

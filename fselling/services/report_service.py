@@ -112,6 +112,65 @@ def _phieu_tra_trong_ky(
     )
 
 
+def _huy_hang_anh_huong_lai(
+    db: Session, shop_id: int, tu_ngay: Optional[str], den_ngay: Optional[str]
+) -> Dict[str, Any]:
+    """Khoản lỗ do hủy hàng (hết hạn, hỏng vỡ, thất thoát), theo NGÀY HỦY.
+
+    Lỗ đúng bằng giá vốn số hàng đã bỏ đi - hàng hủy không sinh đồng doanh thu
+    nào nên không có gì để trừ ra như ở trả hàng.
+
+    Đây là chỗ mà trước F6 báo cáo nói dối: hàng hết hạn đi qua đường xuất kho
+    thì tồn giảm, doanh thu không đổi, và lãi gộp cao hơn thực tế đúng bằng phần
+    vốn vừa mất. Con số sai theo hướng làm người xem yên tâm nên rất khó nghi.
+
+    Phiếu nào còn dòng chưa khai giá vốn thì bị loại NGUYÊN PHIẾU và đếm riêng -
+    cùng nguyên tắc "không đoán NULL là 0" ở `_lai_gop` và `_tra_hang_anh_huong_lai`.
+    Trừ phần biết được rồi trình bày như tổng thiệt hại là báo lỗ THẤP hơn thực
+    tế, tức là vẫn sai theo đúng hướng đó.
+    """
+    phieu = _loc_khoang_ngay(
+        db.query(models.StockWriteOff).filter(
+            models.StockWriteOff.shop_id == shop_id
+        ),
+        tu_ngay,
+        den_ngay,
+        cot=models.StockWriteOff.created_at,
+    ).all()
+    if not phieu:
+        return {
+            "written_off_quantity": 0,
+            "write_off_loss": 0.0,
+            "write_offs_missing_cost": 0,
+        }
+
+    ids = [p.id for p in phieu]
+    dong_theo_phieu: Dict[int, List[models.StockWriteOffItem]] = {}
+    for d in (
+        db.query(models.StockWriteOffItem)
+        .filter(models.StockWriteOffItem.write_off_id.in_(ids))
+        .all()
+    ):
+        dong_theo_phieu.setdefault(d.write_off_id, []).append(d)
+
+    lo = 0.0
+    thieu_gia_von = 0
+    for p in phieu:
+        dong = dong_theo_phieu.get(p.id, [])
+        if any(d.cost_price is None for d in dong):
+            thieu_gia_von += 1
+            continue
+        lo += sum(float(d.cost_price) * int(d.quantity or 0) for d in dong)
+
+    return {
+        # Số lượng thì đếm ĐỦ mọi phiếu, kể cả phiếu thiếu giá vốn: "đã bỏ đi
+        # bao nhiêu món" luôn biết chắc, chỉ "mất bao nhiêu tiền" mới cần giá vốn.
+        "written_off_quantity": sum(int(p.total_quantity or 0) for p in phieu),
+        "write_off_loss": lo,
+        "write_offs_missing_cost": thieu_gia_von,
+    }
+
+
 def _tra_hang_anh_huong_lai(
     db: Session, shop_id: int, tu_ngay: Optional[str], den_ngay: Optional[str]
 ) -> Dict[str, Any]:
@@ -455,9 +514,14 @@ def shop_stats(
     # field này khỏi phản hồi, không trả 0 - ở đây 0 là một con số có nghĩa
     # (bán đúng bằng giá vốn), trả 0 là nói dối chứ không phải giấu.
     if has_cost_visibility(shop, current_user):
+        # Hủy hàng chỉ hiện cho người xem được giá vốn: số lỗ chính là giá vốn
+        # nhân số lượng, nên nói ra nó là nói ra giá vốn.
+        huy_hang = _huy_hang_anh_huong_lai(db, shop_id, tu_ngay, den_ngay)
         lai = _lai_gop(db, paid_orders_subquery)
         lai["gross_profit"] -= tra_hang["profit_reduction"]
+        lai["gross_profit"] -= huy_hang["write_off_loss"]
         lai["returns_missing_cost"] = tra_hang["returns_missing_cost"]
+        lai.update(huy_hang)
         # Tỷ suất tính lại trên doanh thu ĐÃ TRỪ hàng trả: giữ tử số mới mà mẫu
         # số cũ sẽ ra một con số không nói lên điều gì.
         mau_so = lai["revenue_with_cost"] - tra_hang["returned_amount"]

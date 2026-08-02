@@ -205,6 +205,17 @@ _MIGRATIONS = [
     # (cả hai cột NULL) vẫn cùng tồn tại được dưới index này.
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_products_shop_variant "
     "ON products(shop_id, variant_group, variant_name)",
+    # F6: phiếu hủy hàng. Hai bảng do create_all() tạo mới nên không cần ALTER.
+    # Index theo (shop, ngày tạo) vì báo cáo luôn hỏi "shop này lỗ bao nhiêu vì
+    # hủy hàng trong khoảng ngày nào".
+    "CREATE INDEX IF NOT EXISTS ix_stock_write_offs_shop_created "
+    "ON stock_write_offs(shop_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_stock_write_off_items_write_off_id "
+    "ON stock_write_off_items(write_off_id)",
+    # Bấm hai lần là TRỪ KHO HAI LẦN. Chống lặp bằng khóa riêng như phiếu trả
+    # hàng, không dựa vào máy trạng thái (phiếu hủy không có trạng thái nào).
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_stock_write_offs_idempotency_key "
+    "ON stock_write_offs(idempotency_key)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
@@ -221,6 +232,7 @@ _REQUIRED_INDEXES = [
     "ux_cash_shifts_shop_user_open",
     "ux_cash_movements_operation_id",
     "ux_order_returns_idempotency_key",
+    "ux_stock_write_offs_idempotency_key",
 ]
 
 _INDEX_EXISTS = (

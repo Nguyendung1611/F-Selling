@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..dependencies import get_current_user, get_db
-from ..schemas.catalog import StockAdjust, StocktakeApply
-from ..services import catalog_service
+from ..schemas.catalog import StockAdjust, StocktakeApply, WriteOffCreate
+from ..services import catalog_service, write_off_service
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 
@@ -178,6 +178,16 @@ def adjust_stock(
     )
 
 
+@router.get("/{shop_id}/stocktake/batches")
+def get_stocktake_batches(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Mọi lô còn hàng của shop, để màn kiểm kê dựng phiếu đếm theo lô."""
+    return catalog_service.lo_de_kiem_ke(db, current_user, shop_id)
+
+
 @router.post("/{shop_id}/stocktake")
 def apply_stocktake(
     shop_id: int,
@@ -186,6 +196,36 @@ def apply_stocktake(
     current_user: models.User = Depends(get_current_user),
 ):
     return catalog_service.apply_stocktake(db, current_user, shop_id, payload.items)
+
+
+@router.post("/{shop_id}/write-off")
+def create_write_off(
+    shop_id: int,
+    payload: WriteOffCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return write_off_service.create_write_off(db, current_user, shop_id, payload)
+
+
+@router.get("/{shop_id}/write-off/expired")
+def suggest_expired_write_off(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Dựng sẵn dòng phiếu từ các lô đã quá hạn. CHỈ đề xuất, không tự hủy."""
+    return write_off_service.de_xuat_huy_het_han(db, current_user, shop_id)
+
+
+@router.get("/{shop_id}/write-offs")
+def list_write_offs(
+    shop_id: int,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return write_off_service.danh_sach_phieu(db, current_user, shop_id, limit)
 
 
 @router.put("/{product_id}/status")

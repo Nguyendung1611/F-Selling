@@ -218,5 +218,10 @@ def test_doanh_thu_chi_tinh_don_da_thanh_toan(client):
         "returned_amount",
         "net_revenue",
         # F4: công nợ phải thu (tiền mới hứa trả, chưa thực thu).
+        # F6: hủy hàng (hết hạn, hỏng vỡ, thất thoát). Lỗ đúng bằng giá vốn
+        # số hàng đã bỏ đi, và nó ĐÃ được trừ khỏi `gross_profit`.
+        "written_off_quantity",
+        "write_off_loss",
+        "write_offs_missing_cost",
         "receivable_amount",
     }

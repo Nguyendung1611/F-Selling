@@ -337,10 +337,14 @@ def test_xuat_kho_thu_cong_cung_tru_fefo(client):
     assert lo[_ngay(10)] == 0 and lo[_ngay(90)] == 4
 
 
-# ---------- Kiểm kê bị chặn ----------
-def test_kiem_ke_tu_choi_san_pham_theo_lo(client):
-    """Kiểm kê gán thẳng stock = counted, làm vậy với hàng có lô là phá vỡ
-    ràng buộc tổng mà không biết cộng trừ vào lô nào."""
+# ---------- Kiểm kê ----------
+def test_kiem_ke_tu_choi_so_TONG_cho_hang_theo_lo(client):
+    """Hàng có lô phải đếm theo TỪNG LÔ (F6, xem tests/test_kiem_ke_lo.py).
+
+    Gán thẳng một con số tổng là phá vỡ ràng buộc "tổng lô = tồn kho" mà không
+    có cách nào biết phải cộng trừ vào lô nào. Trước F6 cả nghiệp vụ bị từ chối;
+    nay chỉ riêng DẠNG dòng này bị từ chối.
+    """
     ctx = seller_with_shop(client)
     sp = _tao_sp_theo_lo(client, ctx)
     _nhap_lo(client, ctx, sp["id"], 10, _ngay(30))
@@ -351,6 +355,7 @@ def test_kiem_ke_tu_choi_san_pham_theo_lo(client):
         headers=auth(ctx["token"]),
     )
     assert res.status_code == 400
+    assert "từng lô" in res.json()["detail"]
     assert _sp(sp["id"]).stock == 10, "Bị chặn thì dữ liệu không đổi"
 
 

@@ -83,8 +83,9 @@ ROUTES_BO_SUNG = {
     ("GET", "/api/shifts/{shift_id}"),  # E1: chi tiết ca và sổ thu/chi
     ("POST", "/api/shifts/{shift_id}/movements"),  # E1: thu/chi tiền mặt
     ("POST", "/api/shifts/{shift_id}/close"),  # E1: chốt ca
-    # F1: giá vốn tách riêng khỏi GET /api/products/{shop_id} vì endpoint đó
-    # KHÔNG yêu cầu đăng nhập. Route này có xác thực và chỉ chủ shop/ADMIN xem.
+    # F1: giá vốn tách riêng khỏi GET /api/products/{shop_id}. Endpoint đó nay
+    # đã có xác thực (F6) nhưng NHÂN VIÊN vẫn đọc được, còn route này chỉ chủ
+    # shop/ADMIN - hai vòng người xem khác nhau nên vẫn phải tách.
     ("GET", "/api/products/{shop_id}/costs"),
     # F2: nhận hàng khách trả. Khác hủy đơn (đơn chưa thanh toán) và khác
     # refund-complete (hoàn khoản chuyển thừa, hàng vẫn của khách).
@@ -94,6 +95,14 @@ ROUTES_BO_SUNG = {
     ("POST", "/api/orders/{order_id}/debt-payment"),
     # F5: lô hàng sắp/đã hết hạn của shop.
     ("GET", "/api/products/{shop_id}/batches"),
+    # F6: phiếu hủy hàng. Khác hẳn xuất kho: xuất kho không ghi lý do và không
+    # chốt giá vốn, nên số hàng đó biến mất khỏi báo cáo và lãi bị thổi lên.
+    # F6: kiểm kê theo lô cần biết MỌI lô còn hàng, khác /batches (chỉ lô
+    # sắp/đã hết hạn, phục vụ màn cảnh báo).
+    ("GET", "/api/products/{shop_id}/stocktake/batches"),
+    ("POST", "/api/products/{shop_id}/write-off"),
+    ("GET", "/api/products/{shop_id}/write-off/expired"),
+    ("GET", "/api/products/{shop_id}/write-offs"),
 }
 
 

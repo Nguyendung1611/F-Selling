@@ -6,7 +6,7 @@ import pathlib
 import re
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import text
@@ -884,6 +884,166 @@ def update_product(
     return prod
 
 
+def lo_de_kiem_ke(
+    db: Session, current_user: models.User, shop_id: int
+) -> Dict[str, Any]:
+    """Mọi lô CÒN HÀNG của các sản phẩm theo dõi hạn, để dựng phiếu đếm.
+
+    Khác `danh_sach_lo` (chỉ trả lô sắp/đã hết hạn, phục vụ màn cảnh báo): kiểm
+    kê phải đếm được HẾT, kể cả lô còn hạn dài. Một request cho cả shop rồi đếm
+    tại máy - hỏi từng sản phẩm lúc quét là mỗi lượt quét một vòng mạng, giữa
+    lúc người ta đang cầm máy quét chạy dọc kệ hàng.
+
+    Lô đã về 0 bị loại: nó là lịch sử, không phải hàng trên kệ để đếm.
+
+    KHÔNG trả `cost_price` - đếm hàng không cần biết giá vốn, và endpoint này mở
+    cho cả thủ kho.
+    """
+    require_shop_access(db, shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_INVENTORY)
+
+    san_pham = (
+        db.query(models.Product)
+        .filter(
+            models.Product.shop_id == shop_id,
+            models.Product.track_batches == True,  # noqa: E712
+        )
+        .all()
+    )
+    lo_theo_sp: Dict[int, List[models.ProductBatch]] = {}
+    if san_pham:
+        for b in (
+            db.query(models.ProductBatch)
+            .filter(
+                models.ProductBatch.product_id.in_([p.id for p in san_pham]),
+                models.ProductBatch.quantity > 0,
+            )
+            .order_by(models.ProductBatch.expiry_date, models.ProductBatch.id)
+            .all()
+        ):
+            lo_theo_sp.setdefault(b.product_id, []).append(b)
+
+    return {
+        "products": [
+            {
+                "product_id": p.id,
+                "name": p.name,
+                "batches": [
+                    {
+                        "batch_id": b.id,
+                        "expiry_date": b.expiry_date,
+                        "quantity": b.quantity,
+                    }
+                    for b in lo_theo_sp.get(p.id, [])
+                ],
+            }
+            for p in san_pham
+        ]
+    }
+
+
+def _kiem_dinh_dang_dong_lo(prod: models.Product, batches: List[Any]) -> None:
+    """Kiểm dạng của phần đếm theo lô, trước khi ghi bất cứ gì."""
+    if not batches:
+        raise HTTPException(
+            status_code=400,
+            detail=tr(
+                "Sản phẩm '{name}' chưa có lô nào được đếm", name=prod.name
+            ),
+        )
+    ids = [b.batch_id for b in batches]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(
+            status_code=400,
+            detail=tr(
+                "Một lô của '{name}' xuất hiện nhiều lần trong phiếu kiểm kê",
+                name=prod.name,
+            ),
+        )
+    for b in batches:
+        if b.counted < 0:
+            raise HTTPException(
+                status_code=400, detail=tr("Số đếm không được âm")
+            )
+
+
+def _kiem_ke_theo_lo(
+    db: Session, prod: models.Product, batches: List[Any]
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Đặt số lượng của TỪNG LÔ bằng số đếm thực tế, rồi dựng lại `Product.stock`.
+
+    Trả về (các dòng đã điều chỉnh, các dòng bị bỏ qua).
+
+    Ba nguyên tắc của kiểm kê được giữ nguyên, chỉ hạ xuống mức lô: chỉ đụng vào
+    lô có trong phiếu, lô nào đã đổi so với lúc bắt đầu đếm thì bỏ qua và báo
+    lại, không nhận số âm.
+
+    **Đếm ra hàng không thuộc lô nào đang có thì TỪ CHỐI**, không tự tạo lô. Mỗi
+    hộp đều có hạn in trên bao bì nên hàng thừa luôn thuộc về một hạn cụ thể;
+    hạn đó chưa có lô nghĩa là lần nhập hàng trước bị sót, và đường đúng để sửa
+    là Nhập kho (khai đúng hạn) chứ không phải đoán. Tự tạo lô không hạn còn tệ
+    hơn: lô không hạn xếp SAU CÙNG khi trừ FEFO nên số hàng đó nằm lại trên kệ
+    lâu nhất - đúng thứ sẽ hỏng trước.
+
+    `Product.stock` được tính lại bằng TỔNG của mọi lô (kể cả lô không có trong
+    phiếu), không phải cộng dồn chênh lệch. Cộng dồn thì một lô bị bỏ qua vì đã
+    đổi giữa chừng sẽ làm tổng lệch khỏi bảng lô - đúng thứ mà
+    `inventory_service.doi_chieu_ton_kho()` sinh ra để bắt.
+    """
+    lo_cua_sp = {
+        b.id: b
+        for b in db.query(models.ProductBatch)
+        .filter(models.ProductBatch.product_id == prod.id)
+        .all()
+    }
+
+    la = [b.batch_id for b in batches if b.batch_id not in lo_cua_sp]
+    if la:
+        raise HTTPException(
+            status_code=400,
+            detail=tr(
+                "Lô #{ids} không thuộc sản phẩm '{name}'. Hàng đếm thừa mà chưa "
+                "có lô thì nhập qua Nhập kho để khai đúng hạn sử dụng.",
+                ids=", ".join(str(i) for i in la[:5]),
+                name=prod.name,
+            ),
+        )
+
+    dieu_chinh: List[Dict[str, Any]] = []
+    bo_qua: List[Dict[str, Any]] = []
+    for dem in batches:
+        lo = lo_cua_sp[dem.batch_id]
+        hien_tai = int(lo.quantity or 0)
+        if hien_tai != dem.quantity_snapshot:
+            bo_qua.append({
+                "product_id": prod.id,
+                "batch_id": lo.id,
+                "name": prod.name,
+                "ly_do": (
+                    f"Lô HSD {lo.expiry_date or '-'} đã đổi từ "
+                    f"{dem.quantity_snapshot} thành {hien_tai} trong lúc kiểm "
+                    "kê. Vui lòng đếm lại lô này."
+                ),
+            })
+            continue
+        if hien_tai == dem.counted:
+            continue
+        lo.quantity = dem.counted
+        dieu_chinh.append({
+            "product_id": prod.id,
+            "batch_id": lo.id,
+            "name": prod.name,
+            "expiry_date": lo.expiry_date,
+            "truoc": hien_tai,
+            "sau": dem.counted,
+            "lech": dem.counted - hien_tai,
+        })
+
+    if dieu_chinh:
+        prod.stock = sum(int(b.quantity or 0) for b in lo_cua_sp.values())
+    return dieu_chinh, bo_qua
+
+
 def apply_stocktake(
     db: Session, current_user: models.User, shop_id: int, items: List[Any]
 ) -> Dict[str, Any]:
@@ -901,6 +1061,10 @@ def apply_stocktake(
        đó.
 
     3. Không cho số đếm âm.
+
+    Sản phẩm có `track_batches` đếm THEO TỪNG LÔ (`it.batches`) - xem
+    `_kiem_ke_theo_lo`. Gán thẳng một con số tổng cho hàng có lô là phá vỡ ràng
+    buộc "tổng lô = tồn kho" mà không biết phải cộng trừ vào lô nào.
     """
     _require_shop_operator_403(db, shop_id, current_user)
 
@@ -916,32 +1080,6 @@ def apply_stocktake(
             status_code=400,
             detail=tr("Một sản phẩm xuất hiện nhiều lần trong phiếu kiểm kê"),
         )
-    for it in items:
-        if it.counted < 0:
-            raise HTTPException(status_code=400, detail=tr("Số đếm không được âm"))
-
-    # Kiểm kê hiện gán thẳng `prod.stock = counted`. Làm vậy với hàng theo lô là
-    # phá vỡ ràng buộc "tổng lô = tồn kho" mà không có cách nào biết phải cộng
-    # trừ vào lô nào. TỪ CHỐI kèm thông báo rõ, còn hơn im lặng làm hỏng dữ liệu.
-    # Kiểm kê theo lô là việc của đợt sau.
-    theo_lo = (
-        db.query(models.Product)
-        .filter(
-            models.Product.shop_id == shop_id,
-            models.Product.id.in_(ids),
-            models.Product.track_batches == True,  # noqa: E712
-        )
-        .all()
-    )
-    if theo_lo:
-        raise HTTPException(
-            status_code=400,
-            detail=tr(
-                "Chưa kiểm kê được sản phẩm có theo dõi hạn sử dụng: {names}. "
-                "Điều chỉnh qua nhập/xuất kho theo lô.",
-                names=", ".join(p.name for p in theo_lo[:5]),
-            ),
-        )
 
     san_pham = {
         p.id: p
@@ -949,6 +1087,54 @@ def apply_stocktake(
         .filter(models.Product.shop_id == shop_id, models.Product.id.in_(ids))
         .all()
     }
+
+    # Kiểm dạng dòng TRƯỚC khi ghi bất cứ gì. Một dòng khai sai kiểu là cả phiếu
+    # bị từ chối, không phải ghi được nửa phiếu rồi mới nổ - người dùng lúc đó
+    # không biết phần nào đã vào.
+    for it in items:
+        prod = san_pham.get(it.product_id)
+        if prod is None:
+            continue          # dòng lạc, xử lý ở vòng dưới thành `bo_qua`
+        if prod.track_batches:
+            if it.batches is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=tr(
+                        "Sản phẩm '{name}' theo dõi hạn sử dụng; phải đếm theo "
+                        "từng lô",
+                        name=prod.name,
+                    ),
+                )
+            if it.counted is not None or it.stock_snapshot is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=tr(
+                        "Sản phẩm '{name}' đếm theo lô, không nhận số tổng",
+                        name=prod.name,
+                    ),
+                )
+            _kiem_dinh_dang_dong_lo(prod, it.batches)
+        else:
+            if it.batches:
+                raise HTTPException(
+                    status_code=400,
+                    detail=tr(
+                        "Sản phẩm '{name}' không theo dõi lô, không đếm theo lô "
+                        "được",
+                        name=prod.name,
+                    ),
+                )
+            if it.counted is None or it.stock_snapshot is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=tr(
+                        "Sản phẩm '{name}' thiếu số đếm", name=prod.name
+                    ),
+                )
+            if it.counted < 0:
+                raise HTTPException(
+                    status_code=400, detail=tr("Số đếm không được âm")
+                )
 
     da_dieu_chinh: List[Dict[str, Any]] = []
     bo_qua: List[Dict[str, Any]] = []
@@ -962,6 +1148,14 @@ def apply_stocktake(
                 "name": None,
                 "ly_do": "Sản phẩm không còn tồn tại trong cửa hàng",
             })
+            continue
+
+        if prod.track_batches:
+            dieu_chinh, bo = _kiem_ke_theo_lo(db, prod, it.batches)
+            da_dieu_chinh.extend(dieu_chinh)
+            bo_qua.extend(bo)
+            if not dieu_chinh and not bo:
+                khong_doi += 1
             continue
 
         ton_hien_tai = prod.stock or 0
@@ -994,18 +1188,22 @@ def apply_stocktake(
 
     if da_dieu_chinh:
         tong_lech = sum(d["lech"] for d in da_dieu_chinh)
-        # Liệt kê tối đa 10 sản phẩm để một phiếu kiểm kê lớn không sinh ra
-        # dòng log dài vô hạn; con số tổng vẫn phản ánh đủ.
+        # Liệt kê tối đa 10 dòng để một phiếu kiểm kê lớn không sinh ra dòng log
+        # dài vô hạn; con số tổng vẫn phản ánh đủ. Dòng theo lô nêu kèm hạn:
+        # không có nó thì cùng một sản phẩm hiện mấy dòng giống hệt nhau.
         chi_tiet = ", ".join(
-            f"{d['name']}: {d['truoc']}->{d['sau']}" for d in da_dieu_chinh[:10]
+            f"{d['name']}"
+            f"{' HSD ' + (d.get('expiry_date') or '-') if d.get('batch_id') else ''}"
+            f": {d['truoc']}->{d['sau']}"
+            for d in da_dieu_chinh[:10]
         )
         if len(da_dieu_chinh) > 10:
-            chi_tiet += f" (và {len(da_dieu_chinh) - 10} SP khác)"
+            chi_tiet += f" (và {len(da_dieu_chinh) - 10} dòng khác)"
         log_system_action(
             db,
             current_user.id,
             "STOCKTAKE",
-            f"Kiểm kê shop {shop_id}: điều chỉnh {len(da_dieu_chinh)} SP, "
+            f"Kiểm kê shop {shop_id}: điều chỉnh {len(da_dieu_chinh)} dòng, "
             f"lệch tổng {tong_lech:+d}. {chi_tiet}",
         )
 

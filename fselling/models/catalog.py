@@ -104,6 +104,68 @@ class ProductBatch(Base):
     product = relationship("Product", back_populates="batches")
 
 
+class StockWriteOff(Base):
+    """Một phiếu hủy hàng: hàng ra khỏi kho mà KHÔNG sinh doanh thu.
+
+    Ba nghiệp vụ dễ nhầm với nhau, và đây là cái thứ tư:
+
+    | Nghiệp vụ | Hàng đi đâu | Tiền |
+    |---|---|---|
+    | Bán | Ra khỏi kho, tới khách | Vào |
+    | Xuất kho (`adjust_stock` delta âm) | Ra khỏi kho, không nói đi đâu | Không ghi nhận gì |
+    | Trả hàng | Từ khách quay về kho | Ra |
+    | **Hủy** | Ra khỏi kho, bỏ đi | **Lỗ đúng bằng giá vốn** |
+
+    Phải có bảng riêng chứ không dùng lại phiếu xuất kho: xuất kho không ghi lý
+    do và không có chỗ nào chốt giá vốn, nên số hàng đó biến mất khỏi báo cáo và
+    lãi bị thổi lên đúng bằng phần vốn đã mất. Đó cũng là lý do phiếu hủy chốt
+    `cost_price` xuống TỪNG DÒNG như `order_items` làm lúc bán.
+    """
+
+    __tablename__ = "stock_write_offs"
+    id = Column(Integer, primary_key=True)
+    shop_id = Column(Integer, ForeignKey("shops.id"), nullable=False)
+    # EXPIRED / DAMAGED / LOST - chốt danh sách trong write_off_service.
+    reason = Column(String(20), nullable=False)
+    note = Column(String(200), nullable=True)
+    total_quantity = Column(Integer, nullable=False, default=0)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # Bấm hai lần là trừ kho hai lần, nên phải chống lặp như phiếu trả hàng.
+    idempotency_key = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    items = relationship("StockWriteOffItem", back_populates="write_off")
+
+
+class StockWriteOffItem(Base):
+    """Một dòng của phiếu hủy: đúng một lô (hoặc cả sản phẩm nếu không theo lô).
+
+    `cost_price` CHỐT tại thời điểm hủy, lấy từ đúng lô bị hủy. Tra ngược
+    `Product.cost_price` lúc làm báo cáo thì mỗi lần nhập một lô giá khác là số
+    lỗ của các tháng trước tự đổi - đúng bài học ở mục 13 của KIEN_TRUC.md.
+
+    NULL nghĩa là lô đó chưa ai khai giá vốn, KHÁC HẲN 0. Báo cáo phải loại
+    nguyên phiếu và đếm riêng, không được quy về 0.
+    """
+
+    __tablename__ = "stock_write_off_items"
+    id = Column(Integer, primary_key=True)
+    write_off_id = Column(
+        Integer, ForeignKey("stock_write_offs.id"), nullable=False
+    )
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    # Chụp lại tên như `order_items.product_name`: sản phẩm đổi tên hoặc bị xóa
+    # thì phiếu hủy cũ vẫn đọc được.
+    product_name = Column(String, nullable=True)
+    # NULL = sản phẩm không theo dõi lô.
+    batch_id = Column(Integer, ForeignKey("product_batches.id"), nullable=True)
+    expiry_date = Column(String(10), nullable=True)
+    quantity = Column(Integer, nullable=False)
+    cost_price = Column(Float, nullable=True)
+
+    write_off = relationship("StockWriteOff", back_populates="items")
+
+
 class Voucher(Base):
     __tablename__ = "vouchers"
     id = Column(Integer, primary_key=True, index=True)
