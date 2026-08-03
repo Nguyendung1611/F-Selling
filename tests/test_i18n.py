@@ -148,6 +148,56 @@ def test_catalog_frontend_du_key_va_thu_tu_script_on_dinh():
     assert "localStorage.clear(" not in frontend_js
 
 
+def test_khong_dung_hop_thoai_chan_luong_cua_trinh_duyet():
+    """`prompt()` và `confirm()` của trình duyệt bị CẤM trong toàn bộ frontend.
+
+    Chrome cho người dùng tick "chặn hộp thoại của trang này" sau vài hộp liên
+    tiếp. Từ lúc đó `prompt()` trả `null` và `confirm()` trả `false` NGAY LẬP
+    TỨC mà không hiện gì cả - và mọi chỗ gọi chúng đều xử lý giá trị đó như là
+    "người dùng bấm Hủy". Kết quả: nút bấm vào không có chuyện gì xảy ra, không
+    lỗi, không thông báo, người dùng không có cách nào biết vì sao.
+
+    Đã xảy ra thật hai lần: nút Hoàn tất đơn hàng ở POS (dùng `confirm`), rồi
+    Thu nợ và Nhập/Xuất kho ở màn Người bán (dùng `prompt` - hai và ba hộp nối
+    tiếp nhau, đúng kiểu chạm ngưỡng nhanh nhất). Cả hai đều nằm trên đường
+    tiền hoặc đường kho.
+
+    Đường thay thế: `xacNhan()` trong pos.js (Promise<boolean>),
+    `showCustomConfirm()` và `hoiThongTin()` trong seller.js (Promise<object|null>).
+
+    `alert()` CỐ Ý không nằm trong lệnh cấm này: nó chỉ báo một việc đã xong
+    nên bị chặn thì người dùng lỡ mất câu thông báo, chứ thao tác vẫn chạy -
+    khác hẳn hai hàm trên, bị chặn là thao tác KHÔNG xảy ra.
+    """
+    vi_pham = []
+    for path in sorted((PROJECT_ROOT / "static" / "js").rglob("*.js")):
+        if "vendor" in path.parts:
+            continue        # thư viện ngoài, không phải code của dự án
+        for so_dong, dong in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            khong_ghi_chu = dong.split("//", 1)[0].split("*", 1)[0]
+            for ham in ("prompt(", "confirm("):
+                vi_tri = khong_ghi_chu.find(ham)
+                if vi_tri == -1:
+                    continue
+                # Bỏ qua tên hàm của chính dự án: showCustomConfirm(,
+                # closeCustomConfirm(, _confirm( ... Chỉ bắt lời gọi trần hoặc
+                # qua `window.`.
+                truoc = khong_ghi_chu[:vi_tri]
+                if truoc and (truoc[-1].isalnum() or truoc[-1] in "_$"):
+                    continue
+                if truoc.rstrip().endswith("."):
+                    if not truoc.rstrip().rstrip(".").endswith("window"):
+                        continue
+                vi_pham.append(f"{path.name}:{so_dong}: {dong.strip()}")
+
+    assert not vi_pham, (
+        "Dùng hộp thoại chặn luồng của trình duyệt - Chrome chặn được và khi bị "
+        "chặn thì nút chết câm:\n" + "\n".join(vi_pham)
+    )
+
+
 def test_logout_giu_locale_va_khong_lo_trang_cu_qua_nut_back():
     api_js = (PROJECT_ROOT / "static" / "js" / "api.js").read_text(
         encoding="utf-8"

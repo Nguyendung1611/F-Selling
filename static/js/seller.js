@@ -1832,41 +1832,68 @@ async function nhapXuatKho(id) {
     const generation = currentShopGeneration;
     const product = currentProducts.find(p => p.id === id);
     if(!product) return;
-    const raw = prompt(t('seller.products.stock_prompt', {
-        name: product.name,
-        stock: dinhDangSoSeller(product.stock)
-    }));
-    if(raw === null) return;
-    const delta = parseInt(raw, 10);
+    // Hỏi hết trong MỘT hộp thay vì ba `prompt()` nối tiếp. Hạn và đơn giá chỉ
+    // có nghĩa khi NHẬP kho, nhưng vẫn hiện sẵn kèm ghi chú: chưa gõ số lượng
+    // thì chưa biết là nhập hay xuất, mà hỏi thêm một hộp nữa sau khi biết là
+    // quay lại đúng cái vòng hộp-nối-hộp vừa bỏ.
+    const giaVonHienTai = giaVonCua(id);
+    const truong = [{
+        ten: 'delta',
+        nhan: t('seller.products.stock_delta_label'),
+        goiY: t('seller.products.stock_delta_hint')
+    }];
+    if (product.track_batches) {
+        truong.push({
+            ten: 'han',
+            nhan: t('seller.products.expiry_label'),
+            kieu: 'date',
+            ghiChu: t('seller.products.expiry_note')
+        });
+    }
+    if (XEM_DUOC_GIA_VON) {
+        truong.push({
+            ten: 'donGia',
+            nhan: t('seller.products.unit_cost_label'),
+            ghiChu: t('seller.products.unit_cost_note', {
+                current: giaVonHienTai === null
+                    ? t('seller.products.cost_missing')
+                    : dinhDangTienDoiSoat(giaVonHienTai)
+            })
+        });
+    }
+
+    const kq = await hoiThongTin({
+        tieuDe: t('seller.products.stock_title', { name: product.name }),
+        moTa: t('seller.products.stock_desc', {
+            stock: dinhDangSoSeller(product.stock)
+        }),
+        truong,
+        nhanXacNhan: t('seller.products.stock_submit')
+    });
+    if (kq === null) return;
+
+    const delta = parseInt(String(kq.delta ?? '').replace(/[.,\s]/g, ''), 10);
     if(isNaN(delta) || delta === 0) return showToast(t('seller.products.stock_number_required'));
 
-    // Chỉ hỏi đơn giá khi NHẬP kho. Xuất kho không làm đổi đơn giá bình quân
-    // của số hàng còn lại, và backend từ chối thẳng nếu gửi kèm.
     const body = { delta };
 
     // Sản phẩm theo lô: nhập hàng bắt buộc khai hạn, nếu không server từ chối.
+    // Xuất kho thì bỏ qua ô hạn kể cả khi người dùng có điền - lô nào bị trừ là
+    // do FEFO quyết, không phải do người xuất chọn.
     if (delta > 0 && product.track_batches) {
-        const hanRaw = prompt(t('seller.products.expiry_prompt', { name: product.name }));
-        if (hanRaw === null) return;
-        const han = (hanRaw || '').trim();
+        const han = (kq.han || '').trim();
         if (!/^\d{4}-\d{2}-\d{2}$/.test(han)) {
             return showToast(t('seller.products.expiry_invalid'));
         }
         body.expiry_date = han;
     }
 
+    // Đơn giá chỉ gửi khi NHẬP. Xuất kho không làm đổi đơn giá bình quân của số
+    // hàng còn lại, và backend từ chối thẳng nếu gửi kèm.
     if (XEM_DUOC_GIA_VON && delta > 0) {
-        const giaVonHienTai = giaVonCua(id);
-        const rawCost = prompt(t('seller.products.unit_cost_prompt', {
-            name: product.name,
-            current: giaVonHienTai === null
-                ? t('seller.products.cost_missing')
-                : dinhDangTienDoiSoat(giaVonHienTai)
-        }));
-        if (rawCost === null) return;   // bấm Hủy ở ô đơn giá = hủy cả phiếu nhập
-        const chuoi = rawCost.trim();
+        const chuoi = (kq.donGia || '').trim();
         if (chuoi !== '') {
-            const unitCost = parseFloat(chuoi);
+            const unitCost = _soTienTuChuoi(chuoi);
             if (isNaN(unitCost) || unitCost < 0) {
                 return showToast(t('seller.products.cost_nonnegative'));
             }
@@ -2662,6 +2689,110 @@ document.addEventListener('DOMContentLoaded', () => {
 
 let confirmCallback = null;
 
+/**
+ * Hộp NHẬP LIỆU dựng trong trang, trả về `Promise<object|null>`.
+ *
+ * Thay cho `prompt()` của trình duyệt, cùng lý do với `xacNhan()` bên `pos.js`:
+ * Chrome cho người dùng tick "chặn hộp thoại của trang này" sau vài hộp liên
+ * tiếp, và từ lúc đó `prompt()` trả `null` NGAY mà không hiện gì. Code cũ xử lý
+ * `null` bằng `return` im lặng, nên người bán bấm "Thu nợ" là không có chuyện
+ * gì xảy ra - không lỗi, không thông báo, không cách nào biết vì sao. Chỗ thu
+ * nợ hỏi hai lần liên tiếp và chỗ nhập kho hỏi ba lần, đúng kiểu chạm ngưỡng
+ * đó nhanh nhất.
+ *
+ * Gộp mọi ô vào MỘT hộp thay vì hỏi nối tiếp: người dùng thấy hết những gì phải
+ * khai trước khi bắt đầu, sửa lại ô trước được, và bấm Hủy một lần là xong.
+ *
+ * Trả `null` = người dùng hủy. Trả object = đã bấm xác nhận (giá trị từng ô có
+ * thể rỗng, việc kiểm là của bên gọi).
+ *
+ * `truong`: [{ ten, nhan, kieu, giaTriDau, goiY, ghiChu, luaChon }]
+ *   kieu: 'text' | 'date' | 'select'   (mặc định 'text')
+ *   luaChon (chỉ với 'select'): [{ gia, nhan }]
+ */
+function hoiThongTin({ tieuDe, moTa = '', truong = [], nhanXacNhan }) {
+    return new Promise(resolve => {
+        const modal = document.getElementById('inputModal');
+        const khungO = document.getElementById('inputModalFields');
+        const nutOk = document.getElementById('btnInputOk');
+        const nutHuy = document.getElementById('btnInputCancel');
+        if (!modal || !khungO || !nutOk || !nutHuy) return resolve(null);
+
+        document.getElementById('inputModalTitle').innerText = tieuDe || '';
+        document.getElementById('inputModalDesc').innerText = moTa || '';
+        nutOk.innerText = nhanXacNhan || t('common.confirm');
+
+        const kieuO = 'width:100%; padding:0.65rem; border-radius:8px;'
+            + ' border:1px solid var(--border-color); font-size:0.95rem;'
+            + ' margin-bottom:0.25rem;';
+        // escapeHtml cho MỌI giá trị nội suy: nhãn có nhúng tên sản phẩm, mà
+        // tên sản phẩm là dữ liệu người dùng gõ.
+        khungO.innerHTML = truong.map(o => {
+            const id = `inputField_${o.ten}`;
+            let oNhap;
+            if (o.kieu === 'select') {
+                const chon = (o.luaChon || []).map(c =>
+                    `<option value="${escapeHtml(c.gia)}"${c.gia === o.giaTriDau ? ' selected' : ''}>`
+                    + `${escapeHtml(c.nhan)}</option>`
+                ).join('');
+                oNhap = `<select id="${id}" style="${kieuO}">${chon}</select>`;
+            } else {
+                // inputmode="numeric" cho bàn phím số trên điện thoại mà vẫn là
+                // ô text: type="number" từ chối thẳng chuỗi "250.000" người
+                // Việt hay gõ, còn ô text thì bên gọi tự bỏ dấu ngăn cách.
+                const them = o.kieu === 'date'
+                    ? 'type="date"'
+                    : 'type="text" inputmode="numeric" autocomplete="off"';
+                oNhap = `<input id="${id}" ${them} style="${kieuO}"`
+                    + ` value="${escapeHtml(o.giaTriDau ?? '')}"`
+                    + ` placeholder="${escapeHtml(o.goiY ?? '')}">`;
+            }
+            const ghiChu = o.ghiChu
+                ? `<small style="display:block; color:var(--text-muted); font-size:0.75rem; margin-bottom:0.75rem;">${escapeHtml(o.ghiChu)}</small>`
+                : '<div style="margin-bottom:0.75rem;"></div>';
+            return `<label style="display:block; font-size:0.85rem; font-weight:600;`
+                + ` margin-bottom:0.3rem; color:var(--text-main);" for="${id}">`
+                + `${escapeHtml(o.nhan || '')}</label>${oNhap}${ghiChu}`;
+        }).join('');
+
+        modal.style.display = 'flex';
+        setTimeout(() => document.getElementById(`inputField_${truong[0]?.ten}`)?.focus(), 0);
+
+        const dong = ketQua => {
+            modal.style.display = 'none';
+            khungO.innerHTML = '';
+            nutOk.onclick = null;
+            nutHuy.onclick = null;
+            modal.onclick = null;
+            khungO.onkeydown = null;
+            document.removeEventListener('keydown', khiNhanPhim);
+            resolve(ketQua);
+        };
+        const layGiaTri = () => {
+            const kq = {};
+            truong.forEach(o => {
+                kq[o.ten] = document.getElementById(`inputField_${o.ten}`)?.value ?? '';
+            });
+            return kq;
+        };
+        // Escape ở tầng document để bấm ra ngoài ô nhập vẫn thoát được.
+        const khiNhanPhim = e => { if (e.key === 'Escape') dong(null); };
+
+        nutOk.onclick = () => dong(layGiaTri());
+        nutHuy.onclick = () => dong(null);
+        modal.onclick = e => { if (e.target === modal) dong(null); };
+        khungO.onkeydown = e => {
+            // Enter trong ô nhập = bấm xác nhận. Không áp cho <select> vì trên
+            // một số trình duyệt Enter đang dùng để chốt lựa chọn đang mở.
+            if (e.key === 'Enter' && e.target.tagName !== 'SELECT') {
+                e.preventDefault();
+                dong(layGiaTri());
+            }
+        };
+        document.addEventListener('keydown', khiNhanPhim);
+    });
+}
+
 function showCustomConfirm(title, message, onConfirm, confirmLabel = t('common.confirm')) {
     const titleEl = document.getElementById('confirmTitle');
     const msgEl = document.getElementById('confirmMessage');
@@ -3449,14 +3580,45 @@ function renderCustomerHistory(d) {
     document.getElementById('customerHistoryModal').style.display = 'flex';
 }
 
-/** Thu bớt nợ của một đơn. Trả bao nhiêu cũng được, nên phải hỏi số tiền. */
+/** Số tiền người dùng gõ -> số. Bỏ dấu ngăn cách nghìn vì người Việt gõ
+ *  "250.000" là chuyện thường; ô nhập để text chính vì vậy. */
+function _soTienTuChuoi(raw) {
+    return parseFloat(String(raw ?? '').replace(/[.,\s]/g, ''));
+}
+
+/** Thu bớt nợ của một đơn. Trả bao nhiêu cũng được, nên phải hỏi số tiền.
+ *
+ *  Hỏi cả số tiền lẫn hình thức trong MỘT hộp. Bản cũ dùng hai `prompt()` nối
+ *  tiếp - vừa dễ chạm ngưỡng chặn hộp thoại của Chrome (từ đó nút chết câm),
+ *  vừa bắt người dùng gõ đúng chữ "TM" hoặc "CK" mới nhận. */
 async function thuNo(orderId, conNo) {
-    const raw = prompt(t('seller.customers.collect_prompt', {
-        id: orderId,
-        remaining: dinhDangTienDoiSoat(conNo)
-    }), String(Math.round(conNo)));
-    if (raw === null) return;
-    const soTien = parseFloat((raw || '').replace(/[.,\s]/g, ''));
+    const kq = await hoiThongTin({
+        tieuDe: t('seller.customers.collect_title', { id: orderId }),
+        moTa: t('seller.customers.collect_desc', {
+            remaining: dinhDangTienDoiSoat(conNo)
+        }),
+        truong: [
+            {
+                ten: 'soTien',
+                nhan: t('seller.customers.collect_amount_label'),
+                giaTriDau: String(Math.round(conNo))
+            },
+            {
+                ten: 'cach',
+                nhan: t('seller.customers.collect_method_label'),
+                kieu: 'select',
+                giaTriDau: 'cash',
+                luaChon: [
+                    { gia: 'cash', nhan: t('seller.customers.method_cash') },
+                    { gia: 'transfer', nhan: t('seller.customers.method_transfer') }
+                ]
+            }
+        ],
+        nhanXacNhan: t('seller.customers.collect_submit')
+    });
+    if (kq === null) return;
+
+    const soTien = _soTienTuChuoi(kq.soTien);
     if (!isFinite(soTien) || soTien <= 0) {
         return showToast(t('seller.customers.collect_amount_invalid'));
     }
@@ -3465,16 +3627,7 @@ async function thuNo(orderId, conNo) {
             remaining: dinhDangTienDoiSoat(conNo)
         }));
     }
-    // Hỏi hình thức bằng prompt thứ hai thay vì showCustomConfirm: hàm đó không
-    // có callback cho nút Hủy, dùng nó ở đây sẽ treo im lặng khi người dùng bỏ
-    // giữa chừng.
-    const cachRaw = prompt(t('seller.customers.collect_method_prompt'), 'TM');
-    if (cachRaw === null) return;
-    const cach = (cachRaw || '').trim().toUpperCase();
-    if (!['TM', 'CK'].includes(cach)) {
-        return showToast(t('seller.customers.collect_method_invalid'));
-    }
-    const tienMat = cach === 'TM';
+    const tienMat = kq.cach === 'cash';
     try {
         const res = await apiCall(`/orders/${orderId}/debt-payment`, 'POST', {
             amount: soTien,

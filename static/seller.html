@@ -1062,6 +1062,23 @@
     </div>
 
     <!-- Modal Xác nhận Xóa (Custom Confirm Modal) -->
+    <!-- Hộp NHẬP LIỆU dựng trong trang, thay cho prompt() của trình duyệt.
+         Chrome cho người dùng tick "chặn hộp thoại của trang này" sau vài hộp
+         liên tiếp; từ lúc đó prompt() trả null ngay mà không hiện gì, và nút
+         bấm vào chết câm. Chỗ thu nợ và nhập kho là đường tiền/kho nên không
+         được phép hỏng im lặng như vậy. Xem hoiThongTin() trong seller.js. -->
+    <div id="inputModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.6); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
+        <div style="background: #ffffff; padding: 2rem; border-radius: 16px; width: 420px; max-width: 92%; max-height: 90vh; overflow-y: auto; border: 1px solid var(--border-color); box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
+            <h3 style="margin-bottom: 0.5rem; font-size: 1.2rem; font-weight: 700; color: var(--text-main);" id="inputModalTitle"></h3>
+            <p style="margin-bottom: 1.25rem; color: var(--text-muted); font-size: 0.9rem; line-height: 1.5; white-space: pre-line;" id="inputModalDesc"></p>
+            <div id="inputModalFields"></div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 1.5rem;">
+                <button class="btn-outline" id="btnInputCancel" type="button" style="width: 100%; padding: 0.75rem; font-size: 0.95rem; border-radius: 8px;" data-i18n="common.cancel">Hủy bỏ</button>
+                <button id="btnInputOk" type="button" style="width: 100%; padding: 0.75rem; font-size: 0.95rem; background: var(--primary); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;"></button>
+            </div>
+        </div>
+    </div>
+
     <div id="confirmModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.6); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
         <div style="background: #ffffff; padding: 2rem; border-radius: 16px; width: 400px; max-width: 90%; border: 1px solid var(--border-color); box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); text-align: center;">
             <div style="display: inline-flex; align-items: center; justify-content: center; width: 4rem; height: 4rem; border-radius: 50%; background: rgba(239, 68, 68, 0.1); color: #ef4444; margin-bottom: 1.5rem; font-size: 2.2rem;">
@@ -1084,13 +1101,13 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260803-tien-ve-don-no"></script>
+    <script src="/js/locales/seller.js?v=20260803-hop-nhap-lieu"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260801-cong-no"></script>
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260803-tien-ve-don-no"></script>
+    <script src="/js/seller.js?v=20260803-hop-nhap-lieu"></script>
 </body>
 </html>
