@@ -207,6 +207,46 @@ function showToast(msg) {
     setTimeout(() => { toast.style.display = 'none'; }, 3000);
 }
 
+// Câu nhắn dành cho TRANG KẾ TIẾP.
+//
+// Dùng khi thao tác thành công rồi chuyển trang ngay (đăng ký -> /verify, xác
+// minh -> đăng nhập): toast trên trang hiện tại biến mất cùng lúc trang bị thay,
+// nên người dùng không kịp đọc gì. Trước đây chỗ này dùng `alert()` để chặn cho
+// kịp đọc - nhưng Chrome cho tick "chặn hộp thoại của trang này", và từ lúc đó
+// alert() không hiện nữa, người dùng bị đá sang trang mới mà không hiểu vì sao.
+//
+// `sessionStorage` chứ không phải `localStorage`: câu nhắn chỉ có nghĩa trong
+// đúng tab đang thao tác, và phải tự mất khi đóng tab. `clearAuthState()` cũng
+// không đụng tới nó nên đăng xuất giữa chừng không nuốt mất câu nhắn.
+const FLASH_KEY = 'fselling.flash';
+
+function nhanSangTrangSau(message) {
+    try {
+        sessionStorage.setItem(FLASH_KEY, String(message ?? ''));
+    } catch (e) {
+        // Trình duyệt chặn sessionStorage (chế độ ẩn danh nghiêm ngặt): mất câu
+        // nhắn thì đành chịu, nhưng KHÔNG được để nó chặn luồng chuyển trang.
+    }
+}
+
+function hienNhanTuTrangTruoc() {
+    let message = null;
+    try {
+        message = sessionStorage.getItem(FLASH_KEY);
+        if (message) sessionStorage.removeItem(FLASH_KEY);
+    } catch (e) {
+        return;
+    }
+    // Chờ hết lượt hiện tại để i18n kịp nạp và #toast chắc chắn có trong DOM.
+    if (message) setTimeout(() => showToast(message), 0);
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', hienNhanTuTrangTruoc);
+} else {
+    hienNhanTuTrangTruoc();
+}
+
 function logout() {
     clearAuthState();
     redirectToLogin();

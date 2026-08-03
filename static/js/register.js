@@ -56,7 +56,9 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
         await apiCall('/auth/register', 'POST', { username, email, password, role: 'SELLER' });
         localStorage.setItem('register_email', email);
         localStorage.setItem('otp_send_time', Date.now().toString());
-        alert(t('register.success_redirect'));
+        // Chuyển trang ngay nên toast ở đây sẽ biến mất cùng trang; gửi câu
+        // nhắn sang /verify để nó hiện ở nơi người dùng thực sự đang đứng.
+        nhanSangTrangSau(t('register.success_redirect'));
         navigateToPage('/verify');
     } catch (err) {
         setRegisterSubmitState(submitBtn, 'register.submit', false);

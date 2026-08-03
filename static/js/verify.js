@@ -137,7 +137,9 @@ document.getElementById('verifyForm').addEventListener('submit', async (e) => {
             code
         });
         showVerifyMessage(successMsg, 'verify.success');
-        alert(t('verify.success'));
+        // `redirectToLogin()` thay hẳn trang, nên câu nhắn phải đi cùng sang
+        // trang đăng nhập chứ không hiện ở đây.
+        nhanSangTrangSau(t('verify.success'));
         localStorage.removeItem('register_email');
         localStorage.removeItem('otp_send_time');
         redirectToLogin();

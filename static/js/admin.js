@@ -212,7 +212,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 const res = await apiCall('/auth/change-password', 'POST', { old_password, new_password });
                 showChangePasswordMessage(successMsg, 'admin.change_password.success');
                 localStorage.setItem('token', res.access_token);
-                alert(t('admin.change_password.success'));
+                // Toast chứ không phải alert: câu thông báo ở trên nằm TRONG
+                // modal nên đóng modal là nó biến mất theo, còn alert() thì
+                // Chrome chặn được và khi bị chặn người dùng không thấy gì cả.
+                showToast(t('admin.change_password.success'));
                 closeChangePasswordModal();
                 setChangePasswordSubmitState(
                     submitBtn,

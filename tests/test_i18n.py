@@ -162,12 +162,18 @@ def test_khong_dung_hop_thoai_chan_luong_cua_trinh_duyet():
     tiếp nhau, đúng kiểu chạm ngưỡng nhanh nhất). Cả hai đều nằm trên đường
     tiền hoặc đường kho.
 
-    Đường thay thế: `xacNhan()` trong pos.js (Promise<boolean>),
-    `showCustomConfirm()` và `hoiThongTin()` trong seller.js (Promise<object|null>).
+    `alert()` cũng bị cấm, tuy mức độ nhẹ hơn: bị chặn thì thao tác vẫn chạy,
+    chỉ là người dùng lỡ mất câu thông báo. Nhưng ở bốn chỗ từng dùng nó
+    (đổi mật khẩu, đặt lại mật khẩu, đăng ký, xác minh email), `alert()` đang
+    làm đúng một việc là CHẶN cho kịp đọc trước khi modal đóng hoặc trang
+    chuyển đi - nên khi bị chặn, người dùng bị đá sang trang mới mà không hiểu
+    chuyện gì vừa xảy ra.
 
-    `alert()` CỐ Ý không nằm trong lệnh cấm này: nó chỉ báo một việc đã xong
-    nên bị chặn thì người dùng lỡ mất câu thông báo, chứ thao tác vẫn chạy -
-    khác hẳn hai hàm trên, bị chặn là thao tác KHÔNG xảy ra.
+    Đường thay thế:
+    - `xacNhan()` trong pos.js — Promise<boolean>
+    - `showCustomConfirm()` và `hoiThongTin()` trong seller.js
+    - `showToast()` khi ở lại trang
+    - `nhanSangTrangSau()` trong api.js khi chuyển trang ngay sau đó
     """
     vi_pham = []
     for path in sorted((PROJECT_ROOT / "static" / "js").rglob("*.js")):
@@ -177,7 +183,7 @@ def test_khong_dung_hop_thoai_chan_luong_cua_trinh_duyet():
             path.read_text(encoding="utf-8").splitlines(), start=1
         ):
             khong_ghi_chu = dong.split("//", 1)[0].split("*", 1)[0]
-            for ham in ("prompt(", "confirm("):
+            for ham in ("prompt(", "confirm(", "alert("):
                 vi_tri = khong_ghi_chu.find(ham)
                 if vi_tri == -1:
                     continue

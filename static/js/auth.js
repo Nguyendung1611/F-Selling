@@ -155,7 +155,8 @@ document.getElementById('forgotStep2Form').addEventListener('submit', async (e) 
     try {
         await apiCall('/auth/forgot-password-reset', 'POST', { email, code, new_password });
         showLocalizedMessage(successMsg, 'forgot.reset_success');
-        alert(t('forgot.reset_success'));
+        // Câu thông báo ở trên nằm trong modal quên mật khẩu, đóng modal là mất.
+        showToast(t('forgot.reset_success'));
         closeForgotModal();
         setSubmitState(submitBtn, 'forgot.reset_submit', false);
     } catch (err) {
