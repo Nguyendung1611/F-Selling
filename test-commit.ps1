@@ -66,9 +66,30 @@ Write-Host ""
 Write-Host "==> Dang chay test..." -ForegroundColor Cyan
 
 if ($WithConcurrency) { $env:RUN_CONCURRENCY_TESTS = "1" }
+# Do thoi gian de thay bo test cham dan. Mot lan chay dot ngot lau gap 7 lan
+# binh thuong la dau hieu co gi do sai (tien trinh khac tranh may, mot test moi
+# goi mang, vong lap khong thoat) - khong in ra thi khong ai de y, va bo test
+# cham la bo test bi bo qua.
+$dongHo = [Diagnostics.Stopwatch]::StartNew()
 & .\.venv\Scripts\python.exe -m pytest -q -p no:warnings
 $testExit = $LASTEXITCODE
+$dongHo.Stop()
 if ($WithConcurrency) { Remove-Item Env:\RUN_CONCURRENCY_TESTS -ErrorAction SilentlyContinue }
+
+# CO Y khong dat nguong canh bao. Nguong co dinh phai bao tri va de keu oan:
+# 5 phut thi keu moi lan, 15 phut thi khong bao gio keu. In thang con so moi
+# lan la du de nhan ra khi no nhay tu 650 len 1400 giay.
+#
+# Do duoc ngay 2026-08-03: 731 test / 653 giay, tuc ~0,9 giay moi test. KHONG
+# co test nao cham ca - cham nhat moi 2,6 giay, va 15 test cham nhat cong lai
+# chi chiem 4% tong thoi gian. Ca bo cham DEU, vi bcrypt: moi test tao tai
+# khoan ton 2 lan bam mat khau (dang nhap + dang ky), moi lan ~0,4 giay o muc
+# 12 vong mac dinh.
+#
+# Ha so vong bcrypt trong test se rut xuong con khoang 1-1,5 phut. DA CAN NHAC
+# VA TU CHOI: chu du an chon chay dung tham so cua production hon la chay
+# nhanh. Dung "toi uu" chuyen nay ma khong hoi lai.
+Write-Host ("Thoi gian chay test: {0:N1} giay" -f $dongHo.Elapsed.TotalSeconds) -ForegroundColor DarkGray
 
 if ($testExit -ne 0) {
     Write-Host ""
