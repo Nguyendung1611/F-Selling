@@ -835,8 +835,14 @@ Tổng lỗ trên màn này **loại các phiếu thiếu giá vốn và đếm 
 `_huy_hang_anh_huong_lai`. Cộng chúng như 0 là báo tổng thiệt hại thấp hơn thực
 tế — sai theo hướng làm người xem yên tâm, đúng cái bẫy 13 nói.
 
-**Còn để ngỏ:** phiếu hủy chưa có mặt trong file Excel xuất ra. File đó hiện
-xuất theo ĐƠN HÀNG, chưa có sheet nào cho hàng ra khỏi kho mà không bán.
+**File Excel có sheet "Hàng đã hủy" riêng**, chỉ thêm khi người xuất xem được
+giá vốn. Sheet đơn hàng đọc một mình thì tồn kho giảm mà không hiểu vì sao, và
+con số lãi gộp ở cuối sheet đó cao hơn Dashboard đúng bằng phần vốn đã hủy — hai
+chỗ nói hai số khác nhau về cùng một tháng là lúc người ta thôi tin cả hai.
+
+Một dòng cho MỘT LÔ, không phải một dòng cho một phiếu: đối chiếu cuối tháng cần
+biết từng hạn, và Excel lọc theo cột dễ hơn đọc ô gộp. Dòng chưa khai giá vốn để
+ô **TRỐNG** chứ không phải 0 — 0 trong cột tiền đọc ra là "không đáng đồng nào".
 
 ### 25. Một hằng số không ai đọc là lời nói dối nằm ngay trong code
 

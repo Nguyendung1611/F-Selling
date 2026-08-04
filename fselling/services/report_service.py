@@ -19,7 +19,7 @@ from ..dependencies import (
     require_shop_access,
     require_staff_permission,
 )
-from . import order_service
+from . import order_service, write_off_service
 
 TREND_DAYS = 7
 
@@ -747,4 +747,108 @@ def seller_excel(db: Session, current_user: models.User, shop_id: int) -> io.Byt
                 tr("Số đơn chưa đủ giá vốn (không tính vào lãi)"),
                 don_thieu_gia_von,
             ])
+        _them_sheet_hang_huy(db, wb, shop_id)
     return _workbook_to_stream(wb)
+
+
+def _them_sheet_hang_huy(db: Session, wb, shop_id: int) -> None:
+    """Sheet thứ hai: hàng ra khỏi kho mà KHÔNG bán.
+
+    Sheet đầu chỉ có đơn hàng, nên đọc một mình nó thì tồn kho giảm mà không
+    hiểu vì sao, và số lãi gộp ở cuối sheet đó cao hơn con số trên Dashboard
+    đúng bằng phần vốn đã hủy. Hai chỗ nói hai số khác nhau về cùng một tháng
+    là lúc người ta thôi tin cả hai.
+
+    CHỈ thêm khi người xuất được xem giá vốn - số lỗ chính là giá vốn nhân số
+    lượng. Caller đã kiểm, ở đây không kiểm lại nhưng cũng đừng gọi chỗ khác.
+
+    Một dòng cho MỘT LÔ bị hủy, không phải một dòng cho một phiếu: đối chiếu
+    cuối tháng cần biết từng hạn, và Excel thì lọc theo cột dễ hơn đọc ô gộp.
+    """
+    phieu = (
+        db.query(models.StockWriteOff)
+        .filter(models.StockWriteOff.shop_id == shop_id)
+        .order_by(models.StockWriteOff.id.desc())
+        .all()
+    )
+    ws = wb.create_sheet(tr("Hàng đã hủy"))
+    ws.append([
+        tr("Mã phiếu"),
+        tr("Ngày hủy"),
+        tr("Lý do"),
+        tr("Sản phẩm"),
+        tr("Hạn sử dụng"),
+        tr("Số lượng"),
+        tr("Giá vốn đơn vị"),
+        tr("Thành tiền"),
+        tr("Người bấm"),
+        tr("Ghi chú"),
+    ])
+    if not phieu:
+        return
+
+    dong_theo_phieu: Dict[int, List[models.StockWriteOffItem]] = {}
+    for d in (
+        db.query(models.StockWriteOffItem)
+        .filter(
+            models.StockWriteOffItem.write_off_id.in_([p.id for p in phieu])
+        )
+        .order_by(models.StockWriteOffItem.id)
+        .all()
+    ):
+        dong_theo_phieu.setdefault(d.write_off_id, []).append(d)
+
+    ten_nguoi = {
+        uid: ten
+        for uid, ten in db.query(models.User.id, models.User.username).filter(
+            models.User.id.in_(
+                [p.created_by_user_id for p in phieu if p.created_by_user_id]
+            )
+        )
+    } if any(p.created_by_user_id for p in phieu) else {}
+
+    nhan_ly_do = {
+        write_off_service.REASON_EXPIRED: "Hết hạn",
+        write_off_service.REASON_DAMAGED: "Hỏng / vỡ",
+        write_off_service.REASON_LOST: "Thất thoát",
+    }
+
+    tong_so_luong = 0
+    tong_lo = 0.0
+    phieu_thieu_gia_von = 0
+    for p in phieu:
+        dong = dong_theo_phieu.get(p.id, [])
+        thieu = any(d.cost_price is None for d in dong)
+        if thieu:
+            phieu_thieu_gia_von += 1
+        for d in dong:
+            # Ô TRỐNG chứ không phải 0 khi chưa khai giá vốn: 0 trong cột tiền
+            # đọc ra là "hàng này không đáng đồng nào", khác hẳn "chưa ai khai".
+            co_gia = d.cost_price is not None
+            ws.append([
+                p.id,
+                str(p.created_at),
+                tr(nhan_ly_do.get(p.reason, p.reason)),
+                d.product_name or "",
+                d.expiry_date or "",
+                d.quantity,
+                d.cost_price if co_gia else "",
+                (float(d.cost_price) * int(d.quantity or 0)) if co_gia else
+                tr("Chưa khai giá vốn"),
+                ten_nguoi.get(p.created_by_user_id, ""),
+                p.note or "",
+            ])
+        tong_so_luong += int(p.total_quantity or 0)
+        if not thieu:
+            tong_lo += sum(
+                float(d.cost_price) * int(d.quantity or 0) for d in dong
+            )
+
+    ws.append([])
+    ws.append([tr("Tổng số lượng đã hủy"), tong_so_luong])
+    ws.append([tr("Tổng lỗ (phiếu đã đủ giá vốn)"), tong_lo])
+    if phieu_thieu_gia_von:
+        ws.append([
+            tr("Số phiếu chưa đủ giá vốn (không tính vào lỗ)"),
+            phieu_thieu_gia_von,
+        ])

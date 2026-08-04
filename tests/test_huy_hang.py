@@ -9,7 +9,9 @@ tâm - cùng kiểu với bẫy 13 (giá vốn NULL bị đọc thành 0).
 `test_huy_hang_lam_giam_lai_dung_bang_gia_von` là test quan trọng nhất ở đây.
 """
 from datetime import datetime, timedelta
+from io import BytesIO
 
+import openpyxl
 from conftest import _unique, admin_token, auth, new_seller, new_staff, seller_with_shop
 
 from fselling import models
@@ -447,6 +449,122 @@ def test_danh_sach_phieu_moi_nhat_truoc(client):
     phieu = res.json()["write_offs"]
     assert [p["reason"] for p in phieu] == ["DAMAGED", "LOST"]
     assert [p["total_quantity"] for p in phieu] == [2, 1]
+
+
+# ---------- File Excel ----------
+#
+# Sheet đơn hàng đọc một mình thì tồn kho giảm mà không hiểu vì sao, và số lãi
+# gộp ở cuối sheet đó cao hơn con số trên Dashboard đúng bằng phần vốn đã hủy.
+# Hai chỗ nói hai số khác nhau về cùng một tháng là lúc người ta thôi tin cả hai.
+
+
+def _excel(client, ctx, token=None, lang=None):
+    headers = auth(token or ctx["token"])
+    if lang:
+        headers["Accept-Language"] = lang
+    res = client.get(f"/api/export/seller/{ctx['shop_id']}", headers=headers)
+    assert res.status_code == 200, res.text
+    return openpyxl.load_workbook(BytesIO(res.content))
+
+
+def test_excel_co_sheet_hang_da_huy(client):
+    ctx = seller_with_shop(client)
+    sp = _tao_sp_theo_lo(client, ctx)
+    _nhap_lo(client, ctx, sp["id"], 6, _ngay(-3), gia_von=10000)
+    lo_id = _lo(sp["id"])[0].id
+    _huy(client, ctx["token"], ctx["shop_id"], [
+        {"product_id": sp["id"], "batch_id": lo_id, "quantity": 6}
+    ], note="Sua qua han cuoi thang")
+
+    wb = _excel(client, ctx)
+    assert "Hàng đã hủy" in wb.sheetnames
+    ws = wb["Hàng đã hủy"]
+    tieu_de = [c.value for c in ws[1]]
+    assert tieu_de[:6] == [
+        "Mã phiếu", "Ngày hủy", "Lý do", "Sản phẩm", "Hạn sử dụng", "Số lượng"
+    ]
+
+    dong = [c.value for c in ws[2]]
+    assert dong[2] == "Hết hạn"
+    assert dong[4] == _ngay(-3)
+    assert dong[5] == 6
+    assert dong[6] == 10000          # giá vốn đơn vị
+    assert dong[7] == 60000          # thành tiền
+    assert dong[8] == ctx["username"]
+    assert dong[9] == "Sua qua han cuoi thang"
+
+
+def test_excel_mot_dong_cho_MOT_LO(client):
+    """Đối chiếu cuối tháng cần biết từng hạn, không phải một ô gộp."""
+    ctx = seller_with_shop(client)
+    sp = _tao_sp_theo_lo(client, ctx)
+    _nhap_lo(client, ctx, sp["id"], 4, _ngay(-5), gia_von=1000)
+    _nhap_lo(client, ctx, sp["id"], 3, _ngay(-2), gia_von=2000)
+    lo = _lo(sp["id"])
+    _huy(client, ctx["token"], ctx["shop_id"], [
+        {"product_id": sp["id"], "batch_id": lo[0].id, "quantity": 4},
+        {"product_id": sp["id"], "batch_id": lo[1].id, "quantity": 3},
+    ])
+
+    ws = _excel(client, ctx)["Hàng đã hủy"]
+    han = [ws.cell(row=r, column=5).value for r in (2, 3)]
+    assert sorted(han) == sorted([_ngay(-5), _ngay(-2)])
+
+
+def test_excel_phieu_thieu_gia_von_de_TRONG_va_dem_rieng(client):
+    """Ô trống chứ không phải 0: 0 trong cột tiền đọc ra là "không đáng đồng
+    nào", khác hẳn "chưa ai khai"."""
+    ctx = seller_with_shop(client)
+    sp = _tao_sp_theo_lo(client, ctx)
+    _nhap_lo(client, ctx, sp["id"], 5, _ngay(-2))     # KHÔNG khai giá vốn
+    lo_id = _lo(sp["id"])[0].id
+    _huy(client, ctx["token"], ctx["shop_id"], [
+        {"product_id": sp["id"], "batch_id": lo_id, "quantity": 5}
+    ])
+
+    ws = _excel(client, ctx)["Hàng đã hủy"]
+    # openpyxl đọc ô rỗng ra `None`. Điều quan trọng là nó KHÔNG phải số 0.
+    assert ws.cell(row=2, column=7).value is None
+    assert ws.cell(row=2, column=8).value == "Chưa khai giá vốn"
+
+    cot_a = [ws.cell(row=r, column=1).value for r in range(1, ws.max_row + 1)]
+    assert "Số phiếu chưa đủ giá vốn (không tính vào lỗ)" in cot_a
+    i = cot_a.index("Tổng lỗ (phiếu đã đủ giá vốn)")
+    assert ws.cell(row=i + 1, column=2).value == 0, "Không đoán giá vốn"
+
+
+def test_excel_cua_nhan_vien_KHONG_co_sheet_hang_huy(client):
+    """Số lỗ chính là giá vốn nhân số lượng, nói ra nó là nói ra giá vốn."""
+    ctx = seller_with_shop(client)
+    _huy(client, ctx["token"], ctx["shop_id"], [
+        {"product_id": ctx["product"]["id"], "quantity": 1}
+    ])
+    _, manager = new_staff(client, ctx, staff_role="MANAGER")
+
+    wb = _excel(client, ctx, token=manager)
+    assert "Hàng đã hủy" not in wb.sheetnames
+
+
+def test_excel_tieng_anh_dich_ca_sheet_hang_huy(client):
+    ctx = seller_with_shop(client)
+    _huy(client, ctx["token"], ctx["shop_id"], [
+        {"product_id": ctx["product"]["id"], "quantity": 2}
+    ], reason="DAMAGED")
+
+    wb = _excel(client, ctx, lang="en")
+    assert "Written off" in wb.sheetnames
+    ws = wb["Written off"]
+    assert [c.value for c in ws[1]][:6] == [
+        "Write-off ID", "Date", "Reason", "Product", "Expiry date", "Quantity"
+    ]
+    assert ws.cell(row=2, column=3).value == "Damaged"
+
+
+def test_excel_khong_co_phieu_huy_thi_sheet_van_co_tieu_de(client):
+    ctx = seller_with_shop(client)
+    ws = _excel(client, ctx)["Hàng đã hủy"]
+    assert [c.value for c in ws[1]][0] == "Mã phiếu"
+    assert ws.max_row == 1
 
 
 # ---------- Ảnh hưởng tới báo cáo ----------

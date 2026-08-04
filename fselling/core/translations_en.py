@@ -393,4 +393,32 @@ EN_MESSAGES = {
     "Đã thanh toán": "Paid",
     "Đã hủy": "Cancelled",
     "Cần đối soát": "Needs review",
+    # F1: cột giá vốn / lãi gộp. Bị bỏ sót từ đợt đó nên file tiếng Anh vẫn
+    # hiện tiêu đề tiếng Việt ở mấy cột này.
+    "Giá vốn": "Cost price",
+    "Lãi gộp": "Gross profit",
+    "Chưa khai giá vốn": "Cost price not set",
+    "Tổng Giá Vốn (đơn đã đủ giá vốn)": "Total cost (orders with full cost data)",
+    "Tổng Lãi Gộp (đơn đã đủ giá vốn)": "Total gross profit (orders with full cost data)",
+    "Số đơn chưa đủ giá vốn (không tính vào lãi)":
+        "Orders missing cost data (excluded from profit)",
+    # F6: sheet hàng đã hủy.
+    "Hàng đã hủy": "Written off",
+    "Mã phiếu": "Write-off ID",
+    "Ngày hủy": "Date",
+    "Lý do": "Reason",
+    "Sản phẩm": "Product",
+    "Hạn sử dụng": "Expiry date",
+    "Số lượng": "Quantity",
+    "Giá vốn đơn vị": "Unit cost",
+    "Người bấm": "Recorded by",
+    "Ghi chú": "Note",
+    "Hết hạn": "Expired",
+    "Hỏng / vỡ": "Damaged",
+    "Thất thoát": "Lost",
+    "Tổng số lượng đã hủy": "Total quantity written off",
+    "Tổng lỗ (phiếu đã đủ giá vốn)":
+        "Total loss (write-offs with full cost data)",
+    "Số phiếu chưa đủ giá vốn (không tính vào lỗ)":
+        "Write-offs missing cost data (excluded from the loss)",
 }
