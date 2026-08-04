@@ -422,7 +422,17 @@ function renderDashboardStats(stats) {
     const pieCtx = document.getElementById('productPieChart').getContext('2d');
     if (pieChartInstance) pieChartInstance.destroy();
 
-    const pieLabels = (stats.top_products || []).map(p => p.name);
+    // Nhóm biến thể ghi kèm số loại đã bán, để "Áo thun 12" không bị đọc nhầm
+    // thành một mặt hàng đơn lẻ bán chạy trong khi đó là tổng của mấy size.
+    const pieLabels = (stats.top_products || []).map(p => (
+        Number(p.variants) > 1
+            ? t('seller.dashboard.top_group', {
+                name: p.name,
+                count: Number(p.variants),
+                formattedCount: dinhDangSoSeller(p.variants)
+            })
+            : p.name
+    ));
     const pieData = (stats.top_products || []).map(p => p.qty);
     const pieColors = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'];
 

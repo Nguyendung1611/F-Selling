@@ -523,18 +523,44 @@ def shop_stats(
         or 0
     )
 
+    # Gộp các biến thể của cùng một nhóm thành MỘT dòng. Không gộp thì một cái
+    # áo có 4 size chiếm 4 trong 5 chỗ của bảng "bán chạy nhất", đẩy hết mặt
+    # hàng khác ra ngoài - càng nhiều biến thể bảng càng vô dụng, mà biến thể
+    # chính là thứ vừa được thêm ở F6.
+    #
+    # Hàng đơn lẻ vẫn gom theo `product_name` ĐÃ CHỐT LÚC BÁN như trước, không
+    # đổi. Chỉ hàng có `variant_group` mới gom theo nhóm HIỆN TẠI của sản phẩm -
+    # vì "áo thun bán được bao nhiêu" là câu hỏi về danh mục hôm nay, không phải
+    # về cái tên hồi tháng trước. Dòng đơn hàng cũ không có `product_id`
+    # (trước migration A1a) rơi về `product_name` nhờ COALESCE.
+    _ten_gom = func.coalesce(
+        models.Product.variant_group, models.OrderItem.product_name
+    )
     top_products_query = (
         db.query(
-            models.OrderItem.product_name,
-            func.sum(models.OrderItem.quantity).label("total_qty"),
+            _ten_gom.label("ten"),
+            func.sum(models.OrderItem.quantity).label("so_luong"),
+            func.count(distinct(models.OrderItem.product_id)).label("so_bien_the"),
+            # NULL = mọi dòng trong cụm này đều là hàng đơn lẻ.
+            func.max(models.Product.variant_group).label("nhom"),
         )
+        .outerjoin(models.Product, models.Product.id == models.OrderItem.product_id)
         .filter(models.OrderItem.order_id.in_(paid_orders_subquery))
-        .group_by(models.OrderItem.product_name)
+        .group_by(_ten_gom)
         .order_by(func.sum(models.OrderItem.quantity).desc())
         .limit(5)
         .all()
     )
-    top_products = [{"name": r[0], "qty": r[1]} for r in top_products_query]
+    top_products = [
+        {
+            "name": r.ten,
+            "qty": r.so_luong,
+            # 0 = hàng đơn lẻ. Giao diện chỉ ghi "(N loại)" khi > 0, nếu không
+            # mọi món trong tiệm đều bị dán thêm "(1 loại)" vô nghĩa.
+            "variants": r.so_bien_the if r.nhom else 0,
+        }
+        for r in top_products_query
+    ]
 
     if co_loc_ngay:
         # Biểu đồ chạy theo đúng khoảng người dùng chọn

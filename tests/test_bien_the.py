@@ -452,6 +452,107 @@ def test_kiem_ke_dem_tung_bien_the_rieng(client):
     assert _sp(b["id"]).stock == 10
 
 
+# ---------- Báo cáo: top sản phẩm gộp theo nhóm ----------
+#
+# Không gộp thì một cái áo 4 size chiếm 4 trong 5 chỗ của bảng "bán chạy nhất",
+# đẩy hết mặt hàng khác ra ngoài - càng nhiều biến thể bảng càng vô dụng.
+
+
+def _ban_va_thanh_toan(client, ctx, sp, qty):
+    don = client.post(
+        f"/api/orders/{ctx['shop_id']}",
+        json={
+            "items": [{"product_id": sp["id"], "price": sp["price"], "quantity": qty}],
+            "payment_method": "cash",
+        },
+        headers=auth(ctx["token"]),
+    ).json()
+    res = client.post(
+        f"/api/orders/{don['order_id']}/pay", headers=auth(ctx["token"])
+    )
+    assert res.status_code == 200, res.text
+
+
+def _top(client, ctx):
+    res = client.get(
+        f"/api/shops/{ctx['shop_id']}/stats", headers=auth(ctx["token"])
+    )
+    assert res.status_code == 200, res.text
+    return res.json()["top_products"]
+
+
+def test_top_san_pham_gop_cac_bien_the_thanh_mot_dong(client):
+    ctx = seller_with_shop(client)
+    s = _tao_ok(client, ctx, "Ao thun", "Size S", stock=100)
+    m = _tao_ok(client, ctx, "Ao thun", "Size M", stock=100)
+    l = _tao_ok(client, ctx, "Ao thun", "Size L", stock=100)
+    _ban_va_thanh_toan(client, ctx, s, 3)
+    _ban_va_thanh_toan(client, ctx, m, 4)
+    _ban_va_thanh_toan(client, ctx, l, 5)
+
+    top = _top(client, ctx)
+    ao = [d for d in top if d["name"] == "Ao thun"]
+    assert len(ao) == 1, "Ba size phải gộp thành MỘT dòng"
+    assert ao[0]["qty"] == 12, "Tổng của cả nhóm"
+    assert ao[0]["variants"] == 3
+
+
+def test_hang_don_le_khong_bi_dan_nhan_so_loai(client):
+    """`variants` = 0 để giao diện không ghi '(1 loại)' cho mọi món trong tiệm."""
+    ctx = seller_with_shop(client)
+    _ban_va_thanh_toan(client, ctx, ctx["product"], 2)
+
+    top = _top(client, ctx)
+    don_le = [d for d in top if d["name"] == ctx["product"]["name"]]
+    assert len(don_le) == 1
+    assert don_le[0]["variants"] == 0
+
+
+def test_mot_nhom_khong_chiem_het_top_5(client):
+    """Đây là lý do tồn tại của cả thay đổi này."""
+    ctx = seller_with_shop(client)
+    for ten in ("Size S", "Size M", "Size L", "Size XL", "Size XXL"):
+        sp = _tao_ok(client, ctx, "Ao thun", ten, stock=100)
+        _ban_va_thanh_toan(client, ctx, sp, 10)
+    khac = _tao_ok(client, ctx, _unique("Nuoc ngot"), stock=100)
+    _ban_va_thanh_toan(client, ctx, khac, 1)
+
+    top = _top(client, ctx)
+    ten_top = [d["name"] for d in top]
+    assert ten_top.count("Ao thun") == 1
+    assert khac["name"] in ten_top, "Mặt hàng khác vẫn phải lọt vào bảng"
+
+
+def test_gop_theo_nhom_HIEN_TAI_chu_khong_theo_ten_luc_ban(client):
+    """Đổi tên nhóm rồi thì báo cáo gom theo tên mới - "áo thun bán được bao
+    nhiêu" là câu hỏi về danh mục hôm nay."""
+    ctx = seller_with_shop(client)
+    s = _tao_ok(client, ctx, "Ao thun", "Size S", stock=100)
+    m = _tao_ok(client, ctx, "Ao thun", "Size M", stock=100)
+    _ban_va_thanh_toan(client, ctx, s, 2)
+    _ban_va_thanh_toan(client, ctx, m, 3)
+
+    for sp in (s, m):
+        res = _sua(client, ctx, sp, name="Ao thun cao cap")
+        assert res.status_code == 200, res.text
+
+    top = _top(client, ctx)
+    assert [d for d in top if d["name"] == "Ao thun cao cap"][0]["qty"] == 5
+    assert not [d for d in top if d["name"] == "Ao thun"]
+
+
+def test_go_bien_the_thi_tach_lai_thanh_hang_don_le(client):
+    ctx = seller_with_shop(client)
+    s = _tao_ok(client, ctx, "Ao thun", "Size S", stock=100)
+    _ban_va_thanh_toan(client, ctx, s, 4)
+    _sua(client, ctx, s, name="Ao thun le", variant_name="")
+
+    top = _top(client, ctx)
+    dong = [d for d in top if d["qty"] == 4]
+    assert len(dong) == 1
+    assert dong[0]["variants"] == 0, "Không còn là nhóm nữa"
+
+
 # ---------- Ràng buộc ở tầng database ----------
 
 

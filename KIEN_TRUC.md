@@ -730,10 +730,24 @@ Bảng Kho hàng thì ngược lại: **nhắc tên nhóm ở MỌI dòng**, kh�
 nhóm. Bảng đó cuộn được và lọc được theo danh mục nên một dòng "Size 32" đứng
 một mình là chuyện thường — lúc đó không đọc ra được nó là quần hay áo.
 
-**Còn để ngỏ:** báo cáo (top sản phẩm bán chạy, Excel) vẫn đếm theo TỪNG biến
-thể chứ không cộng gộp theo nhóm. Đó là lựa chọn có chủ ý ở đợt này — biết size
-nào bán chạy là thông tin có ích thật — nhưng chủ shop muốn xem doanh số cả
-nhóm thì hiện phải tự cộng.
+**Top sản phẩm bán chạy GỘP theo nhóm.** Không gộp thì một cái áo bốn size
+chiếm bốn trong năm chỗ của bảng, đẩy hết mặt hàng khác ra ngoài — càng nhiều
+biến thể bảng càng vô dụng. Ba điều trong cách gộp:
+
+- Gom theo `COALESCE(products.variant_group, order_items.product_name)`, tức là
+  theo nhóm **hiện tại** của sản phẩm. "Áo thun bán được bao nhiêu" là câu hỏi
+  về danh mục hôm nay, không phải về cái tên hồi tháng trước.
+- **Hàng đơn lẻ giữ nguyên cách cũ**, gom theo `product_name` đã chốt lúc bán.
+  Đây là bất đối xứng có chủ ý: đổi cả hai sang gom theo `product_id` là làm
+  đổi hành vi của mọi shop chưa dùng biến thể.
+- Dòng đơn hàng cũ không có `product_id` (trước migration A1a) rơi về
+  `product_name` nhờ `COALESCE`, nên không biến mất khỏi báo cáo.
+
+`variants` trong mỗi dòng là số biến thể đã bán; **0 nghĩa là hàng đơn lẻ**.
+Giao diện chỉ ghi "(N loại)" khi > 0, nếu không mọi món trong tiệm đều bị dán
+thêm "(1 loại)" vô nghĩa.
+
+File Excel xuất theo ĐƠN HÀNG chứ không liệt kê sản phẩm, nên không liên quan.
 
 ### 24. Kiểm kê theo lô, và phiếu hủy hàng là nghiệp vụ THỨ TƯ
 
