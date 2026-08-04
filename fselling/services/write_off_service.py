@@ -75,12 +75,23 @@ def _ket_qua(
         .order_by(models.StockWriteOffItem.id)
         .all()
     )
+    # Ai bấm hủy là thông tin BẮT BUỘC của một màn kiểm toán: hủy hàng là đường
+    # duy nhất làm tồn giảm mà không sinh doanh thu, nên "ai làm" quan trọng
+    # ngang "mất bao nhiêu". Tài khoản bị xóa sau đó thì trả None chứ không bịa.
+    nguoi_tao = None
+    if phieu.created_by_user_id:
+        nguoi_tao = (
+            db.query(models.User.username)
+            .filter(models.User.id == phieu.created_by_user_id)
+            .scalar()
+        )
     return {
         "write_off_id": phieu.id,
         "reason": phieu.reason,
         "note": phieu.note,
         "total_quantity": phieu.total_quantity,
         "created_at": phieu.created_at,
+        "created_by": nguoi_tao,
         # Có dòng nào chưa khai giá vốn thì NÓI RA, đừng cộng phần biết được rồi
         # trình bày như tổng thiệt hại - con số đó thấp hơn sự thật.
         "total_cost": (

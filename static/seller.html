@@ -480,6 +480,18 @@
                         <span data-i18n="seller.warehouse.expiry">Hạn Sử Dụng</span>
                         <span id="expiryBadge" style="display:none; margin-left:0.4rem; background:#B91C1C; color:white; border-radius:10px; padding:0 0.45rem; font-size:0.75rem; font-weight:700;">0</span>
                     </button>
+
+                    <!-- Chỉ chủ shop thấy tab này: số lỗ chính là giá vốn nhân
+                         số lượng, nói ra nó là nói ra giá vốn. JS ẩn nút cho
+                         nhân viên, còn chặn thật nằm ở require_cost_visibility. -->
+                    <button
+                        class="tab-btn"
+                        id="whSubTabWriteOff"
+                        onclick="switchWarehouseSubTab('writeoff')"
+                        style="display:none;">
+                        <i class="ph ph-trash"></i>
+                        <span data-i18n="seller.warehouse.write_offs">Hàng Đã Hủy</span>
+                    </button>
                 </div>
 
                 <!-- Products Sub-content -->
@@ -608,6 +620,45 @@
                             <tbody id="expiryList"></tbody>
                         </table>
                     </div>
+                </div>
+
+                <!-- Lịch sử phiếu hủy. Hủy hàng là đường duy nhất làm tồn giảm
+                     mà không sinh doanh thu, nên phải xem lại được: hủy gì,
+                     ngày nào, ai bấm, mất bao nhiêu tiền. -->
+                <div id="warehouseWriteOffSection" style="display: none;">
+                    <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem;">
+                        <button class="btn-outline" onclick="loadPhieuHuy()" style="padding:0.35rem 0.8rem;">
+                            <i class="ph ph-arrows-clockwise"></i> <span data-i18n="common.refresh">Tải lại</span>
+                        </button>
+                        <small style="color:#64748B;" data-i18n="seller.writeoff.list_hint">Số lỗ đã được trừ vào Lãi gộp ở tab Tổng quan.</small>
+                    </div>
+
+                    <div class="stats-grid" style="margin-bottom:1.5rem;">
+                        <div class="stat-card" style="border-color:#B91C1C;">
+                            <h4 data-i18n="seller.writeoff.total_quantity">TỔNG ĐÃ HỦY</h4>
+                            <strong id="woTongSoLuong" class="stat-value" style="color:#B91C1C;">0</strong>
+                        </div>
+                        <div class="stat-card" style="border-color:#B45309;">
+                            <h4 data-i18n="seller.writeoff.total_loss">TỔNG LỖ</h4>
+                            <strong id="woTongLo" class="stat-value" style="color:#B45309;">0 ₫</strong>
+                            <small id="woThieuGiaVon" style="display:block; color:#B45309; font-size:0.75rem;"></small>
+                        </div>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table>
+                            <thead><tr>
+                                <th data-i18n="seller.writeoff.col_date">Ngày hủy</th>
+                                <th data-i18n="seller.writeoff.col_reason">Lý do</th>
+                                <th data-i18n="seller.writeoff.col_items">Hàng đã hủy</th>
+                                <th data-i18n="seller.writeoff.col_quantity">Số lượng</th>
+                                <th data-i18n="seller.writeoff.col_loss">Giá trị</th>
+                                <th data-i18n="seller.writeoff.col_by">Người bấm</th>
+                            </tr></thead>
+                            <tbody id="woList"></tbody>
+                        </table>
+                    </div>
+                    <div id="woEmpty" style="display:none; color:var(--text-muted); text-align:center; padding:2rem 0;"></div>
                 </div>
 
                 <div class="modal-body-split" id="warehouseCategoriesSection" style="display: none;">
@@ -1101,13 +1152,13 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260803-gop-bien-the"></script>
+    <script src="/js/locales/seller.js?v=20260803-lich-su-huy"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260803-bo-alert"></script>
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260803-gop-bien-the"></script>
+    <script src="/js/seller.js?v=20260803-lich-su-huy"></script>
 </body>
 </html>

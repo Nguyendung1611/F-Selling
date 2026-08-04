@@ -403,6 +403,36 @@ def test_nhan_vien_khong_xem_duoc_de_xuat_va_danh_sach_phieu(client):
         assert res.status_code == 403, duong
 
 
+def test_phieu_ghi_lai_AI_bam_huy(client):
+    """Màn kiểm toán mà không biết ai bấm thì không kiểm được gì.
+
+    Hủy hàng là đường duy nhất làm tồn giảm mà không sinh doanh thu, nên "ai
+    làm" quan trọng ngang "mất bao nhiêu".
+    """
+    ctx = seller_with_shop(client)
+    res = _huy(client, ctx["token"], ctx["shop_id"], [
+        {"product_id": ctx["product"]["id"], "quantity": 1}
+    ])
+    assert res.status_code == 200, res.text
+    assert res.json()["created_by"] == ctx["username"]
+
+    ds = client.get(
+        f"/api/products/{ctx['shop_id']}/write-offs", headers=auth(ctx["token"])
+    ).json()["write_offs"]
+    assert ds[0]["created_by"] == ctx["username"]
+
+
+def test_admin_huy_thi_ghi_ten_admin(client):
+    ctx = seller_with_shop(client)
+    _huy(client, admin_token(client), ctx["shop_id"], [
+        {"product_id": ctx["product"]["id"], "quantity": 1}
+    ])
+    ds = client.get(
+        f"/api/products/{ctx['shop_id']}/write-offs", headers=auth(ctx["token"])
+    ).json()["write_offs"]
+    assert ds[0]["created_by"] == "admin"
+
+
 def test_danh_sach_phieu_moi_nhat_truoc(client):
     ctx = seller_with_shop(client)
     _huy(client, ctx["token"], ctx["shop_id"],

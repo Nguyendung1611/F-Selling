@@ -1256,13 +1256,19 @@ function switchWarehouseSubTab(subTab) {
     const nut = {
         products: 'whSubTabProds',
         categories: 'whSubTabCats',
-        expiry: 'whSubTabExpiry'
+        expiry: 'whSubTabExpiry',
+        writeoff: 'whSubTabWriteOff'
     };
     const khoi = {
         products: ['warehouseProductsSection', 'grid'],
         categories: ['warehouseCategoriesSection', 'grid'],
-        expiry: ['warehouseExpirySection', 'block']
+        expiry: ['warehouseExpirySection', 'block'],
+        writeoff: ['warehouseWriteOffSection', 'block']
     };
+    // Nhân viên gọi thẳng switchWarehouseSubTab('writeoff') từ console vẫn không
+    // xem được gì: endpoint phía sau đòi require_cost_visibility. Nhánh này chỉ
+    // để họ không rơi vào một tab trống không hiểu vì sao.
+    if (subTab === 'writeoff' && !XEM_DUOC_GIA_VON) subTab = 'products';
     if (!khoi[subTab]) subTab = 'products';
 
     Object.entries(nut).forEach(([ten, id]) => {
@@ -1274,6 +1280,7 @@ function switchWarehouseSubTab(subTab) {
     });
 
     if (subTab === 'expiry') loadHanSuDung();
+    if (subTab === 'writeoff') loadPhieuHuy();
 }
 
 // ===== F5: hàng sắp hết hạn và đã hết hạn =====
@@ -1353,6 +1360,105 @@ function veHanSuDung(d) {
             <td style="white-space:nowrap;">${escapeHtml(r.expiry_date || '')}</td>
             <td>${escapeHtml(dinhDangSoSeller(r.quantity))}</td>
             <td>${nhan}</td>
+        </tr>`;
+    });
+}
+
+// ===== F6: lịch sử phiếu hủy =====
+
+let phieuHuyRequestId = 0;
+
+/** Nhãn tiếng Việt của lý do hủy. Lý do lạ (backend thêm sau này) vẫn hiện được
+ *  chuỗi thô chứ không làm vỡ bảng. */
+function nhanLyDoHuy(reason) {
+    const nhan = {
+        EXPIRED: t('seller.writeoff.reason_expired'),
+        DAMAGED: t('seller.writeoff.reason_damaged'),
+        LOST: t('seller.writeoff.reason_lost')
+    };
+    return nhan[reason] || reason || '--';
+}
+
+async function loadPhieuHuy() {
+    const shopId = currentShopId;
+    if (!shopId || !XEM_DUOC_GIA_VON) return;
+    const requestId = ++phieuHuyRequestId;
+    const generation = currentShopGeneration;
+    try {
+        const d = await apiCall(`/products/${shopId}/write-offs`);
+        if (requestId !== phieuHuyRequestId
+            || generation !== currentShopGeneration
+            || currentShopId !== shopId) return;
+        vePhieuHuy(d.write_offs || []);
+    } catch (e) {
+        if (requestId === phieuHuyRequestId && currentShopId === shopId) {
+            showToast(e.message);
+        }
+    }
+}
+
+function vePhieuHuy(phieu) {
+    const tbody = document.getElementById('woList');
+    const trong = document.getElementById('woEmpty');
+    if (!tbody || !trong) return;
+
+    // `total_cost` NULL = phiếu đó còn dòng chưa khai giá vốn. Cộng nó như 0 là
+    // báo tổng lỗ THẤP hơn thực tế, nên đếm riêng và nói ra (bẫy 13 và 24).
+    const tongSoLuong = phieu.reduce((s, p) => s + (Number(p.total_quantity) || 0), 0);
+    const coGiaVon = phieu.filter(p => p.total_cost !== null && p.total_cost !== undefined);
+    const tongLo = coGiaVon.reduce((s, p) => s + Number(p.total_cost), 0);
+    const soThieuGiaVon = phieu.length - coGiaVon.length;
+
+    document.getElementById('woTongSoLuong').innerText = dinhDangSoSeller(tongSoLuong);
+    document.getElementById('woTongLo').innerText = dinhDangTienDoiSoat(tongLo);
+    const ghiChuThieu = document.getElementById('woThieuGiaVon');
+    ghiChuThieu.innerText = soThieuGiaVon
+        ? t('seller.writeoff.missing_cost_note', {
+            count: soThieuGiaVon,
+            formattedCount: dinhDangSoSeller(soThieuGiaVon)
+        })
+        : '';
+
+    tbody.innerHTML = '';
+    if (!phieu.length) {
+        trong.style.display = 'block';
+        trong.innerHTML = `<i class="ph ph-check-circle" style="display:block; margin-bottom:0.5rem; color:var(--success); font-size:2.2rem;"></i>`
+            + escapeHtml(t('seller.writeoff.empty'));
+        return;
+    }
+    trong.style.display = 'none';
+
+    phieu.forEach(p => {
+        // Liệt kê tối đa 3 dòng rồi tóm tắt phần còn lại: một phiếu hủy cuối
+        // tháng có thể có mấy chục lô, đổ hết ra thì bảng không đọc được.
+        const dong = p.items || [];
+        const moTa = dong.slice(0, 3).map(d => {
+            const han = d.expiry_date
+                ? ` <span style="color:#94A3B8;">(${escapeHtml(t('seller.stocktake.expiry', { date: d.expiry_date }))})</span>`
+                : '';
+            return `${escapeHtml(d.product_name || '--')} ×${dinhDangSoSeller(d.quantity)}${han}`;
+        }).join('<br>');
+        const conLai = dong.length > 3
+            ? `<br><span style="color:#64748B; font-size:0.8rem;">`
+              + escapeHtml(t('seller.writeoff.more_items', {
+                  count: dong.length - 3,
+                  formattedCount: dinhDangSoSeller(dong.length - 3)
+              })) + '</span>'
+            : '';
+        const giaTri = (p.total_cost === null || p.total_cost === undefined)
+            ? `<span style="color:#B45309;">${escapeHtml(t('seller.writeoff.cost_unknown'))}</span>`
+            : dinhDangTienDoiSoat(p.total_cost);
+        const ghiChu = p.note
+            ? `<br><span style="color:#64748B; font-size:0.8rem;">${escapeHtml(p.note)}</span>`
+            : '';
+
+        tbody.innerHTML += `<tr>
+            <td style="white-space:nowrap;">${escapeHtml(dinhDangNgayGio(p.created_at))}</td>
+            <td>${escapeHtml(nhanLyDoHuy(p.reason))}${ghiChu}</td>
+            <td>${moTa}${conLai}</td>
+            <td>${dinhDangSoSeller(p.total_quantity)}</td>
+            <td style="color:#B91C1C; font-weight:600;">${giaTri}</td>
+            <td>${escapeHtml(p.created_by || '--')}</td>
         </tr>`;
     });
 }
@@ -1437,6 +1543,7 @@ async function guiPhieuHuy(shopId, generation) {
         maThaoTacHuyHang = null;
         loadHanSuDung();
         loadProducts();
+        loadPhieuHuy();   // phiếu vừa ghi phải có mặt ngay ở tab lịch sử
     } catch (e) {
         // KHÔNG xóa `maThaoTacHuyHang`: bấm lại sau lỗi mạng phải dùng lại đúng
         // mã đó, nếu không lần trước đã ghi được mà lần này trừ kho thêm lần nữa.
@@ -3168,6 +3275,11 @@ function applyRoleUI() {
         // chỉ là không thấy và không gửi field này (xem createProduct).
         const oGiaVon = document.getElementById('prodCostGroup');
         if (oGiaVon) oGiaVon.style.display = 'none';
+    } else {
+        // Tab lịch sử hàng hủy: mặc định ẩn trong HTML, chỉ chủ shop mới mở.
+        // Số lỗ chính là giá vốn nhân số lượng nên nó thuộc cùng vòng bí mật.
+        const tabHuy = document.getElementById('whSubTabWriteOff');
+        if (tabHuy) tabHuy.style.display = '';
     }
     if (MY_ROLE !== 'STAFF') return;
     // Nhân viên KHÔNG quản lý cửa hàng, nhưng vẫn phải chỉnh được phần Đọc tiền:

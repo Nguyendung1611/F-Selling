@@ -820,8 +820,23 @@ chặn. Chống lặp bằng `idempotency_key` riêng như phiếu trả hàng (
 `GET /write-off/expired` chỉ **ĐỀ XUẤT** các lô quá hạn, không tự hủy. Hạn nhập
 sai một chữ số là cả lô còn tốt bị bỏ đi, mà hủy thì không có đường lùi.
 
-**Còn để ngỏ:** phiếu hủy chưa có màn xem lại lịch sử trên giao diện (endpoint
-`GET /api/products/{shop_id}/write-offs` đã có), và chưa vào file Excel xuất ra.
+**Màn lịch sử phiếu hủy** nằm ở Kho hàng → tab con "Hàng Đã Hủy", CHỈ chủ shop
+thấy. Ba lớp che, và cả ba đều cần: nút tab ẩn, `switchWarehouseSubTab` đá về
+tab Sản phẩm nếu bị gọi thẳng từ console, và endpoint trả 403. Hai lớp đầu chỉ
+để giao diện gọn và không đưa người dùng vào một tab trống khó hiểu; lớp thứ ba
+mới là lớp chặn thật.
+
+Phiếu trả kèm `created_by` (username người bấm). Màn kiểm toán mà không biết ai
+làm thì không kiểm được gì — hủy hàng là đường duy nhất làm tồn giảm mà không
+sinh doanh thu, nên "ai làm" quan trọng ngang "mất bao nhiêu". Tài khoản bị xóa
+sau đó thì trả `None` chứ không bịa tên.
+
+Tổng lỗ trên màn này **loại các phiếu thiếu giá vốn và đếm riêng**, giống hệt
+`_huy_hang_anh_huong_lai`. Cộng chúng như 0 là báo tổng thiệt hại thấp hơn thực
+tế — sai theo hướng làm người xem yên tâm, đúng cái bẫy 13 nói.
+
+**Còn để ngỏ:** phiếu hủy chưa có mặt trong file Excel xuất ra. File đó hiện
+xuất theo ĐƠN HÀNG, chưa có sheet nào cho hàng ra khỏi kho mà không bán.
 
 ### 25. Một hằng số không ai đọc là lời nói dối nằm ngay trong code
 
