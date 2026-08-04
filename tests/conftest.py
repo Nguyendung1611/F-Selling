@@ -18,6 +18,31 @@ import pytest
 
 # --- Phải cấu hình môi trường TRƯỚC khi import package ---
 _TMP = Path(tempfile.mkdtemp(prefix="fselling_test_"))
+
+
+def pytest_configure(config):
+    """Đặt thư mục tạm của `tmp_path` vào cùng chỗ với DB test.
+
+    KHÔNG dùng chỗ mặc định và KHÔNG dùng thư mục cố định trong dự án - cả hai
+    đều đã gây ra "TEST FAIL" GIẢ trên máy dev, tức là bộ test đỏ trong khi code
+    không có lỗi gì, và `test-commit.ps1` từ chối commit:
+
+      - Mặc định `%TEMP%\\pytest-of-<user>`: pytest tạo symlink `pytest-current`
+        ở đó. Symlink hỏng thì bước dọn dẹp cuối phiên ném `PermissionError` và
+        pytest thoát mã lỗi DÙ MỌI TEST ĐỀU PASS.
+      - `.pytest-tmp` trong dự án (bản trước): thư mục đó đã dính hỏng ACL, đọc
+        còn không được. Mọi test dùng `tmp_path` (`test_tts.py`,
+        `test_liet_ke_don_treo.py`) lỗi `PermissionError` ngay từ bước setup.
+
+    `tempfile.mkdtemp()` cho một thư mục MỚI, tên duy nhất, mỗi lần chạy: không
+    có symlink để hỏng, không có thư mục cũ để kế thừa quyền hỏng. Đặt ở đây
+    thay vì `addopts` của pytest.ini vì file ini không nội suy được biến môi
+    trường, mà đường dẫn này phải do Python tính ra lúc chạy.
+
+    Dùng thư mục con `pytest/`: pytest XÓA SẠCH basetemp lúc khởi động, trỏ
+    thẳng vào `_TMP` là mất luôn DB test nằm cạnh.
+    """
+    config.option.basetemp = str(_TMP / "pytest")
 os.environ["DB_PATH"] = str(_TMP / "test.db")
 os.environ["UPLOAD_DIR"] = str(_TMP / "uploads")
 os.environ["LOG_FILE"] = str(_TMP / "request_log.txt")
