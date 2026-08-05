@@ -2,6 +2,7 @@
 .venv/
 *.db
 request_log.txt
+backup_log.txt
 
 __pycache__/
 *.py[cod]
