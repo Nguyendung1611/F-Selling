@@ -209,7 +209,19 @@ async function loadProducts() {
         const res = await apiCall(`/products/${currentShopId}`);
         products = res.filter(p => p.is_active !== false && p.category_is_active !== false);
         filterAndRenderProducts();
-    } catch (e) { showToast(e.message); }
+        // Chụp lại danh mục để còn bán được khi mất mạng. Không có bản chụp thì
+        // màn POS trống trơn và hàng chờ offline có cũng vô nghĩa.
+        OfflineBan?.luuAnhChupSanPham(currentShopId, products);
+    } catch (e) {
+        const chup = await OfflineBan?.docAnhChupSanPham(currentShopId).catch(() => null);
+        if (chup && chup.length) {
+            products = chup;
+            filterAndRenderProducts();
+            showToast(dich('pos.offline.dung_ban_chup'));
+            return;
+        }
+        showToast(e.message);
+    }
 }
 
 async function loadCategories() {
@@ -1371,6 +1383,57 @@ async function guiYeuCauTaoDonDangDo(state) {
     await hoanTatTienMatDangCho(state);
 }
 
+/** Cập nhật con số phiếu đang chờ gửi trên thanh trạng thái. */
+async function capNhatHuyHieuOffline() {
+    const o = document.getElementById('offlineBadge');
+    if (!o || !window.OfflineBan) return;
+    try {
+        const cho = await OfflineBan.demCho(currentShopId);
+        const loi = await OfflineBan.demLoi(currentShopId);
+        if (!cho && !loi && !OfflineBan.dangOffline()) {
+            o.style.display = 'none';
+            return;
+        }
+        o.style.display = 'inline-flex';
+        o.innerText = OfflineBan.dangOffline()
+            ? dich('pos.offline.mat_mang', { count: cho })
+            : dich('pos.offline.cho_gui', { count: cho });
+        o.title = loi ? dich('pos.offline.co_phieu_loi', { count: loi }) : '';
+    } catch (e) {
+        console.warn('[OFFLINE] Không đọc được hàng chờ:', e);
+    }
+}
+
+/** Ghi phiếu đã bán vào hàng chờ rồi dọn giỏ như một đơn đã xong.
+ *
+ * Chỉ được gọi khi CHẮC CHẮN request chưa rời khỏi máy (`navigator.onLine`
+ * false). Xem đầu file `offline-ban.js` để biết vì sao điều kiện phải chặt như
+ * vậy: gọi nhầm là ghi đơn hai lần với hai khóa khác nhau, không khóa
+ * idempotency nào chặn được.
+ */
+async function luuBanOffline(state) {
+    const phieu = await OfflineBan.luuPhieu(
+        currentShopId,
+        cart,
+        cashTenderedAmount,
+        localStorage.getItem('username') || null
+    );
+    xoaCheckoutDangDo();
+    checkoutOperationId = null;
+    currentOrderId = null;
+    pendingCashOrderId = null;
+    cart = [];
+    currentVoucher = null;
+    const oVoucher = document.getElementById('voucherInput');
+    if (oVoucher) oVoucher.value = '';
+    const oMsg = document.getElementById('voucherMsg');
+    if (oMsg) oMsg.innerText = '';
+    calcCart();
+    await capNhatHuyHieuOffline();
+    showToast(dich('pos.offline.da_luu_phieu'));
+    return phieu;
+}
+
 async function thuTaoDonDangDo(state) {
     if (!state || state.phase !== 'creating' || checkoutBusy) return;
     checkoutOperationId = state.operation_id;
@@ -1379,6 +1442,23 @@ async function thuTaoDonDangDo(state) {
     try {
         await guiYeuCauTaoDonDangDo(state);
     } catch (e) {
+        // Mất mạng HẲN + tiền mặt + khách đã đưa đủ tiền => ghi vào hàng chờ.
+        //
+        // Ba điều kiện đều bắt buộc. `dangOffline()` chặt nhất: nó nghĩa là máy
+        // không có đường mạng nào nên request chưa từng rời khỏi đây. Mạng chập
+        // chờn (gọi được nhưng hỏng giữa chừng) KHÔNG đi đường này mà rơi vào
+        // retry theo `operation_id` sẵn có - server có thể đã tạo đơn rồi.
+        if (
+            !currentOrderId
+            && window.OfflineBan
+            && OfflineBan.dangOffline()
+            && state.payment_method === 'cash'
+            && cart.length
+            && cashTenderedAmount >= Number(state.total || 0)
+        ) {
+            await luuBanOffline(state);
+            return;
+        }
         if (!currentOrderId && laLoi4xx(e)) {
             // POST create trả 4xx: server xác định không tạo đơn, nên có thể bỏ
             // operation cũ và cho sửa giỏ. Network/5xx phải giữ exact payload.
@@ -1410,6 +1490,12 @@ async function checkout() {
     if(!activeShift) {
         showToast(dich('pos.checkout.open_shift_first'));
         return moModalMoCa();
+    }
+    // Mất mạng thì CHỈ bán được tiền mặt. Chuyển khoản cần QR và webhook ngân
+    // hàng; ghi nợ cần kiểm hạn mức nợ trên server. Chặn ngay đây chứ đừng để
+    // thu ngân bấm xong, khách đứng đợi rồi mới báo không được.
+    if (window.OfflineBan?.dangOffline() && paymentMethod !== 'cash') {
+        return showToast(dich('pos.offline.chi_tien_mat'));
     }
     capNhatTienKhachDua();
     if (paymentMethod === 'cash' && cashTenderedAmount < total) {
@@ -2252,3 +2338,23 @@ setMethod(paymentMethod);
 // ngôn ngữ đã lưu ngay lần mở trang, không cần chờ người dùng đổi locale.
 capNhatNgonNguPOS();
 loadShop();
+
+// Bán offline: tự gửi hàng chờ khi có mạng lại, và luôn hiện số phiếu đang chờ.
+if (window.OfflineBan) {
+    OfflineBan.batTuDongBo(
+        () => currentShopId,
+        async (kq) => {
+            if (kq.da_gui) {
+                showToast(dich('pos.offline.da_dong_bo', { count: kq.da_gui }));
+                // Tồn kho trên server vừa đổi vì các phiếu vừa lên. Nạp lại để
+                // thu ngân không bán tiếp dựa trên con số đã cũ.
+                loadProducts();
+            }
+            if (kq.loi) showToast(dich('pos.offline.co_phieu_loi', { count: kq.loi }));
+            await capNhatHuyHieuOffline();
+        }
+    );
+    window.addEventListener('online', capNhatHuyHieuOffline);
+    window.addEventListener('offline', capNhatHuyHieuOffline);
+    capNhatHuyHieuOffline();
+}

@@ -1054,6 +1054,43 @@ một đơn mới, doanh thu và tồn kho cùng nhân đôi. `order_payments.id
 mạng, tự đồng bộ khi có mạng lại). Backend đã sẵn sàng và đứng một mình được —
 gọi thẳng `POST /api/orders/{shop_id}/offline` là ghi được phiếu.
 
+### 29. Máy bán offline: chỉ lưu phiếu khi `navigator.onLine === false`
+
+Đây là điều kiện DUY NHẤT ngăn một đơn bị ghi hai lần, và nó nằm ở
+`thuTaoDonDangDo` trong `pos.js`.
+
+Cách làm hiển nhiên — "gọi API hỏng thì lưu phiếu offline" — là sai. Lỗi mạng
+xảy ra được **sau khi** server đã tạo đơn xong (mất sóng đúng lúc nhận phản
+hồi). Lưu phiếu lúc đó là ghi đơn lần thứ hai, với `offline_uuid` mới hoàn toàn
+nên `ux_orders_offline_uuid` không chặn, và `operation_id` cũng không vì đơn
+kia đi đường khác. Hai đơn, hai lần trừ kho, doanh thu gấp đôi.
+
+`navigator.onLine === false` nghĩa là máy không có đường mạng nào — request
+chưa từng rời khỏi máy. Điều kiện này **cố ý chặt**: mạng chập chờn (onLine =
+true nhưng không tới được server) sẽ KHÔNG đi đường offline mà rơi vào cơ chế
+retry theo `operation_id` sẵn có, thứ vốn được viết ra đúng cho tình huống đó.
+Thà bỏ lỡ vài ca đáng lẽ lưu offline được, còn hơn ghi trùng một đơn tiền.
+
+Ba điều kiện đi cùng nhau, thiếu một là hỏng: `dangOffline()` + phương thức là
+`cash` + khách đã đưa đủ tiền. Chuyển khoản cần QR và webhook ngân hàng; ghi nợ
+cần kiểm hạn mức trên server — cả hai bị chặn ngay ở `checkout()`.
+
+**Phiếu server từ chối (4xx) thì GIỮ, không xóa.** Xóa là mất trắng dấu vết một
+lần bán có thật. Đánh dấu `loi` rồi thôi thử lại, để nó không chặn hàng chờ mà
+vẫn còn bằng chứng. Phiếu đã đánh dấu không tính vào con số trên huy hiệu —
+đếm lẫn vào thì con số không bao giờ về 0 và thu ngân học cách phớt lờ nó.
+
+**Lỗi mạng giữa chừng thì dừng hẳn vòng lặp**, giữ nguyên phần còn lại theo
+đúng thứ tự đã bán (`luc_luu` tăng dần).
+
+**Phải chụp lại danh mục sản phẩm.** Mất mạng thì `GET /api/products` hỏng;
+không có bản chụp trong IndexedDB thì màn POS trống trơn và hàng chờ có cũng vô
+nghĩa. Bản chụp được cập nhật sau mỗi lần tải danh mục thành công.
+
+Kiểm bằng cách nào: tắt hẳn server, ghi đè `navigator.onLine` về `false` trong
+console, bán một đơn tiền mặt, rồi bật server và bắn sự kiện `online`. Không có
+đường tắt — `fetch()` thành công không chứng minh được gì ở đây.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).
