@@ -24,6 +24,7 @@ from .routers import (
     admin,
     auth,
     categories,
+    cron,
     customers,
     orders,
     pages,
@@ -150,6 +151,7 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
     application.include_router(reports.router)
     application.include_router(admin.router)
     application.include_router(tts.router)
+    application.include_router(cron.router)
     application.include_router(pages.router)
 
     # Phục vụ ảnh upload từ UPLOAD_DIR (volume) — phải mount trước mount "/"

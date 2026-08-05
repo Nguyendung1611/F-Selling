@@ -119,6 +119,25 @@ OTP_RESEND_COOLDOWN_SECONDS: int = _int_env("OTP_RESEND_COOLDOWN_SECONDS", 60)
 # liên quan gì tới email. Con số này là trần thiệt hại.
 SMTP_TIMEOUT_SECONDS: int = _int_env("SMTP_TIMEOUT_SECONDS", 10)
 
+# --- Sao lưu lên Cloudflare R2 ---
+# Toàn bộ dữ liệu nằm trong MỘT file SQLite trên MỘT volume. Thiếu bất kỳ giá
+# trị nào trong bốn cái đầu thì tính năng TẮT hẳn và endpoint trả 503 - không
+# có chế độ "sao lưu một nửa". Xem `services/backup_service.py`.
+R2_ACCOUNT_ID: str = os.getenv("R2_ACCOUNT_ID") or ""
+R2_ACCESS_KEY_ID: str = os.getenv("R2_ACCESS_KEY_ID") or ""
+R2_SECRET_ACCESS_KEY: str = os.getenv("R2_SECRET_ACCESS_KEY") or ""
+R2_BUCKET: str = os.getenv("R2_BUCKET") or ""
+R2_PREFIX: str = os.getenv("R2_PREFIX") or "backup"
+
+# Secret riêng cho POST /api/cron/backup. KHÔNG dùng chung với
+# PAYMENT_WEBHOOK_SECRET: hai cái này do hai bên ngoài khác nhau giữ (ngân hàng
+# và dịch vụ cron), lộ một cái không được kéo theo cái kia.
+BACKUP_CRON_SECRET: str = os.getenv("BACKUP_CRON_SECRET") or ""
+
+# Trần thiệt hại khi R2 treo, cùng lý do với SMTP_TIMEOUT_SECONDS ở trên: một
+# request giữ luồng threadpool vô hạn là cả app đứng, kể cả POS đang bán hàng.
+BACKUP_TIMEOUT_SECONDS: int = _int_env("BACKUP_TIMEOUT_SECONDS", 60)
+
 # --- Upload ---
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp"}
 ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}

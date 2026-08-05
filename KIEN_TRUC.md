@@ -916,6 +916,46 @@ và tiền thừa.
 
 `MANUAL_PAY_FROM` thì ngược lại: nó ĐƯỢC dùng thật ở `pay_order`. Đừng dọn nhầm.
 
+### 26. Sao lưu: bốn chỗ dễ làm hỏng mà không ai nhận ra
+
+`backup_service.py` nhìn thì đơn giản — chụp, nén, PUT — nhưng mỗi bước đều có
+một cách làm "hiển nhiên" mà sai, và cái sai chỉ lộ ra đúng lúc cần phục hồi.
+
+**Không copy file `.db` bằng `shutil`.** Cách hiển nhiên nhất và sai nhất. SQLite
+đang được ghi thì bản copy có thể rơi vào giữa một transaction: file vẫn có đủ
+kích thước, vẫn tải lên được, vẫn thấy trong bucket — và mở ra thì hỏng. Dùng
+`Connection.backup` của chính SQLite: nó chụp một bản NHẤT QUÁN trong khi app
+vẫn bán hàng. `test_ban_sao_bo_qua_transaction_chua_commit` canh đúng chuyện
+này bằng cách mở một transaction chưa commit rồi chụp.
+
+**`sqlite3.connect` TẠO file rỗng nếu đường dẫn không tồn tại.** Nên phải tự
+kiểm `os.path.exists` trước. Thiếu bước đó thì sai `DB_PATH` sẽ cho ra một bản
+sao rỗng, hợp lệ về mặt SQLite, tải lên thành công, và bạn yên tâm suốt nhiều
+tháng cho tới ngày cần dùng.
+
+**HTTP 200 không có nghĩa là "nhận đủ".** Nó chỉ nói "máy chủ nhận rồi". Với PUT
+thường, R2 trả ETag = MD5 nội dung, nên đối chiếu được — `_kiem_etag` bắt trường
+hợp truyền lên bị cụt. Dùng MD5 ở đây KHÔNG phải vì bảo mật, mà vì đó là thuật
+toán S3/R2 dùng cho ETag; muốn so thì phải tính đúng thứ đó. ETag không đúng
+khuôn 32 hex (bucket bật mã hóa, hoặc multipart) thì **bỏ qua chứ đừng báo lỗi**
+— chặn một bản sao hợp lệ còn tệ hơn không kiểm.
+
+**Endpoint sao lưu phải trả mã LỖI khi hỏng — ngược hẳn webhook ngân hàng.**
+Webhook trả 200 cho cả giao dịch bị từ chối vì 4xx/5xx làm ngân hàng retry vô
+hạn. `/api/cron/backup` thì ngược lại: người gọi là dịch vụ cron của chính mình,
+nó retry là chuyện tốt, và **mã lỗi là cách duy nhất bạn biết bản sao hỏng**.
+Nuốt lỗi rồi trả 200 là biến trang theo dõi cron thành đèn xanh giả — tức là
+biến hệ thống giám sát thành thứ nguy hiểm hơn không có gì.
+
+**Không viết code xóa bản cũ.** Hạn lưu đặt bằng lifecycle rule trên bucket R2.
+Code xóa dữ liệu là loại code đắt nhất khi viết sai, mà ở đây lợi ích của nó
+đúng bằng một ô cấu hình bấm một lần.
+
+Và một điều bộ test **không** chứng minh được: nó dùng `urlopen` giả, nên nó
+xác nhận ta chụp đúng, nén đúng, ký đúng khuôn — chứ không xác nhận R2 chấp
+nhận chữ ký đó. Chỉ `scripts/backup_thu.py` chạy thật mới trả lời được, và phải
+chạy ngay lúc cắm khóa chứ không phải lúc cần phục hồi.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

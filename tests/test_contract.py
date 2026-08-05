@@ -103,6 +103,10 @@ ROUTES_BO_SUNG = {
     ("POST", "/api/products/{shop_id}/write-off"),
     ("GET", "/api/products/{shop_id}/write-off/expired"),
     ("GET", "/api/products/{shop_id}/write-offs"),
+    # G1: sao lưu DB lên R2. Do dịch vụ cron NGOÀI gọi (máy Fly tự tắt khi rảnh
+    # nên APScheduler trong tiến trình không chạy được job ban đêm). Xác thực
+    # bằng BACKUP_CRON_SECRET, không qua JWT vì người gọi không phải người dùng.
+    ("POST", "/api/cron/backup"),
 }
 
 
