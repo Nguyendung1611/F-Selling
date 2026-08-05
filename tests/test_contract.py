@@ -107,6 +107,11 @@ ROUTES_BO_SUNG = {
     # nên APScheduler trong tiến trình không chạy được job ban đêm). Xác thực
     # bằng BACKUP_CRON_SECRET, không qua JWT vì người gọi không phải người dùng.
     ("POST", "/api/cron/backup"),
+    # G2: nhận phiếu đã bán khi mất mạng. KHÁC HẲN POST /api/orders/{shop_id}:
+    # ở đó giao dịch đang xảy ra nên giá tính lại từ DB và hết hàng thì từ chối;
+    # ở đây giao dịch đã xảy ra rồi nên giá lấy từ phiếu và hết hàng vẫn ghi.
+    ("POST", "/api/orders/{shop_id}/offline"),
+    ("GET", "/api/orders/{shop_id}/offline-issues"),
 }
 
 

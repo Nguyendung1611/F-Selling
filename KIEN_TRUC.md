@@ -1004,6 +1004,56 @@ mỗi máy sẽ tự gỡ ở lần kiểm tra cập nhật kế tiếp.
 `sw.js`. Đó là dây bảo hiểm chứ không phải bằng chứng: nó bắt được việc ai đó
 **xóa mất** luật, không chứng minh được luật chạy đúng.
 
+### 28. Bán offline là nghiệp vụ NGƯỢC CHIỀU với `create_order`
+
+`offline_service.dong_bo_phieu` trông giống `create_order` nhưng gần như mọi
+quyết định đều ngược lại, và mỗi chỗ ngược đều có một cách mất tiền đứng sau:
+
+| | `create_order` | `dong_bo_phieu` |
+|---|---|---|
+| Giao dịch | đang xảy ra, trên server | **đã xảy ra rồi**, ở máy bán |
+| Giá | tính lại từ DB, bỏ giá client | **lấy giá trên phiếu** |
+| Hết hàng | từ chối đơn | vẫn ghi, cho tồn âm, gắn cờ |
+| Ca thu ngân | ca đang mở lúc gọi hàm | **ca đang mở lúc BÁN** |
+| `created_at` | lúc gọi hàm | **lúc bán** |
+| Thanh toán | chuyển khoản / mặt / nợ | **chỉ tiền mặt** |
+
+**Giá phải lấy từ phiếu.** Đây là ngoại lệ DUY NHẤT của luật "luôn tính lại giá
+từ database". Bán 9h giá 100k, chủ shop đổi 120k lúc 11h, sync 14h: tính lại
+theo giá hôm nay là ghi 120k trong khi khách đã đưa 100k. Két lệch 20k và không
+ai tra ra vì sao. Luật gốc chống client khai man giá; ở đây phiếu là **bằng
+chứng về một khoản tiền đã nằm trong két**, không phải một đề nghị.
+
+**Hết hàng vẫn phải ghi.** Hàng đã ra khỏi cửa thật. Từ chối đơn thì mất luôn
+dấu vết giao dịch và tiền trong két thừa so với sổ — đổi một lỗi lấy một lỗi
+tệ hơn. Cho `Product.stock` âm rồi gắn cờ `TON_AM`. Với hàng theo lô, điều này
+tạm phá bất biến "stock = tổng mọi lô" (bẫy 21) một cách **có chủ ý**: chính
+khoảng lệch đó là bằng chứng có hàng ra khỏi kho mà không lô nào chịu, và kiểm
+kê theo lô (bẫy 24) dựng lại `stock` từ tổng các lô — đúng cách chữa.
+
+**Ca theo giờ bán, kể cả ca đã đóng.** Bán 14h ca sáng, sync 18h. Gắn vào ca
+chiều là ca sáng đã cân quỹ xong mà doanh thu lại rơi sang ca sau. Gắn vào ca
+lúc bán dù nó đã `CLOSED`, kèm cờ `CA_DA_CHOT` để chủ shop biết con số chốt ca
+cũ không còn khớp.
+
+**Chỉ tiền mặt.** Voucher cần đếm lượt dùng trên server, ghi nợ cần kiểm hạn
+mức trên server. Offline không kiểm được, và đoán bừa thì hậu quả là tiền:
+voucher giới hạn 10 lượt bị dùng 30 lần, khách vượt trần nợ mà không ai chặn.
+
+**Cột riêng, KHÔNG dùng lại `reconciliation_reason`.** Cột đó mang nghĩa đối
+soát ngân hàng và đang lái màn Đối Soát lẫn `_don_co_tien_ve_chua_ghi_nhan`.
+Nhồi giá trị mới vào một khái niệm tiền đang chạy tốt là đúng cái sai của bẫy 25.
+
+**`ux_orders_offline_uuid` nằm trong `financial_indexes`** — thiếu nó thì app
+KHÔNG khởi động. Máy bán gửi lại phiếu là chuyện bình thường (mất sóng giữa
+chừng, người dùng bấm đồng bộ lại); không có index đó thì mỗi lần gửi lại là
+một đơn mới, doanh thu và tồn kho cùng nhân đôi. `order_payments.idempotency_key`
+= `offline:<uuid>` là lớp chặn thứ hai cho hai request song song.
+
+**Chưa làm:** phần máy bán (hàng chờ trong IndexedDB, khóa về tiền mặt khi mất
+mạng, tự đồng bộ khi có mạng lại). Backend đã sẵn sàng và đứng một mình được —
+gọi thẳng `POST /api/orders/{shop_id}/offline` là ghi được phiếu.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

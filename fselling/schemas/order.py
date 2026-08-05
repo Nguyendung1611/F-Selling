@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -28,6 +29,42 @@ class OrderCreate(BaseModel):
     operation_id: Optional[str] = Field(default=None, min_length=8, max_length=128)
     # Gắn khách vào đơn (tùy chọn). Bỏ trống = khách vãng lai.
     customer_id: Optional[int] = None
+
+
+class OfflineOrderItem(BaseModel):
+    """Một dòng hàng trên phiếu đã bán khi mất mạng.
+
+    `unit_price` ở đây KHÁC HẲN `price` của `OrderItemCreate`: chỗ kia bị bỏ đi
+    và server tính lại từ database, còn chỗ này là **giá khách đã thật sự trả**
+    và server phải tôn trọng. Tính lại theo giá hôm nay là ghi sai số tiền đã
+    nằm trong két — xem bẫy 28 trong KIEN_TRUC.md.
+
+    `product_name` là bản chụp tên lúc bán, dùng khi sản phẩm đã bị xóa giữa
+    lúc bán và lúc đồng bộ: mất tên thì dòng tiền đó không còn tra được về đâu.
+    """
+
+    product_id: int
+    product_name: str = Field(min_length=1, max_length=300)
+    unit_price: float = Field(ge=0)
+    quantity: int = Field(gt=0)
+
+
+class OfflineOrderCreate(BaseModel):
+    """Phiếu bán offline gửi lên khi máy có mạng trở lại.
+
+    CỐ Ý không có `voucher_code`, `customer_id` hay `payment_method`: khi mất
+    mạng chỉ bán được TIỀN MẶT. Voucher cần đếm lượt dùng trên server, ghi nợ
+    cần kiểm hạn mức trên server — cả hai không kiểm được lúc offline, và đoán
+    bừa thì hậu quả là tiền.
+    """
+
+    offline_uuid: str = Field(min_length=8, max_length=64)
+    # Giờ bán theo UTC. Server dùng nó để chọn ca thu ngân, KHÔNG dùng giờ sync.
+    sold_at: datetime
+    items: List[OfflineOrderItem] = Field(min_length=1)
+    # Tiền khách đưa. Nhỏ hơn tổng đơn là phiếu sai, server từ chối.
+    cash_tendered: float = Field(ge=0)
+    device_label: Optional[str] = Field(default=None, max_length=64)
 
 
 class PaymentWebhook(BaseModel):

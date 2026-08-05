@@ -2,16 +2,17 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..dependencies import get_current_user, get_db
+from ..dependencies import get_current_user, get_db, require_shop_access
 from ..schemas.order import (
     CashPayment,
     CashTopup,
     DebtPayment,
+    OfflineOrderCreate,
     OrderCreate,
     OrderReturnCreate,
     RefundComplete,
 )
-from ..services import order_service, return_service
+from ..services import offline_service, order_service, return_service
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
@@ -24,6 +25,32 @@ def create_order(
     current_user: models.User = Depends(get_current_user),
 ):
     return order_service.create_order(db, current_user, shop_id, order)
+
+
+@router.post("/{shop_id}/offline")
+def dong_bo_don_offline(
+    shop_id: int,
+    phieu: OfflineOrderCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Nhận một phiếu đã bán khi mất mạng.
+
+    Gọi lại cùng `offline_uuid` trả về đúng đơn cũ với `created: false` — máy
+    bán mất sóng giữa lúc gửi cứ gửi lại thoải mái, không sinh đơn thứ hai.
+    """
+    return offline_service.dong_bo_phieu(db, current_user, shop_id, phieu)
+
+
+@router.get("/{shop_id}/offline-issues")
+def don_offline_can_xu_ly(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Đơn offline có vướng mắc (tồn âm, ca đã chốt, sản phẩm đã xóa...)."""
+    require_shop_access(db, shop_id, current_user)
+    return offline_service.danh_sach_can_xu_ly(db, shop_id)
 
 
 @router.get("/{order_id}")

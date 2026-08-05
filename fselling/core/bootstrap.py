@@ -216,6 +216,23 @@ _MIGRATIONS = [
     # hàng, không dựa vào máy trạng thái (phiếu hủy không có trạng thái nào).
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_stock_write_offs_idempotency_key "
     "ON stock_write_offs(idempotency_key)",
+    # G2: bán khi mất mạng. Đơn offline KHÁC HẲN đơn thường ở chỗ giao dịch đã
+    # xảy ra rồi, ở một mức giá đã biết - server chỉ đang được báo lại. Bốn cột
+    # dưới đây giữ đúng những gì `create_order` vốn tự quyết:
+    #   offline_uuid    - máy bán sinh, chống ghi hai lần khi sync lặp
+    #   sold_offline_at - GIỜ BÁN, không phải giờ sync (ca thu ngân dựa vào đây)
+    #   offline_issue   - vướng gì lúc ghi, để nổi lên màn Đối Soát
+    #   offline_device  - máy nào bán, chủ shop cần biết để đi hỏi
+    "ALTER TABLE orders ADD COLUMN offline_uuid VARCHAR(64)",
+    "ALTER TABLE orders ADD COLUMN sold_offline_at DATETIME",
+    "ALTER TABLE orders ADD COLUMN offline_issue VARCHAR(120)",
+    "ALTER TABLE orders ADD COLUMN offline_device VARCHAR(64)",
+    # Index này bảo vệ SỔ TIỀN: thiếu nó thì hai lần sync cùng một phiếu đẻ ra
+    # hai đơn, doanh thu và tồn kho đều nhân đôi. Vì vậy nó nằm trong cả
+    # _REQUIRED_INDEXES lẫn financial_indexes - thiếu là app KHÔNG khởi động.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_offline_uuid "
+    "ON orders(offline_uuid)",
+    "CREATE INDEX IF NOT EXISTS ix_orders_offline_issue ON orders(offline_issue)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
@@ -233,6 +250,7 @@ _REQUIRED_INDEXES = [
     "ux_cash_movements_operation_id",
     "ux_order_returns_idempotency_key",
     "ux_stock_write_offs_idempotency_key",
+    "ux_orders_offline_uuid",
 ]
 
 _INDEX_EXISTS = (
@@ -482,6 +500,10 @@ def initialize() -> None:
             "ux_orders_operation_id",
             "ux_cash_shifts_shop_user_open",
             "ux_cash_movements_operation_id",
+            # Máy bán offline gửi lại phiếu là chuyện BÌNH THƯỜNG (mất sóng giữa
+            # chừng, người dùng bấm đồng bộ lại). Không có index này thì mỗi lần
+            # gửi lại là một đơn mới: doanh thu và tồn kho cùng nhân đôi.
+            "ux_orders_offline_uuid",
         }
         missing_financial_indexes = financial_indexes.intersection(missing_indexes)
         if missing_financial_indexes:

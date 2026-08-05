@@ -52,6 +52,18 @@ class Order(Base):
     # UNDERPAID | OVERPAID | LATE_PAYMENT | LEGACY_REVIEW | NULL (không vướng).
     reconciliation_reason = Column(String(32), nullable=True, index=True)
 
+    # --- G2: đơn bán khi mất mạng ---
+    # CỐ Ý không dùng lại `reconciliation_reason` ở trên: cột đó mang nghĩa đối
+    # soát NGÂN HÀNG và đang lái màn Đối Soát lẫn `_don_co_tien_ve_chua_ghi_nhan`.
+    # Nhồi giá trị mới vào một khái niệm tiền đang chạy tốt là đúng cái sai mà
+    # bẫy 25 trong KIEN_TRUC.md đã trả giá.
+    offline_uuid = Column(String(64), nullable=True, unique=True, index=True)
+    # Giờ BÁN, không phải giờ sync. Ca thu ngân được chọn theo cột này.
+    sold_offline_at = Column(DateTime, nullable=True)
+    # Danh sách vướng mắc nối bằng dấu phẩy (TON_AM, CA_KHONG_KHOP, ...).
+    offline_issue = Column(String(120), nullable=True, index=True)
+    offline_device = Column(String(64), nullable=True)
+
     shop = relationship("Shop", back_populates="orders")
     items = relationship("OrderItem", back_populates="order")
     customer = relationship("Customer")
