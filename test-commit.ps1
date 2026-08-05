@@ -36,12 +36,17 @@ if (-not $TestOnly -and [string]::IsNullOrWhiteSpace($Message)) {
 # nguoi dung nhin thay 'seller.page_title' thay vi chu tieng Viet.
 # tests/test_i18n.py chi kiem 4 file locale; buoc nay kiem het moi file JS.
 # Chay TRUOC pytest vi no mat chua toi mot giay.
+#
+# Quet ca thu muc `static`, KHONG chi `static\js`: `static\sw.js` (service
+# worker) nam o goc vi trinh duyet bat buoc no phai o day moi quan duoc toan
+# app. Do la file JS de gay hong nhat trong du an - no dung giua moi request -
+# ma lai la file duy nhat truoc day khong ai kiem.
 $node = Get-Command node -ErrorAction SilentlyContinue
 if ($node) {
     Write-Host ""
     Write-Host "==> Kiem cu phap JS..." -ForegroundColor Cyan
     $jsLoi = @()
-    Get-ChildItem -Path static\js -Recurse -Filter *.js | ForEach-Object {
+    Get-ChildItem -Path static -Recurse -Filter *.js | ForEach-Object {
         & node --check $_.FullName 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) { $jsLoi += $_.FullName }
     }

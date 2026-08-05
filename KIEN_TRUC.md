@@ -956,6 +956,54 @@ xác nhận ta chụp đúng, nén đúng, ký đúng khuôn — chứ không x�
 nhận chữ ký đó. Chỉ `scripts/backup_thu.py` chạy thật mới trả lời được, và phải
 chạy ngay lúc cắm khóa chứ không phải lúc cần phục hồi.
 
+### 27. Service Worker: bốn luật, và một bẫy chỉ lộ ra khi điều hướng thật
+
+`static/sw.js` biến app thành PWA cài được. Nó cũng là đoạn code có khả năng
+gây hỏng âm thầm cao nhất trong dự án: nó đứng giữa **mọi** request, và cái nó
+làm sai không báo lỗi — chỉ đưa ra dữ liệu cũ.
+
+**Luật 1: không bao giờ cache `/api`.** Giá, tồn kho, công nợ phải lấy từ mạng.
+Trả một con số cũ từ cache là nói dối đúng chỗ nguy hiểm nhất: thu ngân nhìn
+thấy "còn 5 cái" trong khi kho đã hết. Offline thì để `/api` **hỏng** — frontend
+đã có sẵn đường báo lỗi, và một lỗi nhìn thấy được luôn tốt hơn một con số sai.
+
+**Luật 2: chỉ đụng tới GET.** POST tạo đơn, PUT sửa hàng đi thẳng ra mạng.
+
+**Luật 3: trang HTML phải network-first.** Đây là luật dễ phá nhất và hậu quả
+thì rộng: file HTML chứa các dấu `?v=` trỏ tới CSS/JS. Cache HTML trước thì bump
+`?v=` **không bao giờ có tác dụng nữa**, và bẫy "cache JS rất dai" trong
+`CLAUDE.md` trở thành không sửa được — người dùng kẹt ở bản cũ vĩnh viễn mà
+không có cách nào đẩy bản mới xuống.
+
+**Luật 4: chỉ cache-first với file CÓ `?v=`.** Đổi nội dung → đổi `?v=` → đổi
+URL → cache tự miễn. Không có `?v=` thì network-first cho an toàn.
+
+**Bẫy đã đo được thật:** `auth.js` chuyển hướng về `/?auth=<timestamp>`, và
+timestamp **đổi mỗi lần**. Cache giữ `/?auth=1785949778146`, lần sau trình duyệt
+hỏi `/?auth=1785949873816` — khác URL nên `caches.match` trượt, và người dùng
+offline nhận trang lỗi của trình duyệt thay vì app. Nên khi **điều hướng** mà
+trượt thì phải lùi thêm hai bước: bỏ qua `?query`, rồi lùi hẳn về `/`.
+
+Hai điều đi kèm, đừng gộp lẫn:
+
+- Bước lùi `ignoreSearch` **chỉ dành cho điều hướng**. Áp nó cho file lẻ là
+  phục vụ đúng bản cũ mà luật 4 vừa mất công chặn — tự tay dựng lại cái bẫy
+  mình vừa đi vòng qua.
+- **`fetch()` không bắt được lỗi này.** `fetch('/pos')` lấy từ cache ngon lành
+  trong khi điều hướng thật tới cùng đường dẫn thì vỡ, vì chỉ điều hướng mới đi
+  vào nhánh `mode === 'navigate'`. Muốn tin thì phải tắt hẳn server rồi bấm
+  chuyển trang thật, không có đường tắt.
+
+**Khi cần tắt khẩn cấp:** Chrome → F12 → Application → Service Workers →
+Unregister. Hoặc từ console: `FSellingPWA.goCaiDat()`. Muốn gỡ cho **mọi máy**
+thì đẩy lên một bản `sw.js` chỉ có đúng dòng
+`self.addEventListener('install', () => self.registration.unregister());` —
+mỗi máy sẽ tự gỡ ở lần kiểm tra cập nhật kế tiếp.
+
+`tests/test_pwa.py` canh cả bốn luật lẫn cái bẫy trên bằng cách đọc mã nguồn
+`sw.js`. Đó là dây bảo hiểm chứ không phải bằng chứng: nó bắt được việc ai đó
+**xóa mất** luật, không chứng minh được luật chạy đúng.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

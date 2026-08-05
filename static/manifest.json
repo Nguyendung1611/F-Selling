@@ -1,0 +1,40 @@
+{
+  "name": "F-Selling — Quản lý bán hàng",
+  "short_name": "F-Selling",
+  "description": "Bán hàng, kho, công nợ và ca thu ngân cho cửa hàng nhỏ.",
+  "lang": "vi",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#0F172A",
+  "background_color": "#F8FAFC",
+  "categories": ["business", "shopping", "finance"],
+  "icons": [
+    {
+      "src": "/img/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/img/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Bán hàng (POS)",
+      "short_name": "POS",
+      "url": "/pos",
+      "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Kho hàng & Thống kê",
+      "short_name": "Quản lý",
+      "url": "/seller",
+      "icons": [{ "src": "/img/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

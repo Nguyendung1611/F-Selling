@@ -35,6 +35,58 @@ Lần đầu cần authtoken ngrok (miễn phí, không cần thẻ):
 Sau đó chạy lại `run_ngrok.bat`, cửa sổ ngrok sẽ hiện **LINK CÔNG KHAI** dạng
 `https://xxxx.ngrok-free.app` — gửi link này cho người khác để truy cập.
 
+## 3b. Cài F-Selling lên điện thoại như một app
+
+App cài được lên màn hình chính, mở ra **toàn màn hình** (không còn thanh địa
+chỉ trình duyệt), và **mở lại được khi mất mạng**.
+
+### Điện thoại Android (Chrome)
+
+1. Mở link `https://...` của bạn (link ngrok ở mục 3, hoặc link server nếu đã deploy).
+2. Đợi vài giây, một khung nhỏ **"Cài F-Selling lên máy"** hiện ở góc dưới trái → bấm **Cài**.
+3. Không thấy khung đó thì bấm dấu **⋮** góc trên phải → **Thêm vào Màn hình chính**.
+
+### iPhone / iPad (Safari)
+
+Safari không hiện nút tự động, phải làm tay:
+
+1. Mở link bằng **Safari** (Chrome trên iPhone không cài được).
+2. Bấm nút **Chia sẻ** (hình vuông có mũi tên đi lên, ở thanh dưới).
+3. Kéo xuống chọn **Thêm vào MH chính** → **Thêm**.
+
+### Máy tính (Chrome / Edge)
+
+Bấm biểu tượng **cài đặt** hình màn hình có mũi tên, nằm ở cuối thanh địa chỉ.
+
+---
+
+⚠️ **Bắt buộc phải là link `https://`.** Mở bằng `http://192.168.x.x` (địa chỉ
+mạng nội bộ) thì trình duyệt **không cho cài** — đây là quy định bảo mật của
+trình duyệt, không phải lỗi app. Dùng link ngrok ở mục 3 là có `https` sẵn.
+
+*(Riêng `http://127.0.0.1:8000` ngay trên máy chạy server thì vẫn cài được.)*
+
+### Mất mạng thì dùng được tới đâu?
+
+| Việc | Khi mất mạng |
+|---|---|
+| Mở app, xem giao diện | ✅ được |
+| Xem sản phẩm, tạo đơn, thu tiền | ❌ **không** — báo lỗi mạng |
+
+Đây là **cố ý**. Giá và tồn kho luôn phải lấy từ máy chủ: thà báo lỗi rõ ràng
+còn hơn cho thu ngân nhìn thấy "còn 5 cái" trong khi kho đã hết. Bán hàng khi
+offline là tính năng riêng, chưa làm.
+
+### Nếu app hiện bản cũ sau khi cập nhật
+
+Mở app → F12 (trên máy tính) → gõ vào Console:
+
+```
+FSellingPWA.xoaCache()
+```
+
+Rồi tải lại trang bằng `Ctrl + Shift + R`.
+
 ## 4. Đăng nhập Admin
 
 - Tên đăng nhập: `admin`
