@@ -7,8 +7,10 @@ lần đã trả giá.
 
 1. **Đọc `KIEN_TRUC.md` mục "Bẫy cần biết khi viết service mới"** trước khi
    động vào `fselling/services/`. Có 25 bẫy, phần lớn không nhìn ra được từ code.
-2. **Commit bằng `.\test-commit.ps1 "mô tả"`**, không commit tay. Script chạy
-   toàn bộ 727 test rồi mới cho commit, và chặn `.env` / `*.db` lọt lên Git.
+2. **Commit bằng `.\test-commit.ps1 "mô tả"`**, không commit tay. Script kiểm cú
+   pháp mọi file `static/js`, chạy toàn bộ test rồi mới cho commit, và chặn
+   `.env` / `*.db` lọt lên Git. (Số bài test cố ý không ghi ở đây — script tự in
+   ra mỗi lần chạy. Xem bẫy 25 trong `KIEN_TRUC.md`.)
 3. **Sửa giao diện thì phải tự mắt nhìn.** Test không thấy được màu sắc, bố cục
    hay việc một cái nút bấm vào không ra gì. Xem `QUY_TRINH_LAM_VIEC.md`.
 
