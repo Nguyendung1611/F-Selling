@@ -424,6 +424,23 @@
                 </div>
             </div>
 
+            <!-- Đơn bán khi mất mạng có vướng mắc. Khối này ẩn HOÀN TOÀN khi
+                 không có đơn nào - cửa hàng chưa bao giờ mất mạng thì không
+                 phải nhìn thấy một ô trống không liên quan. -->
+            <div id="offlineIssueBox" style="display: none; margin-bottom: 1.1rem; border: 1px solid #B45309; border-radius: 12px; padding: 0.9rem 1rem; background: rgba(180, 83, 9, 0.08);">
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.55rem;">
+                    <strong style="color: #B45309;">
+                        <i class="ph ph-cloud-slash"></i>
+                        <span data-i18n="seller.offline.title">Đơn bán khi mất mạng cần kiểm lại</span>
+                    </strong>
+                    <small id="offlineIssueCount" style="color: var(--text-muted);"></small>
+                </div>
+                <p style="margin: 0 0 0.75rem; color: var(--text-muted); font-size: 0.86rem; line-height: 1.55;" data-i18n="seller.offline.description">
+                    Các đơn này ĐÃ được ghi nhận và tiền ĐÃ vào ca. Danh sách dưới đây chỉ nêu chỗ cần bạn kiểm lại.
+                </p>
+                <div id="offlineIssueList"></div>
+            </div>
+
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-bottom: 0.85rem; flex-wrap: wrap;">
                 <strong id="doiSoatCount">0 trường hợp đang chờ</strong>
                 <small style="color: var(--text-muted);" data-i18n="seller.reconciliation.audit_note">Mọi thao tác đều được lưu người thực hiện và thời gian.</small>
@@ -1158,14 +1175,14 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260803-lich-su-huy"></script>
+    <script src="/js/locales/seller.js?v=20260806-offline-ui2"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260803-bo-alert"></script>
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260803-lich-su-huy"></script>
+    <script src="/js/seller.js?v=20260806-offline-ui2"></script>
     <script src="/js/pwa.js?v=20260806-pwa"></script>
 </body>
 </html>

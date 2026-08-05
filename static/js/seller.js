@@ -713,6 +713,10 @@ async function loadDoiSoat() {
     const select = document.getElementById('doiSoatShopSelect');
     if (select) select.value = String(shopId);
 
+    // Khối phụ: tải song song, KHÔNG await. Đơn offline hỏng thì danh sách đối
+    // soát ngân hàng bên dưới vẫn phải hiện bình thường.
+    loadDonOffline(shopId);
+
     const requestId = ++doiSoatRequestId;
     const badgeRequestId = ++doiSoatBadgeRequestId;
     loading.style.display = 'block';
@@ -746,6 +750,90 @@ async function loadDoiSoat() {
             loading.style.display = 'none';
             if (reloadButton) reloadButton.disabled = false;
         }
+    }
+}
+
+// ---------- Đơn bán khi mất mạng có vướng mắc ----------
+// Thứ tự này là thứ tự CẦN LÀM GÌ, không phải bảng chữ cái: tồn âm là thứ duy
+// nhất bắt người ta phải đi đếm lại hàng, còn giá đổi thì chỉ cần biết.
+const OFFLINE_ISSUE_ORDER = [
+    'TON_AM',
+    'SP_KHONG_CON',
+    'KHONG_CO_CA',
+    'CA_DA_CHOT',
+    'GIA_DOI'
+];
+
+function taoTheDonOffline(don) {
+    const ma = Number(don.order_id);
+    // Giờ từ server là UTC KHÔNG có ký hiệu múi giờ. Phải qua dinhDangNgayGio(),
+    // gọi thẳng new Date() là lệch 7 tiếng và đơn buổi tối bị ghi lùi một ngày.
+    const luc = don.sold_at ? dinhDangNgayGio(don.sold_at) : '—';
+    const may = (don.device || '').trim();
+
+    const cac_van_de = (don.issues || [])
+        .slice()
+        .sort((a, b) => OFFLINE_ISSUE_ORDER.indexOf(a) - OFFLINE_ISSUE_ORDER.indexOf(b));
+
+    const dong_van_de = cac_van_de.map(ma_loi => {
+        // Cờ lạ (bản server mới hơn bản giao diện) vẫn phải hiện ra chứ không
+        // được nuốt: một cảnh báo không đọc được vẫn hơn không có cảnh báo nào.
+        const ten = t(`seller.offline.issue.${ma_loi}`);
+        const cach = t(`seller.offline.fix.${ma_loi}`);
+        const chua_dich = ten === `seller.offline.issue.${ma_loi}`;
+        return `
+            <li style="margin-bottom:0.5rem;">
+                <strong>${escapeHtml(chua_dich ? ma_loi : ten)}</strong>
+                ${chua_dich ? '' : `<div style="color:var(--text-muted); font-size:0.84rem; line-height:1.5;">${escapeHtml(cach)}</div>`}
+            </li>`;
+    }).join('');
+
+    return `
+        <div style="border:1px solid var(--border-color); border-radius:10px; padding:0.75rem 0.9rem; margin-bottom:0.6rem; background:var(--card-bg);">
+            <div style="display:flex; justify-content:space-between; gap:0.75rem; flex-wrap:wrap; margin-bottom:0.45rem;">
+                <strong>${escapeHtml(t('seller.offline.order', { id: ma }))}</strong>
+                <span style="font-weight:600;">${escapeHtml(dinhDangTienDoiSoat(don.total))}</span>
+            </div>
+            <div style="color:var(--text-muted); font-size:0.84rem; margin-bottom:0.55rem;">
+                ${escapeHtml(t('seller.offline.sold_at'))}: ${escapeHtml(luc)}
+                ${may ? ` &middot; ${escapeHtml(t('seller.offline.device'))}: ${escapeHtml(may)}` : ''}
+            </div>
+            <ul style="margin:0; padding-left:1.1rem;">${dong_van_de}</ul>
+        </div>`;
+}
+
+function renderDonOffline(danh_sach) {
+    const hop = document.getElementById('offlineIssueBox');
+    const list = document.getElementById('offlineIssueList');
+    const dem = document.getElementById('offlineIssueCount');
+    if (!hop || !list) return;
+
+    const hop_le = (danh_sach || []).filter(d => Number.isInteger(Number(d.order_id)));
+    if (!hop_le.length) {
+        hop.style.display = 'none';
+        list.innerHTML = '';
+        return;
+    }
+    list.innerHTML = hop_le.map(taoTheDonOffline).join('');
+    if (dem) dem.innerText = t('seller.offline.count', { count: hop_le.length });
+    hop.style.display = 'block';
+}
+
+async function loadDonOffline(shopId) {
+    if (!shopId) return renderDonOffline([]);
+    try {
+        renderDonOffline(await apiCall(`/orders/${shopId}/offline-issues`));
+    } catch (e) {
+        // KHÔNG chen toast: đây là khối phụ, hỏng thì ẩn đi chứ không được kéo
+        // đổ danh sách đối soát ngân hàng đang hiện bên dưới.
+        //
+        // Nhưng dùng `console.warn` chứ KHÔNG phải `console.debug`: bản đầu ghi
+        // debug và nó đã nuốt trọn một lỗi thật (`dinhDangTien` không tồn tại
+        // trong phạm vi seller.js — hàm đó nằm ở pos.js). Khối chỉ lặng lẽ ẩn,
+        // nhìn y hệt "không có đơn nào cần kiểm". Nuốt lỗi để bảo vệ màn hình
+        // là đúng; nuốt luôn cả tiếng kêu là tự bịt mắt mình.
+        console.warn('Chưa tải được đơn offline cần kiểm:', e);
+        renderDonOffline([]);
     }
 }
 
