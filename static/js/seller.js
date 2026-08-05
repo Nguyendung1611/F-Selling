@@ -201,6 +201,7 @@ function switchTab(tabId, buttonEl = null) {
     const nutTab = buttonEl || document.querySelector(`.tab-btn[data-main-tab="${tabId}"]`);
     if (nutTab) nutTab.classList.add('active');
     if (tabId === 'reconciliation') loadDoiSoat();
+    if (tabId === 'nhatky') loadNhatKy();
     // Nạp lô mỗi lần MỞ tab chứ không nạp một lần lúc khởi động: hàng nhập vào
     // giữa buổi phải đếm được, và số lượng của lô là thứ thay đổi liên tục.
     if (tabId === 'kiemke') kkNapLo();
@@ -272,6 +273,17 @@ function renderShopSelectors() {
             `<option value="${s.id}">${escapeHtml(s.name)}</option>`
         ).join('');
         if (doiSoatShopId) doiSoatSelect.value = String(doiSoatShopId);
+    }
+
+    const nhatKySelect = document.getElementById('nhatKyShopSelect');
+    if (nhatKySelect) {
+        if (!nhatKyShopId || !allShops.some(s => s.id === nhatKyShopId)) {
+            nhatKyShopId = currentShopId || allShops[0]?.id || null;
+        }
+        nhatKySelect.innerHTML = allShops.map(s =>
+            `<option value="${s.id}">${escapeHtml(s.name)}</option>`
+        ).join('');
+        if (nhatKyShopId) nhatKySelect.value = String(nhatKyShopId);
     }
     
     allShops.forEach(s => {
@@ -751,6 +763,153 @@ async function loadDoiSoat() {
             if (reloadButton) reloadButton.disabled = false;
         }
     }
+}
+
+// ---------- Ai làm gì (nhật ký thao tác) ----------
+let nhatKyShopId = null;
+let trangNhatKy = 1;
+let nhatKyRequestId = 0;
+const NHAT_KY_MOI_TRANG = 25;
+
+// Nhóm theo MỨC ĐỘ CẦN ĐỂ Ý, không theo loại nghiệp vụ. Chủ shop mở màn này ra
+// là để tìm chuyện bất thường, nên tiền-ra và xóa-dữ-liệu phải bật lên trước mắt.
+//
+// Hành động không nằm trong nhóm nào vẫn hiện, chỉ là màu trung tính — danh
+// sách này để tô màu, KHÔNG phải để lọc.
+const NHOM_HANH_DONG = {
+    // Đỏ: tiền rời khỏi cửa hàng, hoặc dữ liệu bị xóa
+    '#DC2626': [
+        'CANCEL_ORDER', 'AUTO_CANCEL_ORDER', 'REFUND_COMPLETE', 'ORDER_RETURN',
+        'CASH_PAY_OUT', 'WRITE_OFF_STOCK',
+        'DELETE_PRODUCT', 'DELETE_VOUCHER', 'DELETE_CUSTOMER', 'DELETE_SHOP',
+        'DISABLE_STAFF'
+    ],
+    // Xanh lá: tiền vào
+    '#059669': [
+        'PAY_ORDER', 'CASH_TOPUP', 'DEBT_PAYMENT', 'OFFLINE_SALE',
+        'WEBHOOK_PAYMENT'
+    ],
+    // Hổ phách: đụng vào kho hoặc quyền
+    '#B45309': [
+        'ADJUST_STOCK', 'STOCKTAKE', 'UPDATE_PRODUCT', 'TOGGLE_PRODUCT_STATUS',
+        'CREATE_STAFF', 'UPDATE_STAFF_ROLE', 'RESET_STAFF_PASSWORD',
+        'UPDATE_VOUCHER', 'CREATE_VOUCHER', 'CHANGE_PASSWORD'
+    ]
+};
+
+function mauHanhDong(action) {
+    for (const mau of Object.keys(NHOM_HANH_DONG)) {
+        if (NHOM_HANH_DONG[mau].includes(action)) return mau;
+    }
+    return '#64748B';
+}
+
+function tenHanhDong(action) {
+    const khoa = `seller.activity.action.${action}`;
+    const ten = t(khoa);
+    // Chưa dịch thì hiện mã trần chứ KHÔNG ẩn: server mới hơn giao diện là
+    // chuyện thường, và giấu một dòng nhật ký còn tệ hơn hiện nó khó đọc.
+    return ten === khoa ? action : ten;
+}
+
+function taoDongNhatKy(muc) {
+    const mau = mauHanhDong(muc.action);
+    const luc = muc.created_at ? dinhDangNgayGio(muc.created_at) : '—';
+    return `
+        <div style="display:flex; gap:0.75rem; padding:0.7rem 0.2rem; border-bottom:1px solid var(--border-color);">
+            <div style="width:4px; border-radius:2px; background:${mau}; flex-shrink:0;"></div>
+            <div style="flex:1; min-width:0;">
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:baseline;">
+                    <span style="font-weight:600; color:${mau};">${escapeHtml(tenHanhDong(muc.action))}</span>
+                    <span style="color:var(--text-muted); font-size:0.82rem;">${escapeHtml(muc.username || '—')}</span>
+                    <span style="color:var(--text-muted); font-size:0.82rem; margin-left:auto;">${escapeHtml(luc)}</span>
+                </div>
+                <div style="color:var(--text-main); font-size:0.88rem; margin-top:0.2rem; word-break:break-word;">
+                    ${escapeHtml(muc.details || '')}
+                </div>
+            </div>
+        </div>`;
+}
+
+function renderNhatKy(kq) {
+    const list = document.getElementById('nhatKyList');
+    const empty = document.getElementById('nhatKyEmpty');
+    const phanTrang = document.getElementById('nhatKyPagination');
+    if (!list) return;
+
+    const dong = kq.logs || [];
+    list.innerHTML = dong.map(taoDongNhatKy).join('');
+    if (empty) empty.style.display = dong.length ? 'none' : 'block';
+
+    if (phanTrang) {
+        const nhieuTrang = (kq.total_pages || 0) > 1;
+        phanTrang.style.display = nhieuTrang ? 'flex' : 'none';
+        const tt = document.getElementById('nhatKyThongTinTrang');
+        if (tt) tt.innerText = t('seller.activity.page_info', {
+            page: kq.page, total_pages: kq.total_pages, total: kq.total
+        });
+        const truoc = document.getElementById('nhatKyTrangTruoc');
+        const sau = document.getElementById('nhatKyTrangSau');
+        if (truoc) truoc.disabled = (kq.page || 1) <= 1;
+        if (sau) sau.disabled = (kq.page || 1) >= (kq.total_pages || 1);
+    }
+}
+
+async function loadNhatKy() {
+    const shopId = nhatKyShopId || currentShopId || dashboardShopId;
+    const list = document.getElementById('nhatKyList');
+    const loading = document.getElementById('nhatKyLoading');
+    const empty = document.getElementById('nhatKyEmpty');
+    if (!list) return;
+
+    if (!shopId) {
+        list.innerHTML = '';
+        if (empty) empty.style.display = 'block';
+        return;
+    }
+    nhatKyShopId = shopId;
+    const select = document.getElementById('nhatKyShopSelect');
+    if (select) select.value = String(shopId);
+
+    const requestId = ++nhatKyRequestId;
+    if (loading) loading.style.display = 'block';
+    if (empty) empty.style.display = 'none';
+    try {
+        const params = new URLSearchParams({
+            page: String(trangNhatKy),
+            per_page: String(NHAT_KY_MOI_TRANG)
+        });
+        const kq = await apiCall(`/logs/shop/${shopId}?${params.toString()}`);
+        // Bỏ qua phản hồi của lần bấm cũ: đổi cửa hàng nhanh hai lần thì lần
+        // chậm hơn về sau sẽ ghi đè lên lần mới.
+        if (requestId !== nhatKyRequestId) return;
+        renderNhatKy(kq);
+    } catch (e) {
+        if (requestId !== nhatKyRequestId) return;
+        list.innerHTML = '';
+        if (empty) {
+            empty.style.display = 'block';
+            empty.innerHTML = `<i class="ph ph-warning-circle" style="display:block; margin-bottom:0.5rem; color:#DC2626; font-size:2.2rem;"></i>${escapeHtml(e.message)}`;
+        }
+        showToast(e.message);
+    } finally {
+        if (requestId === nhatKyRequestId && loading) loading.style.display = 'none';
+    }
+}
+
+function chonShopNhatKy(value) {
+    const id = Number.parseInt(value, 10);
+    if (!Number.isInteger(id) || !allShops.some(s => s.id === id)) return;
+    nhatKyShopId = id;
+    trangNhatKy = 1;
+    loadNhatKy();
+}
+
+function doiTrangNhatKy(buoc) {
+    const moi = trangNhatKy + buoc;
+    if (moi < 1) return;
+    trangNhatKy = moi;
+    loadNhatKy();
 }
 
 // ---------- Đơn bán khi mất mạng có vướng mắc ----------

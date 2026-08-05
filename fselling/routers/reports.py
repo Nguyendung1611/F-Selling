@@ -6,8 +6,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..dependencies import get_current_user, get_db
-from ..services import report_service
+from ..dependencies import get_current_user, get_db, require_shop_access
+from ..services import log_service, report_service
 
 router = APIRouter(tags=["reports"])
 
@@ -32,6 +32,23 @@ def get_seller_dashboard(
         tu_ngay=tu_ngay, den_ngay=den_ngay,
         reconciliation_only=reconciliation_only,
     )
+
+
+@router.get("/api/logs/shop/{shop_id}")
+def nhat_ky_shop(
+    shop_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(30, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Nhật ký thao tác của một cửa hàng — màn "Ai làm gì" của chủ shop.
+
+    Khác `/api/logs/admin` ở hai điểm: chỉ trả việc của người thuộc shop này, và
+    đã lọc bỏ những hành động không đụng tới tiền hay kho.
+    """
+    require_shop_access(db, shop_id, current_user)
+    return log_service.nhat_ky_cua_shop(db, shop_id, page=page, per_page=per_page)
 
 
 @router.get("/api/export/seller/{shop_id}")

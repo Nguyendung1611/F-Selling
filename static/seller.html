@@ -277,6 +277,7 @@
             <button class="tab-btn" data-main-tab="kiemke" onclick="switchTab('kiemke', this)"><i class="ph ph-clipboard-text"></i> <span data-i18n="seller.tabs.stocktake">Kiểm Kê</span></button>
             <button class="tab-btn" data-main-tab="voucher" onclick="switchTab('voucher', this)"><i class="ph ph-ticket"></i> <span data-i18n="seller.tabs.vouchers">Khuyến Mãi</span></button>
             <button class="tab-btn" data-main-tab="customers" onclick="switchTab('customers', this)"><i class="ph ph-users"></i> <span data-i18n="seller.tabs.customers">Khách Hàng</span></button>
+            <button class="tab-btn" data-main-tab="nhatky" onclick="switchTab('nhatky', this)"><i class="ph ph-clock-counter-clockwise"></i> <span data-i18n="seller.tabs.activity">Ai Làm Gì</span></button>
             <button class="tab-btn" data-main-tab="settings" onclick="switchTab('settings', this)"><i class="ph ph-sliders"></i> <span data-i18n="seller.tabs.settings">Cài Đặt</span></button>
         </div>
 
@@ -851,6 +852,44 @@
             </div>
         </div>
 
+        <!-- TAB: AI LÀM GÌ (nhật ký thao tác) -->
+        <div id="nhatky" class="tab-content glass-card">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem;">
+                <div>
+                    <h3 style="margin-bottom: 0.35rem;"><i class="ph ph-clock-counter-clockwise"></i> <span data-i18n="seller.activity.title">Ai làm gì</span></h3>
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.88rem; line-height: 1.55;" data-i18n="seller.activity.description">
+                        Việc bạn và nhân viên đã làm với tiền và kho hàng. Không hiện lượt đăng nhập.
+                    </p>
+                </div>
+                <div style="display: flex; gap: 0.6rem; align-items: flex-end;">
+                    <div>
+                        <label for="nhatKyShopSelect" style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.25rem;" data-i18n="seller.fields.shop">Cửa hàng</label>
+                        <select id="nhatKyShopSelect" onchange="chonShopNhatKy(this.value)"></select>
+                    </div>
+                    <button class="btn-outline" onclick="loadNhatKy()" style="min-height: 2.65rem;">
+                        <i class="ph ph-arrows-clockwise"></i> <span data-i18n="seller.actions.reload">Tải lại</span>
+                    </button>
+                </div>
+            </div>
+
+            <div id="nhatKyLoading" style="display:none; color:var(--text-muted); padding:1rem 0;">
+                <i class="ph ph-spinner-gap"></i> <span data-i18n="seller.activity.loading">Đang tải nhật ký...</span>
+            </div>
+            <div id="nhatKyEmpty" style="display:none; text-align:center; padding:2rem 1rem; color:var(--text-muted);">
+                <i class="ph ph-check-circle" style="display:block; margin-bottom:0.5rem; color:var(--success); font-size:2.2rem;"></i>
+                <span data-i18n="seller.activity.empty">Chưa có thao tác nào được ghi lại.</span>
+            </div>
+            <div id="nhatKyList"></div>
+
+            <div id="nhatKyPagination" style="display:none; justify-content:space-between; align-items:center; margin-top:1rem; gap:0.75rem; flex-wrap:wrap;">
+                <small id="nhatKyThongTinTrang" style="color:var(--text-muted);"></small>
+                <div style="display:flex; gap:0.5rem;">
+                    <button class="btn-outline" id="nhatKyTrangTruoc" onclick="doiTrangNhatKy(-1)" data-i18n="seller.pagination.previous">← Trước</button>
+                    <button class="btn-outline" id="nhatKyTrangSau" onclick="doiTrangNhatKy(1)" data-i18n="seller.pagination.next">Sau →</button>
+                </div>
+            </div>
+        </div>
+
         <!-- TAB 4: SETTINGS -->
         <div id="settings" class="tab-content glass-card">
 
@@ -1175,14 +1214,14 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260806-offline-ui2"></script>
+    <script src="/js/locales/seller.js?v=20260806-nhatky"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260803-bo-alert"></script>
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260806-offline-ui2"></script>
+    <script src="/js/seller.js?v=20260806-nhatky"></script>
     <script src="/js/pwa.js?v=20260806-pwa"></script>
 </body>
 </html>

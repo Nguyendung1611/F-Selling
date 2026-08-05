@@ -112,6 +112,9 @@ ROUTES_BO_SUNG = {
     # ở đây giao dịch đã xảy ra rồi nên giá lấy từ phiếu và hết hàng vẫn ghi.
     ("POST", "/api/orders/{shop_id}/offline"),
     ("GET", "/api/orders/{shop_id}/offline-issues"),
+    # G3: màn "Ai làm gì" của chủ shop. Khác /api/logs/admin: chỉ việc của người
+    # thuộc shop này, và đã lọc bỏ hành động không đụng tiền hay kho.
+    ("GET", "/api/logs/shop/{shop_id}"),
 }
 
 

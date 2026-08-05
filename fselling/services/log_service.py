@@ -21,6 +21,97 @@ def log_system_action(
         db.rollback()
 
 
+# Hành động KHÔNG hiện ở màn "Ai làm gì" của chủ shop.
+#
+# CỐ Ý là danh sách LOẠI TRỪ, không phải danh sách cho phép. Thêm một hành động
+# mới ở đâu đó trong code mà quên khai vào đây thì nó VẪN hiện ra — thừa một
+# dòng còn hơn thiếu một dòng ở đúng cái màn hình dùng để soi. Danh sách cho
+# phép thì ngược lại: quên khai là hành động đó vô hình vĩnh viễn và không ai
+# biết màn hình đang thủng.
+#
+# Đo trên dữ liệu thật: 118 trên 232 dòng là LOGIN. Trộn vào thì phải cuộn hai
+# màn hình mới thấy một lần hủy đơn, và màn hình nào phải cuộn mãi mới thấy
+# điều quan trọng thì người ta thôi mở nó.
+KHONG_HIEN_O_SHOP = frozenset({
+    "LOGIN",
+    # Thêm mới thì không rủi ro; SỬA và XÓA mới là thứ cần soi, và hai cái đó
+    # không nằm trong danh sách này nên vẫn hiện.
+    "CREATE_PRODUCT",
+    "CREATE_CATEGORY",
+    "UPDATE_CATEGORY",
+    "CREATE_SHOP",
+    "UPDATE_SHOP",
+    "TOGGLE_SHOP_STATUS",
+    "CREATE_CUSTOMER",
+    "UPDATE_CUSTOMER",
+})
+
+
+def _nguoi_thao_tac_cua_shop(db: Session, shop_id: int) -> List[int]:
+    """ID những người có thể thao tác trên shop này: chủ shop + nhân viên của nó.
+
+    `system_logs` KHÔNG có cột `shop_id` — nó chỉ ghi AI làm GÌ. Đây là cách duy
+    nhất khoanh vùng được mà không phải bỏ đi 232 dòng lịch sử đã có.
+
+    Chấp nhận một điểm mờ: chủ shop có nhiều cửa hàng thì việc do chính họ làm
+    không chỉ đích danh được cửa hàng nào. Đổi lại, câu hỏi thật sự cần trả lời
+    ở màn này là "có ai hủy đơn hay hoàn tiền bất thường không" — với câu đó thì
+    biết AI làm quan trọng hơn biết ở cửa hàng nào.
+
+    KHÔNG gộp ADMIN vào: tài khoản đó thao tác trên mọi shop, đưa vào là chủ
+    shop này nhìn thấy việc liên quan tới shop của người khác.
+    """
+    shop = db.query(models.Shop).filter(models.Shop.id == shop_id).first()
+    ids = set()
+    if shop and shop.owner_id:
+        ids.add(shop.owner_id)
+    for (uid,) in db.query(models.User.id).filter(
+        models.User.staff_shop_id == shop_id
+    ):
+        ids.add(uid)
+    return sorted(ids)
+
+
+def nhat_ky_cua_shop(
+    db: Session, shop_id: int, page: int = 1, per_page: int = 30
+) -> dict:
+    """Nhật ký thao tác của một cửa hàng, mới nhất trước."""
+    page = max(1, int(page or 1))
+    per_page = min(max(1, int(per_page or 30)), 100)
+
+    nguoi = _nguoi_thao_tac_cua_shop(db, shop_id)
+    if not nguoi:
+        return {"logs": [], "page": page, "per_page": per_page, "total": 0, "total_pages": 0}
+
+    truy_van = (
+        db.query(models.SystemLog)
+        .filter(
+            models.SystemLog.user_id.in_(nguoi),
+            models.SystemLog.action.notin_(KHONG_HIEN_O_SHOP),
+        )
+        .order_by(models.SystemLog.created_at.desc(), models.SystemLog.id.desc())
+    )
+    total = truy_van.count()
+    dong = truy_van.offset((page - 1) * per_page).limit(per_page).all()
+
+    return {
+        "logs": [
+            {
+                "id": l.id,
+                "username": l.user.username if l.user else "Hệ thống",
+                "action": l.action,
+                "details": l.details,
+                "created_at": l.created_at.isoformat() if l.created_at else None,
+            }
+            for l in dong
+        ],
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": (total + per_page - 1) // per_page,
+    }
+
+
 def get_recent_logs(db: Session, limit: int = 100) -> List[dict]:
     logs = (
         db.query(models.SystemLog)
