@@ -606,6 +606,124 @@ function apDungPhuongThucThanhToan(m, focusCash = false) {
 /** Bảng nhắc khi chọn Ghi nợ: bắt buộc có khách, và cho thấy khách đang nợ bao
  *  nhiêu TRƯỚC khi bán thêm - chờ server trả lỗi vượt hạn mức thì đã muộn, hàng
  *  đã quét vào giỏ và khách đang đứng đợi. */
+// ===== Thu nợ ngay tại quầy =====
+// Khách nợ quay lại trả tiền là việc xảy ra ở QUẦY, không phải ở phòng kế toán.
+// Trước đây thu ngân phải rời POS sang trang Quản lý, tức là bỏ dở màn bán hàng
+// trong lúc khách đang đứng đợi.
+
+/** Hiện nút "Thu nợ" khi khách đang chọn có nợ. Ẩn khi không nợ hoặc chưa chọn. */
+async function capNhatNutThuNo() {
+    const nut = document.getElementById('btnThuNoPOS');
+    if (!nut) return;
+    if (selectedCustomerId === null) {
+        nut.style.display = 'none';
+        return;
+    }
+    try {
+        const kh = await apiCall(`/customers/member/${selectedCustomerId}`);
+        const no = Number(kh.debt_amount || 0);
+        if (no <= 0) {
+            nut.style.display = 'none';
+            return;
+        }
+        const nhan = document.getElementById('btnThuNoLabel');
+        if (nhan) nhan.innerText = dich('pos.debt.collect_button', { amount: dinhDangTien(no) });
+        nut.style.display = 'block';
+    } catch (e) {
+        // Không đọc được nợ thì ẩn nút, đừng hiện một nút bấm vào không ra gì.
+        nut.style.display = 'none';
+    }
+}
+
+function dongModalThuNo() {
+    const m = document.getElementById('thuNoModal');
+    if (m) m.style.display = 'none';
+}
+
+async function moModalThuNo() {
+    if (selectedCustomerId === null) return;
+    const modal = document.getElementById('thuNoModal');
+    const ds = document.getElementById('thuNoDanhSach');
+    if (!modal || !ds) return;
+    modal.style.display = 'flex';
+    ds.innerHTML = `<div style="color:#94A3B8;">${escapeHtml(dich('pos.debt.collect_loading'))}</div>`;
+    try {
+        const ls = await apiCall(`/customers/member/${selectedCustomerId}/history`);
+        const donNo = (ls.orders || []).filter(o => o.status === 'DEBT' && Number(o.remaining) > 0);
+        const tomTat = document.getElementById('thuNoTomTat');
+        if (tomTat) {
+            tomTat.innerText = dich('pos.debt.collect_summary', {
+                name: ls.customer?.name || '',
+                amount: dinhDangTien(ls.debt_amount || 0),
+                count: donNo.length
+            });
+        }
+        if (!donNo.length) {
+            ds.innerHTML = `<div style="color:#94A3B8;">${escapeHtml(dich('pos.debt.collect_none'))}</div>`;
+            return;
+        }
+        // Ô nhập số tiền nằm NGAY TRÊN DÒNG, điền sẵn phần còn nợ. Khách trả
+        // bớt là chuyện thường ở quầy, mà POS lại không có hộp thoại nhập số —
+        // để ngay đây thì trả đủ chỉ mất một lần bấm, trả bớt thì sửa tại chỗ.
+        ds.innerHTML = donNo.map(o => `
+            <div style="display:flex; align-items:center; gap:0.5rem; padding:0.6rem 0; border-bottom:1px solid #334155;">
+                <div style="flex:1; min-width:0;">
+                    <strong style="color:#fff;">#${Number(o.id)}</strong>
+                    <div style="color:#94A3B8; font-size:0.78rem;">${escapeHtml(dinhDangNgayGio(o.date))}</div>
+                    <div style="color:#FCD34D; font-size:0.8rem;">${escapeHtml(dich('pos.debt.collect_remaining', { amount: dinhDangTien(o.remaining) }))}</div>
+                </div>
+                <input id="thuNoSo${Number(o.id)}" type="text" inputmode="numeric"
+                    value="${escapeHtml(dinhDangSoPOS(o.remaining))}"
+                    oninput="dinhDangONhapTien(this)"
+                    style="width:7.5rem; padding:0.4rem; background:#1E293B; border:1px solid #334155; color:#fff; border-radius:6px; text-align:right;">
+                <button onclick="thuNoDon(${Number(o.id)}, ${Number(o.remaining)})" style="padding:0.45rem 0.8rem; white-space:nowrap;">
+                    ${escapeHtml(dich('pos.debt.collect_action'))}
+                </button>
+            </div>`).join('');
+    } catch (e) {
+        ds.innerHTML = `<div style="color:#EF4444;">${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function thuNoDon(orderId, conNo) {
+    // Thu tiền mặt là tiền VÀO KÉT, nên bắt buộc có ca đang mở — cùng luật với
+    // mọi khoản tiền mặt khác. Không có ca thì khoản này không thuộc về ca nào.
+    if (!activeShift) {
+        showToast(dich('pos.debt.collect_need_shift'));
+        dongModalThuNo();
+        return moModalMoCa();
+    }
+    const o = document.getElementById(`thuNoSo${orderId}`);
+    const soTien = docGiaTriTien(o?.value);
+    if (soTien <= 0) return showToast(dich('pos.debt.collect_positive'));
+    if (soTien > conNo) return showToast(dich('pos.debt.collect_too_much', { amount: dinhDangTien(conNo) }));
+
+    // Tiền vào két thì phải có một lần nhìn lại bằng mắt, giống lúc chốt đơn.
+    const dongY = await xacNhan(
+        dich('pos.debt.collect_title'),
+        dich('pos.debt.collect_confirm', { amount: dinhDangTien(soTien), id: orderId })
+    );
+    if (!dongY) return;
+
+    try {
+        const res = await apiCall(`/orders/${orderId}/debt-payment`, 'POST', {
+            amount: soTien,
+            method: 'cash',
+            // Một mã cho đúng một lần bấm: bấm lại vì mạng chậm không thu hai lần.
+            operation_id: (crypto.randomUUID?.() || `${Date.now()}${Math.random()}`).replace(/-/g, '')
+        });
+        showToast(dich('pos.debt.collect_done', {
+            amount: dinhDangTien(soTien),
+            remaining: dinhDangTien(res.remaining_amount || 0)
+        }));
+        await moModalThuNo();          // nạp lại danh sách còn nợ
+        await capNhatNutThuNo();
+        await loadCurrentShift(false); // tiền vừa vào két, số dự kiến của ca đổi theo
+    } catch (e) {
+        showToast(e.message);
+    }
+}
+
 async function capNhatCanhBaoGhiNo() {
     const bang = document.getElementById('debtNotice');
     if (!bang) return;
@@ -2155,12 +2273,14 @@ function boChonKhach() {
     if (el('posCustResults')) el('posCustResults').innerHTML = '';
     if (el('posCustSearch')) el('posCustSearch').value = '';
     if (el('posCustNewForm')) el('posCustNewForm').style.display = 'none';
+    capNhatNutThuNo();
     capNhatCanhBaoGhiNo();
 }
 
 function chonKhach(id, ten, sdt) {
     if (dangKhoaChinhSuaDon()) return;
     selectedCustomerId = id;
+    capNhatNutThuNo();
     const selected = document.getElementById('khachDaChon');
     selected.removeAttribute('data-i18n');
     selected.innerText = `${ten} (${sdt})`;

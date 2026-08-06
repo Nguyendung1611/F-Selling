@@ -137,6 +137,30 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
     )
     application.add_middleware(LocaleMiddleware)
 
+    @application.middleware("http")
+    async def khong_giu_cache_html(request, call_next):
+        """Bắt trình duyệt hỏi lại server mỗi lần mở trang HTML.
+
+        Vì sao cần: file HTML là nơi chứa mọi dấu `?v=` trỏ tới CSS/JS. FastAPI
+        không gửi `Cache-Control` cho file tĩnh, nên trình duyệt tự suy ra thời
+        hạn từ `Last-Modified` và có thể phục vụ HTML CŨ mà không hỏi lại —
+        khi đó bump `?v=` không có tác dụng gì cả, vì bản HTML cũ vẫn trỏ tới
+        số cũ.
+
+        Đây KHÔNG phải lo xa: đã đo được thật khi thêm nút thu nợ. Server phục
+        vụ `?v=20260806-thu-no` còn trình duyệt vẫn chạy `?v=20260806-offline-pos`,
+        và service worker cũng không cứu được — `fetch()` bên trong nó vẫn đi
+        qua HTTP cache của trình duyệt (xem LUẬT 3, bẫy 27).
+
+        `no-cache` KHÔNG phải `no-store`: trình duyệt vẫn giữ bản sao, chỉ phải
+        hỏi lại xem có mới hơn không. Có `ETag` nên câu trả lời thường là 304
+        rỗng — gần như không tốn băng thông, mà không bao giờ chạy bản cũ.
+        """
+        response = await call_next(request)
+        if response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     application.include_router(auth.router)
     application.include_router(shops.router)
     application.include_router(categories.router)

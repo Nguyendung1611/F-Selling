@@ -13,6 +13,22 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* Các ô chọn cửa hàng CŨ của từng tab.
+           Giữ lại trong DOM chứ không xóa: nhiều hàm còn đọc `.value` của chúng
+           để biết đang xem cửa hàng nào, và `doiCuaHangChung()` cũng ghi vào
+           chúng để mọi tab đồng bộ. Xóa hẳn là phải sửa 9 luồng nằm rải rác
+           trong một file 174KB — rủi ro lớn hơn hẳn lợi ích.
+           Người dùng chỉ còn thấy MỘT ô duy nhất trên thanh đầu trang. */
+        #dashboardShopSelector,
+        #warehouseShopSelector,
+        #kkShopSelector,
+        #voucherShopSelector,
+        #customerShopSelector,
+        #staffShopSelector,
+        #nhatKyShopSelector,
+        .doi-soat-shop-field { display: none !important; }
+    </style>
     <link rel="stylesheet" href="/css/seller.css?v=20260731-i18n4">
     <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
     <style>
@@ -257,6 +273,14 @@
                     <option value="vi" data-i18n="common.language.vi">Tiếng Việt</option>
                     <option value="en" data-i18n="common.language.en">English</option>
                 </select>
+            </label>
+            <!-- MỘT ô chọn cửa hàng cho cả trang. Trước đây mỗi tab có ô riêng
+                 (9 ô trên một trang) và mỗi tab giữ biến trạng thái riêng, nên
+                 đổi cửa hàng ở tab này rồi sang tab khác vẫn thấy số của cửa
+                 hàng cũ — người dùng tưởng phần mềm hỏng. -->
+            <label id="oChonCuaHangChung" style="display: none; align-items: center; gap: 0.4rem; margin-right: 0.75rem;">
+                <span style="font-size: 0.85rem; color: var(--text-muted); white-space: nowrap;" data-i18n="seller.fields.shop">Cửa hàng</span>
+                <select id="shopChungSelect" onchange="doiCuaHangChung(this.value)" style="margin-bottom: 0; min-width: 11rem;"></select>
             </label>
             <button id="btnOpenPos" onclick="openPosShopSelector()" style="display: flex; align-items: center; gap: 0.3rem; background: var(--primary);"><i class="ph ph-shopping-cart"></i> <span data-i18n="seller.nav.open_pos">Mở POS Bán Hàng</span></button>
             <button class="btn-outline" onclick="showChangePasswordModal()" style="display: flex; align-items: center; gap: 0.3rem;"><i class="ph ph-key"></i> <span data-i18n="common.change_password">Đổi mật khẩu</span></button>
@@ -819,7 +843,7 @@
         <div id="customers" class="tab-content glass-card">
             <h3 style="margin-bottom: 1rem;"><i class="ph ph-users" style="color: var(--primary);"></i> <span data-i18n="seller.customers.title">Khách Hàng</span></h3>
 
-            <div style="margin-bottom: 1rem;">
+            <div id="customerShopSelector" style="margin-bottom: 1rem;">
                 <label style="font-size: 0.85rem; color: var(--text-muted);" data-i18n="seller.fields.choose_shop">Chọn cửa hàng</label>
                 <select id="custShopSelect" onchange="loadCustomers()" style="margin-bottom: 0;"></select>
             </div>
@@ -862,7 +886,7 @@
                     </p>
                 </div>
                 <div style="display: flex; gap: 0.6rem; align-items: flex-end;">
-                    <div>
+                    <div id="nhatKyShopSelector">
                         <label for="nhatKyShopSelect" style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.25rem;" data-i18n="seller.fields.shop">Cửa hàng</label>
                         <select id="nhatKyShopSelect" onchange="chonShopNhatKy(this.value)"></select>
                     </div>
@@ -942,7 +966,7 @@
                 <h4 style="margin-bottom: 0.5rem; color: var(--text-muted);"><i class="ph ph-users"></i> <span data-i18n="seller.staff.title">Nhân viên bán hàng</span></h4>
                 <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;" data-i18n="seller.staff.role_help">Thu ngân bán hàng và chăm sóc khách; nhân viên kho quản lý sản phẩm/tồn; quản lý được toàn bộ nghiệp vụ vận hành. Không vai trò nào được sửa thông tin cửa hàng hay quản lý nhân viên khác.</p>
 
-                <div style="margin-bottom: 1rem;">
+                <div id="staffShopSelector" style="margin-bottom: 1rem;">
                     <label style="font-size: 0.85rem; color: var(--text-muted);" data-i18n="seller.fields.choose_shop">Chọn cửa hàng</label>
                     <select id="staffShopSelect" onchange="loadStaff()" style="margin-bottom: 0;"></select>
                 </div>
@@ -1214,14 +1238,14 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260806-nhatky"></script>
+    <script src="/js/locales/seller.js?v=20260806-mot-o-shop"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260803-bo-alert"></script>
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260806-nhatky"></script>
+    <script src="/js/seller.js?v=20260806-mot-o-shop"></script>
     <script src="/js/pwa.js?v=20260806-pwa"></script>
 </body>
 </html>

@@ -285,7 +285,9 @@ function renderShopSelectors() {
         ).join('');
         if (nhatKyShopId) nhatKySelect.value = String(nhatKyShopId);
     }
-    
+
+    renderOChonCuaHangChung();
+
     allShops.forEach(s => {
         // Dashboard (Thống Kê)
         const btn1 = document.createElement('button');
@@ -327,6 +329,67 @@ function renderShopSelectors() {
             posList.innerHTML += `<button style="width: 100%; padding: 1rem; text-align: left; display: flex; align-items: center; gap: 0.5rem;" onclick="goToPOS(${s.id})"><i class="ph ph-storefront"></i> ${escapeHtml(s.name)}</button>`;
         }
     });
+}
+
+// ---------- Một cửa hàng cho cả trang ----------
+// Gốc của vấn đề không phải 9 ô chọn, mà là BỐN biến trạng thái riêng biệt:
+// `currentShopId`, `dashboardShopId`, `doiSoatShopId`, `nhatKyShopId`. Chín ô
+// chọn chỉ là chỗ chúng lộ ra. Hàm này đặt cả bốn về cùng một giá trị.
+//
+// CỐ Ý không gộp `posShopList`: ô đó không lọc dữ liệu mà là nút "mở POS cho
+// cửa hàng nào" — một hành động khác hẳn, gộp vào là mất chức năng.
+const CAC_O_CHON_CU = [
+    'shopChungSelect', 'doiSoatShopSelect', 'nhatKyShopSelect',
+    'custShopSelect', 'staffShopSelect'
+];
+
+function doiCuaHangChung(giaTri) {
+    const id = Number.parseInt(giaTri, 10);
+    if (!Number.isInteger(id) || !allShops.some(s => s.id === id)) return;
+
+    dashboardShopId = id;
+    doiSoatShopId = id;
+    nhatKyShopId = id;
+    trangDoiSoat = 1;
+    trangNhatKy = 1;
+    doiSoatBadgeRequestId += 1;
+
+    // Ghi vào cả các ô cũ đang ẩn: nhiều hàm vẫn đọc `.value` của chúng để biết
+    // đang xem cửa hàng nào. Bỏ bước này là các tab đó đọc ra giá trị cũ.
+    CAC_O_CHON_CU.forEach(idOo => {
+        const o = document.getElementById(idOo);
+        if (o && [...o.options].some(x => x.value === String(id))) o.value = String(id);
+    });
+
+    // `changeShop` lo phần dùng chung: sản phẩm, danh mục, khuyến mãi, tồn kho.
+    // Phải gọi kể cả khi đang ở tab khác, nếu không lát nữa mở Kho Hàng ra sẽ
+    // thấy hàng của cửa hàng trước đó.
+    changeShop(id);
+
+    // Rồi nạp lại ĐÚNG tab đang mở. Nạp cả sáu tab là sáu lượt gọi mạng cho
+    // năm màn hình không ai đang nhìn.
+    const tab = document.querySelector('.tab-content.active')?.id;
+    if (tab === 'dashboard') loadDashboardShop(id);
+    else if (tab === 'reconciliation') loadDoiSoat();
+    else if (tab === 'nhatky') loadNhatKy();
+    else if (tab === 'customers') loadCustomers();
+    else if (tab === 'settings') loadStaff();
+}
+
+function renderOChonCuaHangChung() {
+    const o = document.getElementById('shopChungSelect');
+    const khung = document.getElementById('oChonCuaHangChung');
+    if (!o || !khung) return;
+    // Một cửa hàng thì không có gì để chọn — ẩn luôn cho đỡ rối.
+    if (allShops.length <= 1) {
+        khung.style.display = 'none';
+    } else {
+        khung.style.display = 'inline-flex';
+    }
+    o.innerHTML = allShops.map(s =>
+        `<option value="${s.id}">${escapeHtml(s.name)}</option>`
+    ).join('');
+    if (currentShopId) o.value = String(currentShopId);
 }
 
 function openPosShopSelector() {
