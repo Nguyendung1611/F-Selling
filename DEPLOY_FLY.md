@@ -43,16 +43,19 @@ fly volumes create fselling_data --region sin --size 1 --app <ten-app>
 ## 5. Đặt secret (KHÔNG commit các giá trị này)
 
 ```powershell
-fly secrets set --app <ten-app> ^
-  SECRET_KEY=df40ce2d28f199d1f53723ae98397583e8203664b4c8bede0592615f4444ec32 ^
-  ADMIN_INITIAL_PASSWORD=Admin@2026 ^
-  PAYMENT_WEBHOOK_SECRET=4715cbac42a369478e2cbcb67169e52b97ada50538580311 ^
-  SMTP_HOST=smtp.gmail.com ^
-  SMTP_PORT=587 ^
-  SMTP_USER=your_email@gmail.com ^
-  SMTP_PASSWORD=your_new_gmail_app_password
+fly secrets set --app <ten-app> `
+  SECRET_KEY="<dán giá trị SECRET_KEY trong file .env>" `
+  ADMIN_INITIAL_PASSWORD="<dán giá trị ADMIN_INITIAL_PASSWORD trong file .env>" `
+  PAYMENT_WEBHOOK_SECRET="<dán giá trị PAYMENT_WEBHOOK_SECRET trong file .env>" `
+  SMTP_HOST="smtp.gmail.com" `
+  SMTP_PORT="587" `
+  SMTP_USER="<email Gmail của bạn>" `
+  SMTP_PASSWORD="<Gmail App Password mới>"
 ```
 
+- Ba dòng đầu chỉ là **chỗ trống hướng dẫn**. Mở file `.env` trên máy, sao chép
+  đúng giá trị tương ứng rồi dán vào PowerShell; tuyệt đối không dán giá trị thật
+  vào tài liệu, `fly.toml` hoặc bất kỳ file nào sẽ commit.
 - Nhớ **tạo Gmail App Password MỚI** (cái cũ trong `.env` đã bị lộ, nên thu hồi).
 - Nếu không cần gửi email, bỏ 4 dòng SMTP — app vẫn chạy, chỉ in OTP ra log.
 
@@ -71,7 +74,7 @@ và tài khoản `admin` được seed từ `ADMIN_INITIAL_PASSWORD`.
 https://<ten-app>.fly.dev
 ```
 
-Đăng nhập: `admin` / `Admin@2026` → **đổi mật khẩu ngay** trong app.
+Đăng nhập: `admin` / giá trị `ADMIN_INITIAL_PASSWORD` trong `.env`.
 
 ## Lệnh hữu ích
 
@@ -196,7 +199,9 @@ fly machine start --app <ten-app>
 - Dữ liệu (DB + ảnh) nằm ở `/data` trên volume `fselling_data`, không mất khi deploy lại.
 - Sao lưu chỉ gồm **database**, không gồm ảnh trong `uploads/`: ảnh nặng hơn
   nhiều lần và chụp lại được, sổ nợ thì không.
-- Muốn đổi mật khẩu admin trên server: `fly secrets set ADMIN_INITIAL_PASSWORD=...`
-  chỉ có tác dụng khi DB **chưa** có admin. Nếu admin đã tồn tại, đổi mật khẩu bằng
-  chức năng "Đổi mật khẩu" trong app, hoặc chạy `reset_admin.py` qua `fly ssh console`.
+- Muốn đổi mật khẩu admin trên server: đặt giá trị mới bằng
+  `fly secrets set --app <ten-app> ADMIN_INITIAL_PASSWORD="<mật khẩu mới>"`.
+  App sẽ đồng bộ cả tài khoản admin đã tồn tại ở lần khởi động kế tiếp. Khi đã
+  đăng nhập ổn định và muốn tự đổi trong app, gỡ biến này khỏi secret của server
+  để lần khởi động sau không ghi đè mật khẩu bạn vừa đổi.
 - Không upload file `.env`, `.db`, log lên server (đã chặn trong `.dockerignore`).

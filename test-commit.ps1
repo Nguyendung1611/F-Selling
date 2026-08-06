@@ -144,6 +144,60 @@ if ($nguyHiem) {
     exit 1
 }
 
+# ---------- 3b. Chặn GIÁ TRỊ secret hiện tại lọt vào file Git ----------
+# Chặn theo tên file ở trên là chưa đủ: ba secret production từng bị chép thẳng
+# vào tài liệu deploy. Giá trị cũ vẫn còn trong lịch sử, nhưng giá trị mới trong
+# .env tuyệt đối không được xuất hiện trong bất kỳ file nào đang stage.
+$tenSecretCanChan = @(
+    'SECRET_KEY',
+    'PAYMENT_WEBHOOK_SECRET',
+    'ADMIN_INITIAL_PASSWORD'
+)
+$secretHienTai = @{}
+
+if (Test-Path -LiteralPath '.env') {
+    Get-Content -LiteralPath '.env' | ForEach-Object {
+        if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
+            $ten = $Matches[1]
+            if ($tenSecretCanChan -contains $ten) {
+                $giaTri = $Matches[2].Trim().Trim('"', "'")
+                if ($giaTri.Length -ge 8) {
+                    $secretHienTai[$ten] = $giaTri
+                }
+            }
+        }
+    }
+}
+
+$loSecret = @()
+foreach ($file in $staged) {
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { continue }
+    try {
+        $noiDung = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $file).Path)
+    } catch {
+        continue
+    }
+    foreach ($secret in $secretHienTai.GetEnumerator()) {
+        if ($noiDung.Contains([string]$secret.Value)) {
+            $loSecret += [PSCustomObject]@{
+                File = $file
+                Name = $secret.Key
+            }
+        }
+    }
+}
+
+if ($loSecret.Count -gt 0) {
+    Write-Host ""
+    Write-Host "DUNG LAI - gia tri secret trong .env da bi chep vao file Git:" -ForegroundColor Red
+    $loSecret | ForEach-Object {
+        Write-Host ("   {0} (lo {1})" -f $_.File, $_.Name) -ForegroundColor Red
+    }
+    Write-Host "Da bo stage toan bo. Xoa gia tri that, chi de ten bien/placeholder." -ForegroundColor Red
+    git reset | Out-Null
+    exit 1
+}
+
 # ---------- 4. Commit ----------
 Write-Host ""
 Write-Host "File se duoc commit:" -ForegroundColor Cyan

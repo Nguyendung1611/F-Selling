@@ -1130,6 +1130,25 @@ sang **Ngừng sử dụng**; shop có chương trình hoặc lịch sử điể
 hãy dùng nút **Khóa**. SQLite production không bật foreign key, xóa rồi tái sử
 dụng ID có thể khiến shop/khách mới nhận nhầm cấu hình hoặc điểm cũ.
 
+### 31. Secret đã vào Git phải ĐỔI GIÁ TRỊ; xóa dòng hiện tại là chưa đủ
+
+`SECRET_KEY`, `PAYMENT_WEBHOOK_SECRET` và `ADMIN_INITIAL_PASSWORD` từng nằm
+trong `DEPLOY_FLY.md`, nên mọi bản sao lịch sử Git công khai đều còn giữ chúng.
+Xóa hoặc thay dòng trong commit mới chỉ làm sạch phiên bản hiện tại; giá trị cũ
+vẫn phải coi là đã lộ và không bao giờ được dùng lại.
+
+Giá trị mới chỉ được nằm trong `.env` bị Git bỏ qua hoặc kho secret của nền tảng
+deploy. Tài liệu, `fly.toml`, code, test và log chỉ chứa tên biến hoặc chỗ trống
+hướng dẫn. `test-commit.ps1` đọc ba giá trị hiện tại từ `.env` và chặn commit nếu
+phát hiện bất kỳ giá trị nào bị chép vào file đang stage.
+
+Đổi `SECRET_KEY` làm mọi token JWT cũ mất hiệu lực — người dùng phải đăng nhập
+lại, đây là hành vi đúng khi khóa ký đã lộ. Đổi `ADMIN_INITIAL_PASSWORD` trong
+`.env` chưa tự sửa database khi app đang tắt; `seed_admin()` đồng bộ mật khẩu ở
+lần khởi động kế tiếp. Không khởi động app thật chỉ để "kiểm thử" việc này: test
+phải dùng `DB_PATH` riêng, còn database thật chỉ được chạm khi chủ dự án thực sự
+chạy app sau khi đã chấp nhận đổi mật khẩu.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

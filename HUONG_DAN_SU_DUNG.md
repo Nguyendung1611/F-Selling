@@ -93,7 +93,8 @@ Rồi tải lại trang bằng `Ctrl + Shift + R`.
 ## 4. Đăng nhập Admin
 
 - Tên đăng nhập: `admin`
-- Mật khẩu: xem dòng `ADMIN_INITIAL_PASSWORD` trong file `.env` (hiện tại là `Admin@2026`).
+- Mật khẩu: xem dòng `ADMIN_INITIAL_PASSWORD` trong file `.env`. Mật khẩu thật
+  không được ghi trong tài liệu hoặc đưa lên Git.
 
 ### Đổi mật khẩu admin
 

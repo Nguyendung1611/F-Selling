@@ -6,7 +6,8 @@ lần đã trả giá.
 ## Ba việc bắt buộc
 
 1. **Đọc `KIEN_TRUC.md` mục "Bẫy cần biết khi viết service mới"** trước khi
-   động vào `fselling/services/`. Có 25 bẫy, phần lớn không nhìn ra được từ code.
+   động vào `fselling/services/`. Danh sách được bổ sung liên tục, phần lớn
+   không nhìn ra được từ code.
 2. **Commit bằng `.\test-commit.ps1 "mô tả"`**, không commit tay. Script kiểm cú
    pháp mọi file `static/js`, chạy toàn bộ test rồi mới cho commit, và chặn
    `.env` / `*.db` lọt lên Git. (Số bài test cố ý không ghi ở đây — script tự in
@@ -157,17 +158,19 @@ $env:DB_PATH="C:\duong\dan\tam\thu.db"
 
 ## Quyết định đã chốt — đừng tự ý làm khác
 
-**Secret trong `DEPLOY_FLY.md` cứ để nguyên.** File đó chứa `SECRET_KEY`,
-`PAYMENT_WEBHOOK_SECRET` và `ADMIN_INITIAL_PASSWORD` thật, đã nằm trong lịch sử
-Git công khai. Chủ dự án **biết và chấp nhận** vì đang trong giai đoạn phát
-triển, chưa có dữ liệu khách hàng thật.
+**Ba secret cũ đã được thay ngày 2026-08-06:** `SECRET_KEY`,
+`PAYMENT_WEBHOOK_SECRET` và `ADMIN_INITIAL_PASSWORD`. Giá trị cũ vẫn tồn tại
+trong lịch sử Git công khai nên phải coi là đã thu hồi, tuyệt đối không dùng lại.
 
-Đừng "tiện tay" đổi mật khẩu, xóa file hay viết lại lịch sử Git — sẽ làm hỏng
-môi trường đang chạy mà không ai yêu cầu.
+Giá trị hiện tại chỉ nằm trong file `.env` bị Git bỏ qua. Không chép chúng vào
+`DEPLOY_FLY.md`, `fly.toml`, code, test, log hay ảnh chụp. Khi deploy, đưa đúng
+ba giá trị từ `.env` vào kho secret của nền tảng; tài liệu chỉ được chứa chỗ
+trống hướng dẫn. Không viết lại lịch sử Git nếu chưa có kế hoạch phối hợp rõ —
+đổi giá trị mới mới là việc làm secret cũ mất hiệu lực.
 
-Nhưng **trước khi đưa vào dùng thật với dữ liệu khách hàng** thì phải đổi toàn
-bộ ba giá trị trên. Sửa file không xóa được chúng khỏi lịch sử, nên bắt buộc
-phải đổi giá trị chứ không phải sửa file.
+`ADMIN_INITIAL_PASSWORD` còn trong `.env` thì mỗi lần khởi động app sẽ đồng bộ
+lại mật khẩu admin. Sau khi đăng nhập ổn định, có thể xóa dòng đó và quản lý mật
+khẩu bằng chức năng trong app.
 
 ## Việc đang treo
 
