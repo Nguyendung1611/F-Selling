@@ -256,6 +256,23 @@ _MIGRATIONS = [
     "ON loyalty_point_entries(customer_id, created_at)",
     "CREATE INDEX IF NOT EXISTS ix_loyalty_point_entries_shop_created "
     "ON loyalty_point_entries(shop_id, created_at)",
+    # I1: nhà cung cấp + phiếu nhập + công nợ phải trả. Các bảng mới do
+    # create_all() tạo; khai lại mọi khóa chống lặp để DB cũ/khởi động lỗi dở
+    # vẫn được tự chữa, rồi nhóm financial bên dưới kiểm đúng cả unique+cột.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_suppliers_create_operation_id "
+    "ON suppliers(create_operation_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_purchase_receipts_create_operation_id "
+    "ON purchase_receipts(create_operation_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_purchase_receipts_confirm_operation_id "
+    "ON purchase_receipts(confirm_operation_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_supplier_payable_entries_idempotency_key "
+    "ON supplier_payable_entries(idempotency_key)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_supplier_payable_entries_receipt_id "
+    "ON supplier_payable_entries(receipt_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_supplier_payments_idempotency_key "
+    "ON supplier_payments(idempotency_key)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_supplier_payment_allocations_pair "
+    "ON supplier_payment_allocations(payment_id, payable_entry_id)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
@@ -276,6 +293,13 @@ _REQUIRED_INDEXES = [
     "ux_orders_offline_uuid",
     "ux_loyalty_programs_shop_id",
     "ux_loyalty_point_entries_idempotency_key",
+    "ux_suppliers_create_operation_id",
+    "ux_purchase_receipts_create_operation_id",
+    "ux_purchase_receipts_confirm_operation_id",
+    "ux_supplier_payable_entries_idempotency_key",
+    "ux_supplier_payable_entries_receipt_id",
+    "ux_supplier_payments_idempotency_key",
+    "ux_supplier_payment_allocations_pair",
 ]
 
 # Thiếu/sai một index trong nhóm này thì tiếp tục chạy có thể nhân đôi tiền,
@@ -314,6 +338,41 @@ _FINANCIAL_INDEX_SPECS = {
     "ux_loyalty_point_entries_idempotency_key": (
         "loyalty_point_entries",
         ("idempotency_key",),
+        None,
+    ),
+    "ux_suppliers_create_operation_id": (
+        "suppliers",
+        ("create_operation_id",),
+        None,
+    ),
+    "ux_purchase_receipts_create_operation_id": (
+        "purchase_receipts",
+        ("create_operation_id",),
+        None,
+    ),
+    "ux_purchase_receipts_confirm_operation_id": (
+        "purchase_receipts",
+        ("confirm_operation_id",),
+        None,
+    ),
+    "ux_supplier_payable_entries_idempotency_key": (
+        "supplier_payable_entries",
+        ("idempotency_key",),
+        None,
+    ),
+    "ux_supplier_payable_entries_receipt_id": (
+        "supplier_payable_entries",
+        ("receipt_id",),
+        None,
+    ),
+    "ux_supplier_payments_idempotency_key": (
+        "supplier_payments",
+        ("idempotency_key",),
+        None,
+    ),
+    "ux_supplier_payment_allocations_pair": (
+        "supplier_payment_allocations",
+        ("payment_id", "payable_entry_id"),
         None,
     ),
 }

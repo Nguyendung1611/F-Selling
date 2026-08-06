@@ -1,7 +1,7 @@
 // Chủ shop (SELLER) và nhân viên (STAFF) đều dùng trang này. Vai trò quyết định
 // những gì được hiển thị (xem applyRoleUI ở cuối file).
 const MY_ROLE = localStorage.getItem('role');
-if(MY_ROLE !== 'SELLER' && MY_ROLE !== 'STAFF') redirectToLogin();
+if(!['ADMIN', 'SELLER', 'STAFF'].includes(MY_ROLE)) redirectToLogin();
 const MY_STAFF_ROLE = MY_ROLE === 'STAFF'
     ? (localStorage.getItem('staff_role') || 'MANAGER').toUpperCase()
     : null;
@@ -20,7 +20,7 @@ function coQuyenNhanVien(permission) {
 // được doanh thu) cũng không thấy. Đây CHỈ là lớp giao diện cho gọn mắt - server
 // mới là chỗ chặn thật (has_cost_visibility trong dependencies.py). Đừng bao giờ
 // coi cờ này là biện pháp bảo mật: sửa localStorage là qua được.
-const XEM_DUOC_GIA_VON = MY_ROLE === 'SELLER';
+const XEM_DUOC_GIA_VON = MY_ROLE === 'SELLER' || MY_ROLE === 'ADMIN';
 
 // Giá vốn theo product_id, nạp riêng qua endpoint chỉ chủ shop gọi được. Danh
 // sách sản phẩm mở cho cả nhân viên nên KHÔNG kèm giá vốn - phải ghép ở đây.
@@ -159,6 +159,9 @@ function xoaDuLieuShopCuKhoiGiaoDien() {
     loyaltyRequestId += 1;
     loyaltyProgramCache = null;
     loyaltyProgramShopId = null;
+    // Module Nhập hàng nằm ở file riêng để seller.js không phình thêm hàng
+    // nghìn dòng. Nó vẫn dùng cùng generation/shop hiện tại của trang này.
+    window.FSellingPurchasing?.resetForShopChange?.();
 
     cancelEditCategory();
     cancelEditProduct();
@@ -204,6 +207,10 @@ function switchTab(tabId, buttonEl = null) {
         showToast(t('seller.loyalty.owner_only'));
         return;
     }
+    if (tabId === 'purchasing' && !['SELLER', 'ADMIN'].includes(MY_ROLE)) {
+        showToast(t('seller.purchasing.owner_only'));
+        return;
+    }
     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.tab-btn[data-main-tab]').forEach(el => el.classList.remove('active'));
     const tab = document.getElementById(tabId);
@@ -217,6 +224,7 @@ function switchTab(tabId, buttonEl = null) {
     // giữa buổi phải đếm được, và số lượng của lô là thứ thay đổi liên tục.
     if (tabId === 'kiemke') kkNapLo();
     if (tabId === 'loyalty') loadLoyaltyProgram();
+    if (tabId === 'purchasing') window.FSellingPurchasing?.load?.();
 }
 
 // Live Preview Logic
@@ -238,13 +246,13 @@ async function init() {
         allShops = await apiCall('/shops');
         renderShopsList(); // Cho phần cài đặt
         // Danh sách nhân viên chỉ dành cho chủ shop (nhân viên gọi sẽ bị 404).
-        if (MY_ROLE !== 'STAFF') renderStaffShopOptions();
-        if (coQuyenNhanVien('CUSTOMER')) renderCustomerShopOptions();
+        if (MY_ROLE === 'SELLER') renderStaffShopOptions();
+        if (MY_ROLE !== 'ADMIN' && coQuyenNhanVien('CUSTOMER')) renderCustomerShopOptions();
 
         if(allShops.length === 0) {
             document.getElementById('dashboardContent').style.display = 'none';
             document.getElementById('noShopMsg').style.display = 'block';
-            if (MY_ROLE !== 'STAFF') openCreateShopForm();
+            if (MY_ROLE === 'SELLER') openCreateShopForm();
         } else {
             // Mặc định nạp dữ liệu cho shop đầu tiên nếu có currentShopId
             let savedId = localStorage.getItem('currentShopId');
@@ -386,6 +394,7 @@ function doiCuaHangChung(giaTri) {
     else if (tab === 'nhatky') loadNhatKy();
     else if (tab === 'customers') loadCustomers();
     else if (tab === 'loyalty') loadLoyaltyProgram();
+    else if (tab === 'purchasing') window.FSellingPurchasing?.load?.();
     else if (tab === 'settings') loadStaff();
 }
 
@@ -1377,6 +1386,19 @@ function changeShop(id) {
 
 function loadDataForCurrentShop() {
     if(allShops.length === 0 || !batDauDungShopHienTai()) return;
+    // ADMIN vào seller.html chỉ để làm nghiệp vụ Nhập Hàng. Không tải dashboard,
+    // voucher, khách hay nhân viên của từng shop; chỉ cần danh mục sản phẩm để
+    // lập phiếu và module công nợ.
+    if (MY_ROLE === 'ADMIN') {
+        document.getElementById('dashboardContent').style.display = 'none';
+        document.getElementById('warehouseContent').style.display = 'none';
+        document.getElementById('voucherContent').style.display = 'none';
+        document.getElementById('kkContent').style.display = 'none';
+        document.getElementById('noShopMsg').style.display = 'none';
+        loadProducts();
+        window.FSellingPurchasing?.load?.();
+        return;
+    }
     const canReport = coQuyenNhanVien('REPORT');
     const canInventory = coQuyenNhanVien('INVENTORY');
     const canVoucher = coQuyenNhanVien('VOUCHER');
@@ -1415,6 +1437,10 @@ function loadDataForCurrentShop() {
         MY_ROLE === 'SELLER'
         && document.getElementById('loyalty')?.classList.contains('active')
     ) loadLoyaltyProgram();
+    if (
+        MY_ROLE === 'SELLER'
+        && document.getElementById('purchasing')?.classList.contains('active')
+    ) window.FSellingPurchasing?.load?.();
 }
 
 // Settings List Render
@@ -2052,6 +2078,7 @@ async function loadProducts() {
             || currentShopId !== shopId
         ) return;
         filterProducts();
+        window.FSellingPurchasing?.productsUpdated?.();
     } catch (e) {
         if (
             requestId === productsRequestId
@@ -2204,7 +2231,7 @@ function themBienTheCungNhom(id) {
     showToast(t('seller.products.add_variant_ready', { group: goc.variant_group }));
 }
 
-// Khi SỬA sản phẩm, ô tồn kho bị khóa: thay đổi tồn kho đi qua nút Nhập/Xuất
+// Khi SỬA sản phẩm, ô tồn kho bị khóa: thay đổi tồn kho đi qua nút Điều chỉnh
 // kho (cộng trừ theo delta), tránh ghi đè làm mất hàng khi bán song song.
 function _khoaOTonKho(khoa) {
     const el = document.getElementById('prodStock');
@@ -2285,6 +2312,12 @@ async function nhapXuatKho(id) {
         ten: 'delta',
         nhan: t('seller.products.stock_delta_label'),
         goiY: t('seller.products.stock_delta_hint')
+    }, {
+        ten: 'lyDo',
+        nhan: t('seller.products.stock_reason_label'),
+        kieu: 'textarea',
+        goiY: t('seller.products.stock_reason_placeholder'),
+        ghiChu: t('seller.products.stock_reason_note')
     }];
     if (product.track_batches) {
         truong.push({
@@ -2318,8 +2351,12 @@ async function nhapXuatKho(id) {
 
     const delta = parseInt(String(kq.delta ?? '').replace(/[.,\s]/g, ''), 10);
     if(isNaN(delta) || delta === 0) return showToast(t('seller.products.stock_number_required'));
+    const reason = String(kq.lyDo || '').trim();
+    if (!reason) return showToast(t('seller.products.stock_reason_required'));
 
-    const body = { delta };
+    // Đây chỉ là điều chỉnh tồn có giải trình, không phải phiếu mua hàng và
+    // tuyệt đối không tự sinh công nợ nhà cung cấp.
+    const body = { delta, reason };
 
     // Sản phẩm theo lô: nhập hàng bắt buộc khai hạn, nếu không server từ chối.
     // Xuất kho thì bỏ qua ô hạn kể cả khi người dùng có điền - lô nào bị trừ là
@@ -2375,7 +2412,7 @@ function _khoHangDangMo() {
 
 function xuLyQuetKho(ma) {
     // Con trỏ đang nằm trong ô mã vạch của form: người dùng đang muốn GÁN mã cho
-    // sản phẩm, không phải nhập/xuất kho. Đây là cách phân biệt hai ý định mà
+    // sản phẩm, không phải điều chỉnh kho. Đây là cách phân biệt hai ý định mà
     // không cần thêm nút bật/tắt chế độ.
     const oMaVach = document.getElementById('prodBarcode');
     if (oMaVach && document.activeElement === oMaVach) {
@@ -2749,7 +2786,7 @@ function quetMaVachBangCamera() {
     });
 }
 
-/** Nút camera trên danh sách: quét xong mở hộp nhập/xuất kho cho SP đó. */
+/** Nút camera trên danh sách: quét xong mở hộp điều chỉnh kho cho SP đó. */
 function quetNhapXuatBangCamera() {
     if (!damBaoCacheShopHienTai(currentProductsShopId)) return;
     BarcodeCamera.mo({ dongSauKhiQuet: true });
@@ -3151,7 +3188,7 @@ let confirmCallback = null;
  * thể rỗng, việc kiểm là của bên gọi).
  *
  * `truong`: [{ ten, nhan, kieu, giaTriDau, goiY, ghiChu, luaChon }]
- *   kieu: 'text' | 'date' | 'select'   (mặc định 'text')
+ *   kieu: 'text' | 'textarea' | 'date' | 'select'   (mặc định 'text')
  *   luaChon (chỉ với 'select'): [{ gia, nhan }]
  */
 function hoiThongTin({ tieuDe, moTa = '', truong = [], nhanXacNhan }) {
@@ -3180,6 +3217,12 @@ function hoiThongTin({ tieuDe, moTa = '', truong = [], nhanXacNhan }) {
                     + `${escapeHtml(c.nhan)}</option>`
                 ).join('');
                 oNhap = `<select id="${id}" style="${kieuO}">${chon}</select>`;
+            } else if (o.kieu === 'textarea') {
+                // Lý do/ghi chú cần bàn phím chữ; nhánh text mặc định bên dưới
+                // chủ ý bật bàn phím số vì đang phục vụ các ô tiền.
+                oNhap = `<textarea id="${id}" rows="3" style="${kieuO}"`
+                    + ` placeholder="${escapeHtml(o.goiY ?? '')}">`
+                    + `${escapeHtml(o.giaTriDau ?? '')}</textarea>`;
             } else {
                 // inputmode="numeric" cho bàn phím số trên điện thoại mà vẫn là
                 // ô text: type="number" từ chối thẳng chuỗi "250.000" người
@@ -3821,6 +3864,8 @@ async function saveLoyaltyProgram() {
 function applyRoleUI() {
     const tabLoyalty = document.getElementById('tabLoyalty');
     if (tabLoyalty && MY_ROLE === 'SELLER') tabLoyalty.style.display = '';
+    const tabPurchasing = document.getElementById('tabPurchasing');
+    if (tabPurchasing && ['SELLER', 'ADMIN'].includes(MY_ROLE)) tabPurchasing.style.display = '';
     if (!XEM_DUOC_GIA_VON) {
         // Ô giá vốn ở form sản phẩm. Nhân viên kho vẫn thêm/sửa sản phẩm được,
         // chỉ là không thấy và không gửi field này (xem createProduct).
@@ -3831,6 +3876,22 @@ function applyRoleUI() {
         // Số lỗ chính là giá vốn nhân số lượng nên nó thuộc cùng vòng bí mật.
         const tabHuy = document.getElementById('whSubTabWriteOff');
         if (tabHuy) tabHuy.style.display = '';
+    }
+    const btnBackAdmin = document.getElementById('btnBackAdmin');
+    if (btnBackAdmin && MY_ROLE === 'ADMIN') btnBackAdmin.style.display = 'flex';
+    if (MY_ROLE === 'ADMIN') {
+        // Lát cắt hẹp: không biến trang Seller thành trang vận hành cho ADMIN.
+        // Chỉ để lại tab Nhập Hàng và ô chọn shop chung.
+        document.querySelectorAll('.tab-btn[data-main-tab]').forEach(button => {
+            button.style.display = button.dataset.mainTab === 'purchasing' ? '' : 'none';
+        });
+        document.querySelectorAll('.tab-content').forEach(section => {
+            section.style.display = section.id === 'purchasing' ? '' : 'none';
+        });
+        const btnOpenPos = document.getElementById('btnOpenPos');
+        if (btnOpenPos) btnOpenPos.style.display = 'none';
+        switchTab('purchasing', tabPurchasing);
+        return;
     }
     if (MY_ROLE !== 'STAFF') return;
     // Nhân viên KHÔNG quản lý cửa hàng, nhưng vẫn phải chỉnh được phần Đọc tiền:
@@ -4634,6 +4695,7 @@ function capNhatSellerTheoNgonNgu() {
         }
         capNhatLoyaltyPreview();
     }
+    window.FSellingPurchasing?.rerender?.();
 }
 
 document.addEventListener('fselling:localechange', capNhatSellerTheoNgonNgu);

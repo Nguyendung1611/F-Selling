@@ -145,6 +145,29 @@ def test_admin_truy_cap_duoc_shop_cua_seller(client):
     assert client.get(f"/api/dashboard/seller/{a['shop_id']}", headers=auth(token)).status_code == 200
 
 
+def test_admin_thay_shop_trong_danh_sach_nhung_khong_duoc_sua_xoa_thay_chu(client):
+    """ADMIN cần thấy shop để chọn màn giám sát, không được thành chủ shop."""
+    from conftest import SHOP_PAYLOAD
+
+    seller = seller_with_shop(client)
+    token = admin_token(client)
+
+    response = client.get("/api/shops", headers=auth(token))
+    assert response.status_code == 200, response.text
+    assert seller["shop_id"] in {shop["id"] for shop in response.json()}
+
+    update = client.put(
+        f"/api/shops/{seller['shop_id']}",
+        json=dict(SHOP_PAYLOAD),
+        headers=auth(token),
+    )
+    delete = client.delete(
+        f"/api/shops/{seller['shop_id']}", headers=auth(token)
+    )
+    assert update.status_code == 404
+    assert delete.status_code == 404
+
+
 def test_shop_khong_ton_tai_tra_404(client):
     _, token = new_seller(client)
     assert client.get("/api/dashboard/seller/999999", headers=auth(token)).status_code == 404

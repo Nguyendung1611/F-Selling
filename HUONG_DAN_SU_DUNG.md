@@ -148,6 +148,76 @@ POS nhưng vẫn còn trong danh sách quản lý. Muốn dùng lại, bấm nú
 Shop đã có chương trình hoặc lịch sử điểm cũng không xóa hẳn được: vào phần cửa
 hàng và bấm **Khóa** để ngừng sử dụng mà vẫn giữ nguyên sổ đối soát.
 
+### Nhập hàng và theo dõi công nợ nhà cung cấp
+
+Phần này chứa giá nhập và số tiền cửa hàng còn nợ, nên chỉ **chủ cửa hàng** và
+**Admin** nhìn thấy. Nhân viên không thấy tab và server cũng không cho gọi các
+chức năng này.
+
+#### 1. Tạo nhà cung cấp
+
+1. Nếu đăng nhập tài khoản chủ shop: chọn đúng cửa hàng ở ô **Cửa hàng** trên
+   đầu trang → bấm tab **Nhập Hàng**. Nếu đăng nhập Admin: bấm nút **Nhập
+   Hàng** trên thanh đầu trang Admin; màn chuyên biệt sẽ mở ra, chỉ có phần
+   nhập hàng và một ô chọn cửa hàng. Bấm **Về Admin** để quay lại.
+2. Bấm tab con **Nhà cung cấp** → bấm **Thêm nhà cung cấp**.
+3. Nhập tên; số điện thoại, mã số thuế, địa chỉ và ghi chú có thể để trống.
+4. Nếu cửa hàng đã nợ nhà cung cấp từ trước khi dùng F-Selling, nhập **Nợ đầu
+   kỳ** và hạn thanh toán. Nếu bắt đầu theo dõi từ hôm nay thì giữ số nợ là 0.
+5. Bấm **Lưu**. Nhà cung cấp mới sẽ xuất hiện trong bảng cùng số **Còn nợ** và
+   **Quá hạn**.
+
+Nhà cung cấp chưa có lịch sử có thể xóa. Khi đã có phiếu nhập, nợ đầu kỳ hoặc
+khoản trả, nút xóa chỉ chuyển họ sang **Ngừng sử dụng** để chứng từ cũ không bị
+mất; có thể bật lại khi cần.
+
+#### 2. Tạo và kiểm tra phiếu nhập
+
+1. Trong tab **Nhập Hàng**, bấm tab con **Phiếu nhập** → **Tạo phiếu nhập**.
+2. Chọn nhà cung cấp, ngày nhận hàng và hạn thanh toán nếu có. Số hóa đơn nhà
+   cung cấp và ghi chú là tùy chọn.
+3. Tìm một sản phẩm đang có trong cửa hàng → bấm **Thêm vào phiếu**.
+4. Điền số lượng và **đơn giá cuối cùng cho một sản phẩm**. Đây là giá đã gồm
+   mọi chi phí bạn muốn tính vào giá vốn; bản đầu tiên chưa có ô VAT, vận
+   chuyển hay giảm giá riêng. Số tiền chỉ nhập VND nguyên, không nhập số lẻ.
+5. Sản phẩm bật theo dõi lô sẽ hiện ô **Hạn sử dụng** bắt buộc. Làm tương tự
+   cho các dòng còn lại rồi nhìn lại **Tổng phiếu**. Nếu cùng một sản phẩm
+   được giao với hai hạn khác nhau, thêm sản phẩm đó hai lần và khai đúng hạn
+   trên từng dòng.
+6. Bấm **Lưu nháp**. Bạn sẽ thấy phiếu ở trạng thái **Nháp**; lúc này tồn kho,
+   giá vốn và công nợ vẫn chưa thay đổi. Phiếu nháp còn sửa hoặc xóa được.
+
+#### 3. Hoàn tất nhập hàng và ghi khoản đã trả ngay
+
+Ở dòng phiếu nháp, bấm **Hoàn tất nhập hàng**. Hộp xác nhận bắt bạn nhập rõ số
+tiền đã trả ngay (nhập 0 nếu chưa trả) và hiển thị **Còn nợ sau khi nhập**.
+Khi số đã trả lớn hơn 0, bạn phải tự chọn nguồn tiền; phần mềm không chọn sẵn:
+
+- Chọn **Tiền mặt trong két** khi lấy tiền từ ca đang mở của chính tài khoản
+  đang thao tác. Két phải còn đủ tiền dự kiến; hệ thống ghi đúng một khoản chi.
+- Chọn **Chuyển khoản** khi trả qua ngân hàng. Có thể điền mã tham chiếu để dễ
+  đối soát; không cần mở ca.
+- Chọn **Tiền bên ngoài cửa hàng** khi tiền không lấy từ két và cũng không đi
+  qua tài khoản cần theo dõi trong F-Selling. Trường hợp này bắt buộc ghi chú.
+
+Số đã trả có thể là 0, một phần hoặc toàn bộ tổng phiếu, nhưng không được lớn
+hơn tổng phiếu. Kiểm tra lại rồi bấm **Xác nhận nhập hàng**. Bạn sẽ thấy phiếu
+chuyển sang **Đã hoàn tất**; cùng lúc tồn kho, lô hàng, giá vốn bình quân và công
+nợ mới được cập nhật. Phiếu đã hoàn tất bị khóa, không sửa, xóa hay hủy được.
+
+#### 4. Trả nợ sau và xem lịch sử
+
+Vào **Nhập Hàng → Nhà cung cấp**, tìm đúng dòng rồi bấm **Trả nợ**. Nhập số
+tiền và chọn nguồn tiền giống bước trên; hộp sẽ hiện rõ **Nợ trước → Nợ sau**.
+Không thể trả quá số còn nợ. Khi xác nhận, hệ thống tự cấn vào khoản nợ cũ nhất
+trước. Bấm **Xem lịch sử** để kiểm tra từng phiếu, nợ đầu kỳ, khoản đã trả và
+phần còn lại; khoản quá hạn sẽ được cảnh báo riêng.
+
+Nút nhập/xuất thủ công cũ trong **Kho Hàng** nay tên là **Điều chỉnh kho** và
+bắt buộc ghi lý do. Chức năng đó chỉ sửa số tồn, **không** tạo phiếu nhập, không
+tạo công nợ và không ghi một khoản trả nhà cung cấp. Hàng mua chịu phải đi qua
+tab **Nhập Hàng**.
+
 ### Hàng có nhiều size / màu (biến thể)
 
 Trong **Kho hàng**, ô **Tên biến thể** ngay dưới ô tên sản phẩm là chỗ khai
@@ -181,7 +251,9 @@ mã của nó ở tab Kiểm Kê, phiếu sẽ hiện ra một dòng cho mỗi h
 số đếm được vào đúng dòng có hạn tương ứng.
 
 > Đếm ra hàng thuộc một hạn **chưa có trong phiếu** thì đó là hàng nhập bị sót,
-> không phải việc của kiểm kê. Vào Kho hàng → Nhập kho và khai đúng hạn đó.
+> không phải việc của kiểm kê. Nếu là hàng mua từ nhà cung cấp, tạo phiếu ở
+> **Nhập Hàng**; nếu chỉ sửa sai số tồn, dùng **Kho Hàng → Điều chỉnh kho** và
+> khai đúng hạn đó.
 
 ### Hủy hàng hết hạn
 

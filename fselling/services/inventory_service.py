@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -15,6 +16,23 @@ from ..schemas.order import OrderItemCreate
 # Gom theo khóa này thay vì theo tên trần để hai sản phẩm trùng tên không bị
 # cộng dồn vào cùng một dòng.
 KhoaSanPham = Tuple[str, Any]
+
+
+def lock_shop_for_inventory(db: Session, shop_id: int) -> None:
+    """Lấy cùng shop write-lock trước mọi nghiệp vụ đọc-rồi-ghi tồn/lô.
+
+    SQLite không có SELECT FOR UPDATE. No-op UPDATE này khiến bán hàng, nhập
+    hàng, điều chỉnh lô, kiểm kê và hủy hàng phải xếp hàng trước khi đọc tồn.
+    Nếu một đường đọc trước khóa rồi gán theo số cũ, request chen giữa có thể
+    bị nuốt mất dù cả hai transaction đều báo thành công.
+    """
+    result = db.execute(
+        text("UPDATE shops SET id = id WHERE id = :shop_id"),
+        {"shop_id": int(shop_id)},
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy cửa hàng"))
 
 
 def _khoa_cua(item: OrderItemCreate) -> KhoaSanPham:

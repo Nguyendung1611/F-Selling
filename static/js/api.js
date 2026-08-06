@@ -38,7 +38,12 @@ function hasLocalAccessToPage(pathname) {
     const role = localStorage.getItem('role');
     if (!token) return false;
     if (pathname === '/admin') return role === 'ADMIN';
-    if (pathname === '/seller' || pathname === '/pos') {
+    if (pathname === '/seller') {
+        // ADMIN chỉ dùng lát cắt Nhập Hàng của seller.html; applyRoleUI ẩn toàn
+        // bộ tab vận hành khác. POS vẫn không mở cho ADMIN.
+        return role === 'ADMIN' || role === 'SELLER' || role === 'STAFF';
+    }
+    if (pathname === '/pos') {
         return role === 'SELLER' || role === 'STAFF';
     }
     return true;

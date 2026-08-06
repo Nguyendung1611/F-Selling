@@ -62,7 +62,11 @@ def _tao_sp_theo_lo(client, ctx, gia_ban=50000, ton_dau=0):
 
 
 def _nhap_lo(client, ctx, product_id, so_luong, han, gia_von=None):
-    body = {"delta": so_luong, "expiry_date": han}
+    body = {
+        "delta": so_luong,
+        "expiry_date": han,
+        "reason": "Kiểm thử nhập lô",
+    }
     if gia_von is not None:
         body["unit_cost"] = gia_von
     return client.post(
@@ -89,7 +93,7 @@ def test_nhap_hang_phai_khai_han_su_dung(client):
 
     res = client.post(
         f"/api/products/{sp['id']}/stock",
-        json={"delta": 10},
+        json={"delta": 10, "reason": "Kiểm thử nhập kho"},
         headers=auth(ctx["token"]),
     )
     assert res.status_code == 400
@@ -309,7 +313,7 @@ def test_tong_lo_luon_khop_ton_kho(client):
     _ban(client, ctx, sp, 12)
     client.post(
         f"/api/products/{sp['id']}/stock",
-        json={"delta": -3},
+        json={"delta": -3, "reason": "Kiểm thử xuất kho"},
         headers=auth(ctx["token"]),
     )
 
@@ -329,7 +333,7 @@ def test_xuat_kho_thu_cong_cung_tru_fefo(client):
 
     res = client.post(
         f"/api/products/{sp['id']}/stock",
-        json={"delta": -6},
+        json={"delta": -6, "reason": "Kiểm thử xuất kho"},
         headers=auth(ctx["token"]),
     )
     assert res.status_code == 200, res.text
@@ -406,7 +410,11 @@ def test_san_pham_khong_bat_co_chay_y_nhu_cu(client):
     # Nhập không cần hạn, vẫn chạy
     res = client.post(
         f"/api/products/{pid}/stock",
-        json={"delta": 5, "unit_cost": 30000},
+        json={
+            "delta": 5,
+            "unit_cost": 30000,
+            "reason": "Kiểm thử nhập kho",
+        },
         headers=auth(ctx["token"]),
     )
     assert res.status_code == 200, res.text

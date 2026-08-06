@@ -21,6 +21,7 @@ from ..core.config import (
     UPLOAD_DIR,
 )
 from ..core.i18n import tr
+from ..core.numeric_limits import MAX_SAFE_QUANTITY
 from ..dependencies import (
     PERMISSION_CATALOG_READ,
     PERMISSION_INVENTORY,
@@ -1100,6 +1101,11 @@ def apply_stocktake(
             detail=tr("Một sản phẩm xuất hiện nhiều lần trong phiếu kiểm kê"),
         )
 
+    # Snapshot chỉ có nghĩa khi lần so sánh + lần gán cùng nằm sau write-lock.
+    # Nếu phiếu nhập/bán chen giữa SELECT và commit, kiểm tra snapshot cũ vẫn
+    # pass rồi phép gán tuyệt đối sẽ nuốt mất tồn vừa thay đổi.
+    inventory_service.lock_shop_for_inventory(db, shop_id)
+    db.expire_all()
     san_pham = {
         p.id: p
         for p in db.query(models.Product)
@@ -1253,7 +1259,8 @@ _ADJUST_STOCK = text(
     "  ELSE (stock * cost_price + :delta * :unit_cost) / (stock + :delta) "
     "END, "
     "stock = stock + :delta "
-    "WHERE id = :product_id AND stock + :delta >= 0"
+    "WHERE id = :product_id AND stock + :delta >= 0 "
+    "AND (:max_stock IS NULL OR stock + :delta <= :max_stock)"
 )
 
 
@@ -1284,6 +1291,97 @@ def _kiem_han_su_dung(raw: Optional[str]) -> Optional[str]:
     return chuoi
 
 
+def add_purchase_stock(
+    db: Session,
+    prod: models.Product,
+    quantity: int,
+    unit_cost: int,
+    expiry_date: Optional[str],
+    *,
+    batch_note: Optional[str] = None,
+) -> Optional[models.ProductBatch]:
+    """Cộng tồn từ phiếu nhập trong transaction của caller, KHÔNG commit.
+
+    Không được gọi ``adjust_stock`` theo từng dòng phiếu vì hàm public đó tự
+    commit. Phiếu nhiều dòng phải hoặc cùng ghi đủ kho+nợ, hoặc không ghi gì.
+    """
+    if quantity <= 0 or unit_cost < 0:
+        raise HTTPException(status_code=400, detail=tr("Dòng phiếu nhập không hợp lệ"))
+    current_stock = int(prod.stock or 0)
+    if quantity > MAX_SAFE_QUANTITY or current_stock > MAX_SAFE_QUANTITY - quantity:
+        raise HTTPException(
+            status_code=400,
+            detail=tr(
+                "Tồn kho của '{name}' sau khi nhập vượt giới hạn {maximum}",
+                name=prod.name,
+                maximum=f"{MAX_SAFE_QUANTITY:,}",
+            ),
+        )
+    if prod.track_batches:
+        han = _kiem_han_su_dung(expiry_date)
+        if han is None:
+            raise HTTPException(
+                status_code=400,
+                detail=tr(
+                    "Sản phẩm '{name}' có theo dõi hạn sử dụng; "
+                    "phiếu nhập phải khai hạn của lô",
+                    name=prod.name,
+                ),
+            )
+        batch = models.ProductBatch(
+            product_id=prod.id,
+            shop_id=prod.shop_id,
+            expiry_date=han,
+            quantity=quantity,
+            cost_price=float(unit_cost),
+            note=(batch_note or "").strip()[:200] or None,
+        )
+        db.add(batch)
+        db.flush()
+        # Cộng nguyên tử; Product.stock vẫn là bản sao của tổng lô và nằm cùng
+        # transaction với INSERT lô phía trên.
+        result = db.execute(
+            text(
+                "UPDATE products SET stock = stock + :delta "
+                "WHERE id = :product_id AND stock + :delta <= :max_stock"
+            ),
+            {
+                "delta": quantity,
+                "product_id": prod.id,
+                "max_stock": MAX_SAFE_QUANTITY,
+            },
+        )
+        if result.rowcount != 1:
+            raise HTTPException(
+                status_code=409,
+                detail=tr("Tồn kho vừa thay đổi; vui lòng thử lại"),
+            )
+        db.refresh(prod)
+        return batch
+
+    if expiry_date is not None and str(expiry_date).strip():
+        raise HTTPException(
+            status_code=400,
+            detail=tr(
+                "Sản phẩm '{name}' không theo dõi lô nên không nhận hạn sử dụng",
+                name=prod.name,
+            ),
+        )
+    result = db.execute(
+        _ADJUST_STOCK,
+        {
+            "delta": quantity,
+            "product_id": prod.id,
+            "unit_cost": float(unit_cost),
+            "max_stock": MAX_SAFE_QUANTITY,
+        },
+    )
+    if result.rowcount != 1:
+        raise HTTPException(status_code=409, detail=tr("Tồn kho vừa thay đổi; vui lòng thử lại"))
+    db.refresh(prod)
+    return None
+
+
 def _dieu_chinh_ton_theo_lo(
     db: Session,
     current_user: models.User,
@@ -1291,6 +1389,7 @@ def _dieu_chinh_ton_theo_lo(
     delta: int,
     unit_cost: Optional[float],
     expiry_date: Optional[str],
+    reason: str,
 ) -> Dict[str, Any]:
     """Nhập/xuất kho cho sản phẩm có theo dõi lô.
 
@@ -1352,7 +1451,8 @@ def _dieu_chinh_ton_theo_lo(
         db,
         current_user.id,
         "ADJUST_STOCK",
-        f"{mo_ta} - SP '{prod.name}' ({prod.code}) -> tồn {prod.stock}",
+        f"{mo_ta} - SP '{prod.name}' ({prod.code}) -> tồn {prod.stock}. "
+        f"Lý do: {reason}",
     )
     db.refresh(prod)
     ket_qua: Dict[str, Any] = {
@@ -1373,6 +1473,7 @@ def adjust_stock(
     delta: int,
     unit_cost: Optional[float] = None,
     expiry_date: Optional[str] = None,
+    reason: str = "",
 ) -> Dict[str, Any]:
     """Nhập (delta > 0) hoặc xuất (delta < 0) kho theo số lượng thay đổi.
 
@@ -1394,6 +1495,11 @@ def adjust_stock(
     shop = require_shop_access(db, prod.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_INVENTORY)
 
+    reason = (reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail=tr("Vui lòng nhập lý do điều chỉnh kho"))
+    reason = reason[:500]
+
     if delta == 0:
         raise HTTPException(
             status_code=400,
@@ -1413,14 +1519,39 @@ def adjust_stock(
             )
 
     if prod.track_batches:
+        # Dùng cùng shop write-lock với bán hàng/phiếu nhập, rồi bỏ toàn bộ
+        # object đã đọc trước khóa. Cả đường nhập lô lẫn xuất FEFO đều phải dựa
+        # trên stock + danh sách lô mới nhất dưới khóa này.
+        locked_shop_id = int(prod.shop_id)
+        inventory_service.lock_shop_for_inventory(db, locked_shop_id)
+        db.expire_all()
+        prod = (
+            db.query(models.Product)
+            .filter(
+                models.Product.id == product_id,
+                models.Product.shop_id == locked_shop_id,
+            )
+            .first()
+        )
+        if prod is None:
+            db.rollback()
+            raise HTTPException(status_code=404, detail=tr("Sản phẩm không tồn tại"))
         return _dieu_chinh_ton_theo_lo(
-            db, current_user, prod, delta, unit_cost, expiry_date
+            db, current_user, prod, delta, unit_cost, expiry_date, reason
         )
 
     gia_von_truoc = prod.cost_price
     result = db.execute(
         _ADJUST_STOCK,
-        {"delta": delta, "product_id": product_id, "unit_cost": unit_cost},
+        {
+            "delta": delta,
+            "product_id": product_id,
+            "unit_cost": unit_cost,
+            # Giữ nguyên nghiệp vụ Điều chỉnh kho cũ. Trần phiếu nhập được
+            # truyền riêng ở add_purchase_stock; thay đổi luật của màn cũ cần
+            # một quyết định nghiệp vụ độc lập.
+            "max_stock": None,
+        },
     )
     if result.rowcount != 1:
         db.rollback()
@@ -1449,7 +1580,8 @@ def adjust_stock(
         current_user.id,
         "ADJUST_STOCK",
         f"{hanh_dong} kho SP '{prod.name}' ({prod.code}): "
-        f"{'+' if delta > 0 else ''}{delta} -> tồn {prod.stock}{ghi_chu_gia_von}",
+        f"{'+' if delta > 0 else ''}{delta} -> tồn {prod.stock}{ghi_chu_gia_von}. "
+        f"Lý do: {reason}",
     )
     ket_qua: Dict[str, Any] = {"id": prod.id, "stock": prod.stock, "delta": delta}
     # Chỉ đính giá vốn cho người được xem. Nhân viên kho vẫn nhập/xuất được
@@ -1484,6 +1616,36 @@ def delete_product(db: Session, current_user: models.User, product_id: int) -> D
         raise HTTPException(status_code=404, detail=tr("Sản phẩm không tồn tại"))
     require_shop_access(db, prod.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_INVENTORY)
+    shop_id = int(prod.shop_id)
+    # PurchaseReceiptItem giữ product_id để lúc confirm cộng đúng sản phẩm.
+    # SQLite không bật FK và có thể tái dùng ID sau hard-delete: nếu xóa P rồi
+    # tạo Q nhận lại cùng ID, phiếu nháp P sẽ âm thầm nhập hàng vào Q. Khóa cùng
+    # các đường tồn, reload, rồi chặn xóa cứng khi đã có bất kỳ dòng phiếu nhập.
+    inventory_service.lock_shop_for_inventory(db, shop_id)
+    db.expire_all()
+    prod = (
+        db.query(models.Product)
+        .filter(models.Product.id == product_id, models.Product.shop_id == shop_id)
+        .first()
+    )
+    if prod is None:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=tr("Sản phẩm không tồn tại"))
+    has_purchase_history = (
+        db.query(models.PurchaseReceiptItem.id)
+        .filter(models.PurchaseReceiptItem.product_id == product_id)
+        .first()
+        is not None
+    )
+    if has_purchase_history:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Sản phẩm đã nằm trong phiếu nhập nên không thể xóa. "
+                "Hãy bấm Ẩn để giữ đúng lịch sử chứng từ."
+            ),
+        )
     name, code = prod.name, prod.code
     db.delete(prod)
     db.commit()

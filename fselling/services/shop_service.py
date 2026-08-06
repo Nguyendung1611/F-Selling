@@ -121,6 +121,10 @@ def list_shops(db: Session, current_user: models.User) -> List[models.Shop]:
             .filter(models.Shop.id == current_user.staff_shop_id)
             .all()
         )
+    elif current_user.role == "ADMIN":
+        # ADMIN cần chọn được cửa hàng trước khi mở các màn giám sát như
+        # công nợ nhà cung cấp. Quyền sửa/xóa vẫn do require_own_shop bảo vệ.
+        shops = db.query(models.Shop).all()
     else:
         shops = db.query(models.Shop).filter(models.Shop.owner_id == current_user.id).all()
     log_to_file(f"get_shops DB query returned: {[s.id for s in shops]}")
@@ -165,6 +169,25 @@ def _has_loyalty_data(db: Session, shop_id: int) -> bool:
     )
 
 
+def _has_supplier_data(db: Session, shop_id: int) -> bool:
+    """Hồ sơ NCC hoặc chứng từ nhập/nợ đã có thì không xóa cứng shop."""
+    return any(
+        query.first() is not None
+        for query in (
+            db.query(models.Supplier.id).filter(models.Supplier.shop_id == shop_id),
+            db.query(models.PurchaseReceipt.id).filter(
+                models.PurchaseReceipt.shop_id == shop_id
+            ),
+            db.query(models.SupplierPayableEntry.id).filter(
+                models.SupplierPayableEntry.shop_id == shop_id
+            ),
+            db.query(models.SupplierPayment.id).filter(
+                models.SupplierPayment.shop_id == shop_id
+            ),
+        )
+    )
+
+
 def delete_shop(db: Session, current_user: models.User, shop_id: int) -> Dict[str, str]:
     # Lấy lock trước lần đọc quyết định. Điều kiện owner_id giữ nguyên hành vi
     # 404 cho người không phải chủ mà không cần mở một read transaction trước.
@@ -178,6 +201,15 @@ def delete_shop(db: Session, current_user: models.User, shop_id: int) -> Dict[st
                 "Cửa hàng đã có chương trình hoặc lịch sử tích điểm nên không "
                 "thể xóa. Hãy bấm nút Khóa để ngừng sử dụng cửa hàng và giữ "
                 "nguyên sổ điểm."
+            ),
+        )
+    if _has_supplier_data(db, shop_id):
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Cửa hàng đã có nhà cung cấp hoặc lịch sử phiếu nhập/công nợ "
+                "nên không thể xóa. Hãy bấm nút Khóa để giữ nguyên chứng từ."
             ),
         )
     shop_name = db_shop.name

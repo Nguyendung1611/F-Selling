@@ -336,6 +336,24 @@ EN_MESSAGES = {
     ),
     "Đã ghi nhận hoàn tiền thành công": "The refund was recorded successfully",
 
+    # Supplier purchasing: integer limits shared with the browser so large
+    # money/quantity values are never silently rounded by JavaScript.
+    "Tổng số lượng nhập của '{name}' vượt giới hạn {maximum}": (
+        "Total incoming quantity for '{name}' exceeds the {maximum} limit"
+    ),
+    "Tồn kho của '{name}' sau khi nhập vượt giới hạn {maximum}": (
+        "Stock for '{name}' after receiving exceeds the {maximum} limit"
+    ),
+    "Thành tiền của '{name}' vượt giới hạn {maximum}đ": (
+        "Line total for '{name}' exceeds the {maximum} VND limit"
+    ),
+    "Tổng phiếu nhập vượt giới hạn {maximum}đ": (
+        "Purchase receipt total exceeds the {maximum} VND limit"
+    ),
+    "Công nợ nhà cung cấp sau khi nhập vượt giới hạn {maximum}đ": (
+        "Supplier payable after receiving exceeds the {maximum} VND limit"
+    ),
+
     # Vietnamese speech service (the spoken money remains Vietnamese)
     "Server chưa cấu hình giọng đọc (thiếu TTS_PROVIDER/TTS_API_KEY)": (
         "The speech service is not configured "

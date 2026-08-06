@@ -1149,6 +1149,53 @@ lần khởi động kế tiếp. Không khởi động app thật chỉ để "
 phải dùng `DB_PATH` riêng, còn database thật chỉ được chạm khi chủ dự án thực sự
 chạy app sau khi đã chấp nhận đổi mật khẩu.
 
+### 32. Phiếu nhập là giao dịch kép tồn kho + công nợ, không phải “Nhập kho” cũ
+
+Phiếu nhập đi theo hai trạng thái: `DRAFT` chỉ là giấy nháp, tuyệt đối không đổi
+tồn, lô, giá vốn, công nợ hay két; `POSTED` chốt **tất cả** các thay đổi đó trong
+một transaction. Một dòng sản phẩm sai, thiếu hạn lô, thiếu ca hoặc két không đủ
+thì toàn phiếu phải rollback. Phiếu đã `POSTED` là chứng từ bất biến, không sửa,
+xóa hay hủy; bản đầu tiên cũng chưa có trả hàng nhà cung cấp.
+
+Đừng gọi tuần tự `adjust_stock()` cho từng dòng: hàm cũ commit riêng và có thể
+để lại nửa phiếu nếu dòng sau lỗi. Khi chốt phiếu, server phải tự tính số nguyên
+`quantity × unit_cost`, kiểm sản phẩm cùng shop, tạo lô với **đúng giá của lô**
+hoặc cập nhật giá vốn bình quân gia quyền cho sản phẩm **không theo lô**, tạo
+khoản phải trả, phân bổ khoản trả ngay và ghi audit trong cùng transaction.
+Không cập nhật `Product.cost_price` cho hàng theo lô: bẫy 17 quy định giá vốn
+lấy từ đúng `ProductBatch`, còn số bình quân ở Product sẽ stale ngay sau FEFO.
+`None` và 0 ở giá vốn vẫn khác nhau như bẫy 7; sản phẩm theo lô bắt buộc có hạn
+sử dụng.
+
+Công nợ nhà cung cấp là ledger, không có cột `balance` để cộng trừ trực tiếp.
+`SupplierPayableEntry` ghi khoản phải trả dương từ phiếu hoặc nợ đầu kỳ;
+`SupplierPaymentAllocation` cấn khoản trả vào nợ cũ nhất trước. Số dư luôn tính
+từ tổng phải trả trừ tổng phân bổ, cho phép trả một phần nhưng không cho ứng
+trước/trả quá nợ. Nhà cung cấp có bất kỳ lịch sử nào chỉ được khóa, không xóa vật
+lý; SQLite production không bật foreign key nên kiểm tra này phải làm tường minh.
+
+Tiền mặt lấy từ ca chỉ sinh **đúng một** `CashMovement` hướng `OUT`; không được
+đếm thêm `SupplierPayment` như một nguồn tiền mặt khác trong công thức két.
+Chuyển khoản không cần ca. Nguồn `OUTSIDE` không cần ca nhưng bắt buộc có ghi chú.
+Cả chốt phiếu và trả nợ đều giữ nguyên payload + operation ID khi retry, đối
+chiếu fingerprint khi trùng ID, và dựa vào unique index được verify fail-fast lúc
+khởi động. Thiếu bất kỳ lớp nào có thể nhân đôi tồn kho, công nợ hoặc tiền chi.
+
+**Mở màn xác nhận cũng phải chụp fingerprint của TOÀN BỘ bản nháp.** Owner có
+thể đang xem nội dung A trong khi ADMIN sửa thành B ở phiên khác; nếu nút xác
+nhận chỉ gửi `receipt_id` thì owner sẽ chốt B mà chưa từng nhìn giá/số lượng mới.
+Fingerprint phải gồm NCC, số hóa đơn, ngày nhận/hạn trả, ghi chú và mọi dòng
+sản phẩm/số lượng/đơn giá/hạn dùng; thứ tự dòng được canonical hóa. Server chỉ
+so sau khi đã lấy khóa shop và reload bản nháp. Lệch thì trả 409, frontend đóng
+màn cũ và buộc mở lại; dùng `updated_at` là không đủ vì độ phân giải đồng hồ và
+việc xóa/tạo lại dòng có thể cho tín hiệu không ổn định.
+
+Nút cũ nay là **Điều chỉnh kho**, bắt buộc lý do và cố ý không tạo phiếu nhập,
+công nợ hay khoản trả. Đây vẫn là đường sửa chênh lệch tồn/thao tác ngoài mua
+hàng; không được âm thầm “nâng cấp” mọi điều chỉnh dương thành mua hàng. Giá nhập
+và công nợ chỉ chủ shop/Admin được xem và thao tác, cùng ranh giới quyền với giá
+vốn hiện có.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

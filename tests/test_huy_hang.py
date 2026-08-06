@@ -74,7 +74,11 @@ def _tao_sp_theo_lo(client, ctx, gia_ban=25000):
 
 
 def _nhap_lo(client, ctx, product_id, so_luong, han, gia_von=None):
-    body = {"delta": so_luong, "expiry_date": han}
+    body = {
+        "delta": so_luong,
+        "expiry_date": han,
+        "reason": "Kiểm thử nhập lô",
+    }
     if gia_von is not None:
         body["unit_cost"] = gia_von
     res = client.post(

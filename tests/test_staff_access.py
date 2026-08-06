@@ -85,7 +85,9 @@ def test_staff_quan_ly_san_pham_duoc(client):
     assert res.status_code == 200
     # nhập kho
     res = client.post(
-        f"/api/products/{pid}/stock", json={"delta": 20}, headers=auth(staff_token)
+        f"/api/products/{pid}/stock",
+        json={"delta": 20, "reason": "Kiểm thử nhập kho"},
+        headers=auth(staff_token),
     )
     assert res.status_code == 200
     assert res.json()["stock"] == 30
@@ -213,7 +215,9 @@ def test_staff_khong_dung_duoc_shop_khac(client):
     assert client.get(f"/api/dashboard/seller/{shop_b}", headers=auth(staff_a)).status_code == 403
     assert (
         client.post(
-            f"/api/products/{prod_b['id']}/stock", json={"delta": 5}, headers=auth(staff_a)
+            f"/api/products/{prod_b['id']}/stock",
+            json={"delta": 5, "reason": "Kiểm thử nhập kho"},
+            headers=auth(staff_a),
         ).status_code
         == 403
     )

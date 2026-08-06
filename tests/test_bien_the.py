@@ -389,7 +389,7 @@ def test_moi_bien_the_co_lo_han_rieng(client):
     for pid, han in ((som["id"], han_som), (muon["id"], han_muon)):
         res = client.post(
             f"/api/products/{pid}/stock",
-            json={"delta": 5, "expiry_date": han},
+            json={"delta": 5, "expiry_date": han, "reason": "Kiểm thử nhập lô"},
             headers=auth(ctx["token"]),
         )
         assert res.status_code == 200, res.text
@@ -420,7 +420,7 @@ def test_gia_von_rieng_tung_bien_the(client):
     for pid, gia in ((re["id"], 30000), (dat["id"], 45000)):
         res = client.post(
             f"/api/products/{pid}/stock",
-            json={"delta": 10, "unit_cost": gia},
+            json={"delta": 10, "unit_cost": gia, "reason": "Kiểm thử nhập kho"},
             headers=auth(ctx["token"]),
         )
         assert res.status_code == 200, res.text

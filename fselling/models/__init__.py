@@ -21,6 +21,14 @@ from .order import (
 )
 from .shift import CashMovement, CashShift
 from .shop import Shop
+from .supplier import (
+    PurchaseReceipt,
+    PurchaseReceiptItem,
+    Supplier,
+    SupplierPayableEntry,
+    SupplierPayment,
+    SupplierPaymentAllocation,
+)
 from .system_log import SystemLog
 from .user import User
 
@@ -46,4 +54,10 @@ __all__ = [
     "Customer",
     "LoyaltyProgram",
     "LoyaltyPointEntry",
+    "Supplier",
+    "PurchaseReceipt",
+    "PurchaseReceiptItem",
+    "SupplierPayableEntry",
+    "SupplierPayment",
+    "SupplierPaymentAllocation",
 ]

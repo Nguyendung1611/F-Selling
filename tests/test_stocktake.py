@@ -130,7 +130,9 @@ def test_ton_doi_giua_chung_thi_bo_qua_dong_do(client):
 
     # Nhân viên bắt đầu đếm khi tồn là 20, nhưng POS bán mất 4 trước khi bấm Lưu.
     client.post(
-        f"/api/products/{sp['id']}/stock", json={"delta": -4}, headers=auth(ctx["token"])
+        f"/api/products/{sp['id']}/stock",
+        json={"delta": -4, "reason": "Kiểm thử xuất kho"},
+        headers=auth(ctx["token"]),
     )
 
     res = _kiem_ke(client, ctx["token"], ctx["shop_id"], [
@@ -150,7 +152,9 @@ def test_dong_hop_le_van_duoc_ap_dung_khi_dong_khac_bi_bo_qua(client):
     ok = _tao_sp(client, ctx["token"], ctx["shop_id"], ctx["category_id"], "On dinh", 10)
     doi = _tao_sp(client, ctx["token"], ctx["shop_id"], ctx["category_id"], "Bi ban", 10)
     client.post(
-        f"/api/products/{doi['id']}/stock", json={"delta": -2}, headers=auth(ctx["token"])
+        f"/api/products/{doi['id']}/stock",
+        json={"delta": -2, "reason": "Kiểm thử xuất kho"},
+        headers=auth(ctx["token"]),
     )
 
     res = _kiem_ke(client, ctx["token"], ctx["shop_id"], [

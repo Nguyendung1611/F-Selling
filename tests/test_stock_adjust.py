@@ -20,7 +20,7 @@ def _ton_kho(product_id):
 def _dieu_chinh(client, token, product_id, delta):
     return client.post(
         f"/api/products/{product_id}/stock",
-        json={"delta": delta},
+        json={"delta": delta, "reason": "Kiểm thử điều chỉnh kho"},
         headers=auth(token),
     )
 
@@ -60,6 +60,27 @@ def test_delta_khong_duoc_bang_0(client):
     assert res.status_code == 400
 
 
+def test_dieu_chinh_kho_bat_buoc_co_ly_do(client):
+    """Nhập/xuất tay không có chứng từ NCC nên lý do là dấu vết bắt buộc."""
+    ctx = seller_with_shop(client)
+    product_id = ctx["product"]["id"]
+
+    missing = client.post(
+        f"/api/products/{product_id}/stock",
+        json={"delta": 5},
+        headers=auth(ctx["token"]),
+    )
+    blank = client.post(
+        f"/api/products/{product_id}/stock",
+        json={"delta": 5, "reason": "   "},
+        headers=auth(ctx["token"]),
+    )
+
+    assert missing.status_code in (400, 422)
+    assert blank.status_code in (400, 422)
+    assert _ton_kho(product_id) == 10
+
+
 def test_nhap_xuat_lien_tiep_cong_don_dung(client):
     """Nhiều lần điều chỉnh phải cộng dồn theo tồn thực, không ghi đè."""
     ctx = seller_with_shop(client)  # 10
@@ -97,6 +118,7 @@ def test_ghi_log_he_thong(client):
         )
         assert log is not None
         assert "Nhập" in log.details
+        assert "Kiểm thử điều chỉnh kho" in log.details
     finally:
         session.close()
 
@@ -119,7 +141,8 @@ def test_admin_dieu_chinh_duoc(client):
 def test_chua_dang_nhap_khong_dieu_chinh_duoc(client):
     ctx = seller_with_shop(client)
     res = client.post(
-        f"/api/products/{ctx['product']['id']}/stock", json={"delta": 5}
+        f"/api/products/{ctx['product']['id']}/stock",
+        json={"delta": 5, "reason": "Kiểm thử nhập kho"},
     )
     assert res.status_code == 401
 

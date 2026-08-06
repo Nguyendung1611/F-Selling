@@ -119,6 +119,23 @@ ROUTES_BO_SUNG = {
     # H1: chủ shop tự cài luật tích/đổi điểm; POS và nhân viên bán hàng được đọc.
     ("GET", "/api/loyalty/{shop_id}"),
     ("PUT", "/api/loyalty/{shop_id}"),
+    # I1: hồ sơ NCC + công nợ phải trả. Route ``member`` đứng riêng để ID nhà
+    # cung cấp không bị nhầm với shop_id của route danh sách.
+    ("POST", "/api/suppliers/{shop_id}"),
+    ("GET", "/api/suppliers/{shop_id}"),
+    ("GET", "/api/suppliers/member/{supplier_id}"),
+    ("PUT", "/api/suppliers/member/{supplier_id}"),
+    ("PUT", "/api/suppliers/member/{supplier_id}/status"),
+    ("DELETE", "/api/suppliers/member/{supplier_id}"),
+    ("POST", "/api/suppliers/member/{supplier_id}/payments"),
+    # I1: DRAFT chỉ là bản nháp; confirm mới tăng kho và ghi công nợ trong cùng
+    # transaction. POSTED không sửa/xóa để giữ nguyên chứng từ.
+    ("POST", "/api/purchase-receipts/{shop_id}"),
+    ("GET", "/api/purchase-receipts/{shop_id}"),
+    ("GET", "/api/purchase-receipts/receipt/{receipt_id}"),
+    ("PUT", "/api/purchase-receipts/receipt/{receipt_id}"),
+    ("DELETE", "/api/purchase-receipts/receipt/{receipt_id}"),
+    ("POST", "/api/purchase-receipts/receipt/{receipt_id}/confirm"),
 }
 
 

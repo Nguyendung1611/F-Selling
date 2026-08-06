@@ -35,7 +35,7 @@ def _gia_von(product_id):
 
 
 def _nhap_kho(client, token, product_id, delta, unit_cost=None):
-    body = {"delta": delta}
+    body = {"delta": delta, "reason": "Kiểm thử điều chỉnh kho"}
     if unit_cost is not None:
         body["unit_cost"] = unit_cost
     return client.post(

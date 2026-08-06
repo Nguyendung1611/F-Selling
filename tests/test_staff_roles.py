@@ -175,7 +175,7 @@ def test_cashier_duoc_pos_crm_nhung_khong_duoc_kho_voucher_bao_cao(client):
         ),
         client.post(
             f"/api/products/{ctx['product']['id']}/stock",
-            json={"delta": 5},
+            json={"delta": 5, "reason": "Kiểm thử nhập kho"},
             headers=headers,
         ),
         client.post(
@@ -226,7 +226,7 @@ def test_warehouse_duoc_kho_nhung_khong_duoc_crm_voucher_bao_cao(client):
     ).status_code == 200
     assert client.post(
         f"/api/products/{ctx['product']['id']}/stock",
-        json={"delta": 3},
+        json={"delta": 3, "reason": "Kiểm thử nhập kho"},
         headers=headers,
     ).status_code == 200
 

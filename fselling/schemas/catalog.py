@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ProductCreate(BaseModel):
@@ -27,6 +27,9 @@ class VoucherCreate(BaseModel):
 
 class StockAdjust(BaseModel):
     delta: int  # >0 nhập kho, <0 xuất kho
+    # Điều chỉnh kho thủ công nằm ngoài phiếu nhập, nên bắt buộc nói rõ lý do
+    # để lịch sử không còn những dòng tăng/giảm tồn không thể đối chiếu.
+    reason: str = Field(min_length=1, max_length=500)
     # Đơn giá của lô đang nhập, dùng để tính lại giá vốn bình quân gia quyền.
     # None = không khai (giữ nguyên giá vốn cũ); 0 = hàng tặng, là một đơn giá
     # thật và phải kéo bình quân xuống. JSON body giữ được sự khác biệt đó, khác

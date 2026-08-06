@@ -24,6 +24,7 @@ from .. import models
 from ..core.i18n import tr
 from ..dependencies import require_cost_visibility, require_shop_access
 from ..schemas.catalog import WriteOffCreate
+from . import inventory_service
 from .log_service import log_system_action
 
 # Chốt danh sách như `PAYMENT_METHODS` ở F4. Trường này mang hệ quả tài chính
@@ -166,9 +167,16 @@ def create_write_off(
 
     dong_gui = _gom_dong(request)
     operation_key = (request.operation_id or "").strip() or uuid.uuid4().hex
+    # Hủy hàng đọc tồn/lô để chốt cả số lượng lẫn giá vốn rồi mới ghi. Phải lấy
+    # cùng shop write-lock với bán/nhập/kiểm kê trước mọi lần đọc, nếu không
+    # phép gán từ object cũ có thể nuốt tồn vừa nhập và chốt sai giá vốn.
+    inventory_service.lock_shop_for_inventory(db, shop_id)
+    db.expire_all()
     truoc = _phieu_da_ghi(db, operation_key, shop_id)
     if truoc is not None:
-        return _ket_qua(db, truoc, lap_lai=True)
+        result = _ket_qua(db, truoc, lap_lai=True)
+        db.rollback()
+        return result
 
     san_pham = {
         p.id: p

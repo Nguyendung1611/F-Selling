@@ -89,6 +89,7 @@
 
         'admin.page_title': 'Bảng điều khiển Admin | F-Selling',
         'admin.language_selector_aria': 'Chọn ngôn ngữ quản trị',
+        'admin.nav.purchasing': 'Nhập Hàng',
         'admin.tab.dashboard': 'Doanh thu Shop',
         'admin.tab.logs': 'Nhật Ký Hệ Thống',
         'admin.dashboard.title': 'Doanh thu các Shop',
@@ -192,6 +193,7 @@
 
         'admin.page_title': 'Admin Dashboard | F-Selling',
         'admin.language_selector_aria': 'Choose admin language',
+        'admin.nav.purchasing': 'Purchasing',
         'admin.tab.dashboard': 'Store Revenue',
         'admin.tab.logs': 'System Logs',
         'admin.dashboard.title': 'Store Revenue',

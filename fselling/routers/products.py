@@ -174,7 +174,7 @@ def adjust_stock(
 ):
     return catalog_service.adjust_stock(
         db, current_user, product_id, payload.delta, payload.unit_cost,
-        payload.expiry_date,
+        payload.expiry_date, payload.reason,
     )
 
 

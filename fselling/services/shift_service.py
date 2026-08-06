@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy import case, func, text
@@ -259,6 +259,114 @@ def _lock_open_shift(db: Session, shift_id: int) -> bool:
         {"shift_id": shift_id, "open_status": STATUS_OPEN},
     )
     return result.rowcount == 1
+
+
+def add_external_cash_out(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    *,
+    amount: float,
+    operation_id: str,
+    note: str,
+) -> Tuple[models.CashMovement, bool]:
+    """Ghi một khoản chi liên kết từ service khác, KHÔNG commit.
+
+    Service gọi hàm giữ transaction chứa cả chứng từ nguồn lẫn chuyển động két.
+    Vì vậy không thể có tình trạng công nợ đã giảm nhưng két chưa trừ (hoặc
+    ngược lại). Retry cùng nội dung trả lại dòng cũ; cùng mã nhưng nội dung khác
+    bị từ chối.
+    """
+    amount = float(amount)
+    if not math.isfinite(amount) or amount <= MONEY_EPSILON:
+        raise HTTPException(
+            status_code=400, detail=tr("Số tiền chi phải lớn hơn 0")
+        )
+    clean_note = _note(note, required=True)
+    assert clean_note is not None
+    key = (operation_id or "").strip()
+    if len(key) < 8 or len(key) > 128:
+        raise HTTPException(status_code=400, detail=tr("Mã thao tác không hợp lệ"))
+
+    def same(movement: models.CashMovement) -> bool:
+        shift_shop_id = db.query(models.CashShift.shop_id).filter(
+            models.CashShift.id == movement.shift_id
+        ).scalar()
+        return (
+            shift_shop_id == shop_id
+            and movement.created_by_user_id == current_user.id
+            and movement.movement_type == MOVEMENT_PAY_OUT
+            and movement.direction == DIRECTION_OUT
+            and abs(float(movement.amount) - amount) <= MONEY_EPSILON
+            and movement.note == clean_note
+        )
+
+    existing = db.query(models.CashMovement).filter(
+        models.CashMovement.operation_id == key
+    ).first()
+    if existing is not None:
+        if not same(existing):
+            raise HTTPException(
+                status_code=409,
+                detail=tr("Mã thao tác đã được dùng cho một khoản chi khác"),
+            )
+        return existing, False
+
+    shift = (
+        db.query(models.CashShift)
+        .filter(
+            models.CashShift.shop_id == shop_id,
+            models.CashShift.opened_by_user_id == current_user.id,
+            models.CashShift.status == STATUS_OPEN,
+        )
+        .order_by(models.CashShift.id.desc())
+        .first()
+    )
+    if shift is None:
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Hãy mở ca của bạn trước khi trả nhà cung cấp bằng tiền mặt"),
+        )
+    if not _lock_open_shift(db, shift.id):
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Ca vừa được đóng; vui lòng tải lại và mở ca mới"),
+        )
+
+    expected = _expected_cash(shift, _cash_totals(db, shift.id))
+    if amount > expected + MONEY_EPSILON:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Tiền trả nhà cung cấp vượt tiền dự kiến trong ca ({amount}đ)",
+                amount=f"{expected:,.0f}",
+            ),
+        )
+
+    movement = models.CashMovement(
+        shift_id=shift.id,
+        movement_type=MOVEMENT_PAY_OUT,
+        direction=DIRECTION_OUT,
+        amount=amount,
+        operation_id=key,
+        note=clean_note,
+        created_by_user_id=current_user.id,
+    )
+    try:
+        # SAVEPOINT giữ transaction của chứng từ nguồn khi unique key bị tranh.
+        with db.begin_nested():
+            db.add(movement)
+            db.flush()
+    except IntegrityError:
+        duplicate = db.query(models.CashMovement).filter(
+            models.CashMovement.operation_id == key
+        ).first()
+        if duplicate is None or not same(duplicate):
+            raise
+        return duplicate, False
+    return movement, True
 
 
 def get_current_shift(
