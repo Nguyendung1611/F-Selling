@@ -319,6 +319,76 @@ def test_khong_bao_gio_hoan_qua_so_khach_da_tra(client):
     assert da_hoan == tong
 
 
+def test_chenh_lam_tron_am_duoc_rai_de_khong_dong_nao_hoan_am(client):
+    """Các lần trước có thể đã dùng hết tiền hoàn dù vẫn còn hàng để trả."""
+    ctx = seller_with_shop(client)
+    products = [
+        _tao_sp(client, ctx, gia_ban=1, ton=2, ten=_unique(f"SP le {i}"))
+        for i in range(5)
+    ]
+    voucher = client.post(
+        "/api/vouchers",
+        params={"shop_id": ctx["shop_id"]},
+        json={
+            "code": "GIAM2D",
+            "discount_type": "flat",
+            "discount_value": 2,
+            "min_order_value": 0,
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert voucher.status_code == 200, voucher.text
+    order_id = _ban(
+        client,
+        ctx,
+        [(product, 1) for product in products],
+        voucher="GIAM2D",
+    )
+    detail = _chi_tiet(client, ctx, order_id)
+    assert detail["subtotal"] == 5
+    assert detail["total_amount"] == 3
+    line_ids = [row["id"] for row in detail["items"]]
+
+    # 0,6đ làm tròn thành 1đ: ba phiếu đầu đã hoàn đủ 3đ khách từng trả.
+    for line_id in line_ids[:3]:
+        returned = _tra(
+            client,
+            ctx,
+            order_id,
+            [{"order_item_id": line_id, "quantity": 1}],
+        )
+        assert returned.status_code == 200, returned.text
+        assert returned.json()["return"]["refund_amount"] == 1
+
+    final = _tra(
+        client,
+        ctx,
+        order_id,
+        [
+            {"order_item_id": line_ids[3], "quantity": 1},
+            {"order_item_id": line_ids[4], "quantity": 1},
+        ],
+    )
+    assert final.status_code == 200, final.text
+    assert final.json()["return"]["refund_amount"] == 0
+
+    session = SessionLocal()
+    try:
+        rows = (
+            session.query(models.OrderReturnItem)
+            .filter(
+                models.OrderReturnItem.return_id
+                == final.json()["return"]["id"]
+            )
+            .all()
+        )
+        assert len(rows) == 2
+        assert all(float(row.refund_amount) >= 0 for row in rows)
+        assert sum(float(row.refund_amount) for row in rows) == 0
+    finally:
+        session.close()
+
+
 # ---------- Chỉ đơn đã thanh toán ----------
 def test_don_chua_thanh_toan_khong_tra_hang_duoc(client):
     ctx = seller_with_shop(client)
@@ -381,6 +451,51 @@ def test_bam_hai_lan_cung_ma_thao_tac_chi_tao_mot_phieu(client):
     assert lan_hai.json()["return"]["id"] == lan_mot.json()["return"]["id"]
     assert lan_hai.json()["returned_total"] == 50000
     assert _sp(sp["id"]).stock == 8, "Retry KHÔNG được cộng kho lần thứ hai"
+
+
+def test_cung_ma_nhung_doi_noi_dung_tra_hang_bi_tu_choi(client):
+    ctx = seller_with_shop(client)
+    sp = _tao_sp(client, ctx, gia_ban=50000, ton=10, gia_von=30000)
+    order_id = _ban(client, ctx, [(sp, 3)])
+    dong = _dong_don(client, ctx, order_id, sp["id"])
+    ma = _op()
+
+    first = client.post(
+        f"/api/orders/{order_id}/returns",
+        json={
+            "items": [
+                {
+                    "order_item_id": dong["id"],
+                    "quantity": 1,
+                    "restock": True,
+                }
+            ],
+            "method": "transfer",
+            "reason": "Khách đổi ý",
+            "operation_id": ma,
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert first.status_code == 200, first.text
+
+    changed = client.post(
+        f"/api/orders/{order_id}/returns",
+        json={
+            "items": [
+                {
+                    "order_item_id": dong["id"],
+                    "quantity": 2,
+                    "restock": False,
+                }
+            ],
+            "method": "cash",
+            "reason": "Lý do khác",
+            "operation_id": ma,
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert changed.status_code == 409, changed.text
+    assert _dong_don(client, ctx, order_id, sp["id"])["returned_quantity"] == 1
 
 
 def test_cung_ma_thao_tac_cho_don_khac_bi_tu_choi(client):

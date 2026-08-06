@@ -233,6 +233,29 @@ _MIGRATIONS = [
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_offline_uuid "
     "ON orders(offline_uuid)",
     "CREATE INDEX IF NOT EXISTS ix_orders_offline_issue ON orders(offline_issue)",
+    # H1: chương trình tích điểm. Hai bảng loyalty_* do create_all() tạo mới;
+    # các ALTER dưới đây nâng DB cũ mà tuyệt đối không backfill điểm cho đơn cũ.
+    "ALTER TABLE customers ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
+    "ALTER TABLE orders ADD COLUMN loyalty_points_redeemed INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE orders ADD COLUMN loyalty_discount_amount FLOAT NOT NULL DEFAULT 0",
+    "ALTER TABLE orders ADD COLUMN loyalty_earn_amount_step FLOAT",
+    "ALTER TABLE orders ADD COLUMN loyalty_earn_points_step INTEGER",
+    "ALTER TABLE orders ADD COLUMN loyalty_expiry_days_snapshot INTEGER",
+    "ALTER TABLE orders ADD COLUMN loyalty_points_earned INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE orders ADD COLUMN loyalty_awarded_at DATETIME",
+    "ALTER TABLE order_returns ADD COLUMN loyalty_points_restored INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE order_returns ADD COLUMN loyalty_points_reversed INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE order_returns ADD COLUMN operation_fingerprint VARCHAR(64)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_loyalty_programs_shop_id "
+    "ON loyalty_programs(shop_id)",
+    # Điểm quy đổi ra tiền, nên retry mà ghi hai ledger entry là lỗi sổ tiền.
+    # Index này phải được verify và fail-fast như payment idempotency.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_loyalty_point_entries_idempotency_key "
+    "ON loyalty_point_entries(idempotency_key)",
+    "CREATE INDEX IF NOT EXISTS ix_loyalty_point_entries_customer_created "
+    "ON loyalty_point_entries(customer_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_loyalty_point_entries_shop_created "
+    "ON loyalty_point_entries(shop_id, created_at)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
@@ -251,11 +274,74 @@ _REQUIRED_INDEXES = [
     "ux_order_returns_idempotency_key",
     "ux_stock_write_offs_idempotency_key",
     "ux_orders_offline_uuid",
+    "ux_loyalty_programs_shop_id",
+    "ux_loyalty_point_entries_idempotency_key",
 ]
+
+# Thiếu/sai một index trong nhóm này thì tiếp tục chạy có thể nhân đôi tiền,
+# tồn kho hoặc điểm. Không chỉ kiểm TÊN: cùng tên nhưng non-unique, trỏ
+# nhầm cột, hay có mệnh đề WHERE sai cũng không bảo vệ được gì.
+# Mỗi spec là (bảng, các cột, predicate). Predicate None nghĩa là index
+# phải bao phủ TOÀN BỘ bảng; riêng ca thu ngân cố ý chỉ unique khi OPEN.
+_FINANCIAL_INDEX_SPECS = {
+    "ux_order_payments_idempotency_key": (
+        "order_payments",
+        ("idempotency_key",),
+        None,
+    ),
+    "ux_orders_operation_id": ("orders", ("operation_id",), None),
+    "ux_cash_shifts_shop_user_open": (
+        "cash_shifts",
+        ("shop_id", "opened_by_user_id"),
+        "status = 'OPEN'",
+    ),
+    "ux_cash_movements_operation_id": (
+        "cash_movements",
+        ("operation_id",),
+        None,
+    ),
+    "ux_order_returns_idempotency_key": (
+        "order_returns",
+        ("idempotency_key",),
+        None,
+    ),
+    "ux_orders_offline_uuid": ("orders", ("offline_uuid",), None),
+    "ux_loyalty_programs_shop_id": (
+        "loyalty_programs",
+        ("shop_id",),
+        None,
+    ),
+    "ux_loyalty_point_entries_idempotency_key": (
+        "loyalty_point_entries",
+        ("idempotency_key",),
+        None,
+    ),
+}
+_FINANCIAL_INDEXES = frozenset(_FINANCIAL_INDEX_SPECS)
 
 _INDEX_EXISTS = (
     "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = :name"
 )
+
+
+def _normalized_index_predicate(index_sql: object) -> str | None:
+    """Lấy và chuẩn hóa phần sau ``WHERE`` của lệnh tạo index.
+
+    SQLite giữ nguyên SQL với khoảng trắng khác nhau tùy index được
+    tạo bởi migration hay SQLAlchemy. Bỏ khoảng trắng + không phân biệt
+    hoa thường là đủ để so đúng predicate của dự án; predicate khác
+    cùng nghĩa vẫn fail-closed để người vận hành kiểm tra lại.
+    """
+    if not index_sql:
+        return None
+    compact = " ".join(str(index_sql).strip().split())
+    lower = compact.lower()
+    marker = " where "
+    position = lower.find(marker)
+    if position < 0:
+        return None
+    predicate = compact[position + len(marker):]
+    return "".join(predicate.lower().split())
 
 # Backfill A1a: khớp dòng đơn hàng cũ với sản phẩm theo (shop của đơn, tên sản phẩm).
 # An toàn vì `create_product` đảm bảo tên sản phẩm là duy nhất trong một shop,
@@ -392,10 +478,62 @@ def verify_required_indexes(db: Session) -> List[str]:
     missing: List[str] = []
     for name in _REQUIRED_INDEXES:
         try:
-            found = db.execute(text(_INDEX_EXISTS), {"name": name}).scalar() or 0
+            if name in _FINANCIAL_INDEX_SPECS:
+                table_name, expected_columns, expected_predicate = (
+                    _FINANCIAL_INDEX_SPECS[name]
+                )
+                safe_table = table_name.replace('"', '""')
+                index_rows = db.execute(
+                    text(f'PRAGMA index_list("{safe_table}")')
+                ).fetchall()
+                row = next(
+                    (item for item in index_rows if item[1] == name),
+                    None,
+                )
+                unique = bool(row is not None and int(row[2] or 0) == 1)
+                partial = bool(
+                    row is not None
+                    and len(row) > 4
+                    and int(row[4] or 0) == 1
+                )
+                safe_name = name.replace('"', '""')
+                columns = tuple(
+                    item[2]
+                    for item in db.execute(
+                        text(f'PRAGMA index_info("{safe_name}")')
+                    ).fetchall()
+                )
+                expected_partial = expected_predicate is not None
+                predicate_matches = not expected_partial
+                if expected_partial and partial:
+                    index_sql = db.execute(
+                        text(
+                            "SELECT sql FROM sqlite_master "
+                            "WHERE type = 'index' AND name = :name"
+                        ),
+                        {"name": name},
+                    ).scalar()
+                    predicate_matches = _normalized_index_predicate(
+                        index_sql
+                    ) == _normalized_index_predicate(
+                        f"CREATE INDEX x ON y(z) WHERE {expected_predicate}"
+                    )
+                found = (
+                    unique
+                    and columns == expected_columns
+                    and partial == expected_partial
+                    and predicate_matches
+                )
+            else:
+                found = bool(
+                    db.execute(
+                        text(_INDEX_EXISTS), {"name": name}
+                    ).scalar()
+                    or 0
+                )
         except SQLAlchemyError as e:
             print(f"[MIGRATE] Không kiểm được index '{name}': {e}")
-            continue
+            found = False
         if not found:
             missing.append(name)
 
@@ -495,17 +633,9 @@ def initialize() -> None:
         dedupe_product_codes(db)
         run_migrations(db)
         missing_indexes = verify_required_indexes(db)
-        financial_indexes = {
-            "ux_order_payments_idempotency_key",
-            "ux_orders_operation_id",
-            "ux_cash_shifts_shop_user_open",
-            "ux_cash_movements_operation_id",
-            # Máy bán offline gửi lại phiếu là chuyện BÌNH THƯỜNG (mất sóng giữa
-            # chừng, người dùng bấm đồng bộ lại). Không có index này thì mỗi lần
-            # gửi lại là một đơn mới: doanh thu và tồn kho cùng nhân đôi.
-            "ux_orders_offline_uuid",
-        }
-        missing_financial_indexes = financial_indexes.intersection(missing_indexes)
+        missing_financial_indexes = _FINANCIAL_INDEXES.intersection(
+            missing_indexes
+        )
         if missing_financial_indexes:
             raise RuntimeError(
                 "Thiếu unique index bảo vệ sổ tiền: "

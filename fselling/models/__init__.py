@@ -10,6 +10,7 @@ from .catalog import (
     Voucher,
 )
 from .customer import Customer
+from .loyalty import LoyaltyPointEntry, LoyaltyProgram
 from .order import (
     Order,
     OrderItem,
@@ -43,4 +44,6 @@ __all__ = [
     "CashMovement",
     "SystemLog",
     "Customer",
+    "LoyaltyProgram",
+    "LoyaltyPointEntry",
 ]

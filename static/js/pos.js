@@ -12,6 +12,20 @@ let categories = [];
 let currentCategoryId = null;
 let currentVoucher = null;
 let selectedCustomerId = null;  // C2d: khách gắn vào đơn (null = vãng lai)
+let loyaltyProgram = null;
+let selectedCustomerPointsBalance = 0;
+let selectedCustomerActive = false;
+let loyaltyPointsRequested = 0;
+let loyaltyPointsApplied = 0;
+let loyaltyDiscount = 0;
+let loyaltyInputDirty = false;
+let loyaltyMessageKey = null;
+let loyaltyMessageOptions = {};
+let loyaltyMessageColor = '#C4B5FD';
+let loyaltyLoadRequestId = 0;
+let customerDetailRequestId = 0;
+let voucherRequestId = 0;
+let voucherBusy = false;
 let discount = 0;
 let subtotal = 0;
 let total = 0;
@@ -178,7 +192,12 @@ async function loadShop() {
             localStorage.setItem('currentShopId', currentShopId);
             sel.value = currentShopId;
         }
-        await Promise.all([loadCategories(), loadProducts(), loadCurrentShift()]);
+        await Promise.all([
+            loadCategories(),
+            loadProducts(),
+            loadCurrentShift(),
+            loadLoyaltyProgram()
+        ]);
         phucHoiCheckoutDangDo();
     } catch(e) {
         showToast(e.message || dich('pos.order.load_shops_error'));
@@ -200,7 +219,13 @@ async function changeShopPOS() {
     currentShopId = shopMoi;
     localStorage.setItem('currentShopId', currentShopId);
     resetPOS();
-    await Promise.all([loadCategories(), loadProducts(), loadCurrentShift()]);
+    loyaltyProgram = null;
+    await Promise.all([
+        loadCategories(),
+        loadProducts(),
+        loadCurrentShift(),
+        loadLoyaltyProgram()
+    ]);
 }
 
 async function loadProducts() {
@@ -231,6 +256,447 @@ async function loadCategories() {
         categories = res.filter(c => c.is_active !== false);
         renderCategories();
     } catch (e) { console.error(e); }
+}
+
+// ===== Điểm khách thân thiết =====
+//
+// POS chỉ tính trước để thu ngân nhìn thấy. Server đọc lại cấu hình, số dư và
+// voucher rồi mới chốt số điểm thực dùng; response server luôn thắng con số
+// đang hiển thị cục bộ.
+
+async function loadLoyaltyProgram() {
+    const shopId = Number(currentShopId);
+    const requestId = ++loyaltyLoadRequestId;
+    if (!shopId) {
+        loyaltyProgram = null;
+        capNhatHopDiem();
+        return null;
+    }
+    try {
+        const program = await apiCall(`/loyalty/${shopId}`);
+        if (requestId !== loyaltyLoadRequestId || shopId !== Number(currentShopId)) {
+            return null;
+        }
+        loyaltyProgram = program || null;
+        // Trạng thái đang retry phải giữ nguyên payload/điểm của lần bấm đầu.
+        // Cấu hình vừa tải chỉ được tính lại cho một giỏ còn tự do chỉnh sửa.
+        if (!checkoutOperationId && !currentOrderId && !pendingCashOrderId) {
+            if (!loyaltyProgram?.enabled) {
+                xoaDiemDaApDung({ clearInput: true, clearMessage: true });
+            } else {
+                tinhLaiDiemDaApDung();
+            }
+            updateUI();
+        } else {
+            capNhatHopDiem();
+        }
+        return loyaltyProgram;
+    } catch (e) {
+        if (requestId !== loyaltyLoadRequestId || shopId !== Number(currentShopId)) {
+            return null;
+        }
+        loyaltyProgram = null;
+        if (!checkoutOperationId && !currentOrderId && !pendingCashOrderId) {
+            xoaDiemDaApDung({ clearInput: true, clearMessage: true });
+            updateUI();
+        } else {
+            capNhatHopDiem();
+        }
+        showToast(dich('pos.loyalty.load_error'));
+        return null;
+    }
+}
+
+function tienSauVoucher() {
+    return Math.max(0, Number(subtotal || 0) - Number(discount || 0));
+}
+
+function datThongBaoDiem(key = null, options = {}, color = '#C4B5FD') {
+    loyaltyMessageKey = key;
+    loyaltyMessageOptions = options || {};
+    loyaltyMessageColor = color;
+}
+
+function xoaDiemDaApDung({ clearInput = false, clearMessage = false } = {}) {
+    loyaltyPointsRequested = 0;
+    loyaltyPointsApplied = 0;
+    loyaltyDiscount = 0;
+    loyaltyInputDirty = false;
+    total = tienSauVoucher();
+    if (clearInput) {
+        const input = document.getElementById('loyaltyPointsInput');
+        if (input) input.value = '';
+    }
+    if (clearMessage) datThongBaoDiem();
+}
+
+function coTheDungDiemChoKhach() {
+    return Boolean(
+        loyaltyProgram?.enabled
+        && selectedCustomerId !== null
+        && selectedCustomerActive
+    );
+}
+
+function tinhDiemDuKienNhan() {
+    if (!coTheDungDiemChoKhach()) return 0;
+    const mocTien = Number(loyaltyProgram?.earn_amount || 0);
+    const diemMoiMoc = Number(loyaltyProgram?.earn_points || 0);
+    if (!(mocTien > 0) || !Number.isInteger(diemMoiMoc) || diemMoiMoc <= 0) {
+        return 0;
+    }
+    return Math.floor(Math.max(0, Number(total || 0)) / mocTien) * diemMoiMoc;
+}
+
+function tinhDiemApDungTaiMay(requested) {
+    if (!Number.isInteger(requested) || requested < 0) {
+        return { errorKey: 'pos.loyalty.integer_required' };
+    }
+    const balance = Math.trunc(Number(selectedCustomerPointsBalance) || 0);
+    if (requested > balance) {
+        return {
+            errorKey: 'pos.loyalty.over_balance',
+            errorOptions: { points: dinhDangSoPOS(balance) }
+        };
+    }
+    if (requested === 0) {
+        return { requested: 0, applied: 0, discountAmount: 0 };
+    }
+
+    const pointsPerBlock = Number(loyaltyProgram?.redeem_points || 0);
+    const amountPerBlock = Number(loyaltyProgram?.redeem_amount || 0);
+    const maxPercent = Number(loyaltyProgram?.max_redeem_percent || 0);
+    const minimum = Math.max(0, Math.trunc(Number(loyaltyProgram?.min_redeem_points || 0)));
+    if (
+        !Number.isInteger(pointsPerBlock)
+        || pointsPerBlock <= 0
+        || !(amountPerBlock > 0)
+        || !(maxPercent > 0)
+        || maxPercent > 100
+    ) {
+        return { errorKey: 'pos.loyalty.no_block' };
+    }
+
+    const requestedBlocks = Math.floor(requested / pointsPerBlock);
+    const capAmount = tienSauVoucher() * maxPercent / 100;
+    const capBlocks = Math.floor((capAmount + 1e-9) / amountPerBlock);
+    const appliedBlocks = Math.min(requestedBlocks, Math.max(0, capBlocks));
+    const applied = appliedBlocks * pointsPerBlock;
+    if (applied <= 0) return { errorKey: 'pos.loyalty.no_block' };
+    if (applied < minimum) {
+        return {
+            errorKey: 'pos.loyalty.below_min',
+            errorOptions: { points: dinhDangSoPOS(minimum) }
+        };
+    }
+    return {
+        requested,
+        applied,
+        discountAmount: appliedBlocks * amountPerBlock
+    };
+}
+
+function apDungKetQuaDiemTaiMay(result) {
+    // Sau khi trần hóa đơn làm số điểm giảm xuống, ô nhập cũng hiện số đã áp.
+    // State phải khớp con số đang thấy; giữ yêu cầu cũ ở biến ẩn sẽ khiến thêm
+    // hàng vào giỏ tự động dùng nhiều điểm hơn mà thu ngân không hề bấm lại.
+    loyaltyPointsRequested = result.applied;
+    loyaltyPointsApplied = result.applied;
+    loyaltyDiscount = result.discountAmount;
+    loyaltyInputDirty = false;
+    const input = document.getElementById('loyaltyPointsInput');
+    if (input) input.value = result.applied ? dinhDangSoPOS(result.applied) : '';
+    total = Math.max(0, tienSauVoucher() - loyaltyDiscount);
+    const options = {
+        requested: dinhDangSoPOS(result.requested),
+        applied: dinhDangSoPOS(result.applied),
+        points: dinhDangSoPOS(result.applied),
+        amount: dinhDangTien(result.discountAmount)
+    };
+    datThongBaoDiem(
+        result.applied < result.requested
+            ? 'pos.loyalty.applied_adjusted'
+            : 'pos.loyalty.applied',
+        options,
+        '#86EFAC'
+    );
+}
+
+function tinhLaiDiemDaApDung() {
+    total = tienSauVoucher();
+    if (loyaltyInputDirty || loyaltyPointsRequested <= 0) {
+        loyaltyPointsApplied = 0;
+        loyaltyDiscount = 0;
+        return;
+    }
+    if (!coTheDungDiemChoKhach()) {
+        xoaDiemDaApDung({ clearInput: true, clearMessage: true });
+        return;
+    }
+    const result = tinhDiemApDungTaiMay(loyaltyPointsRequested);
+    if (result.errorKey) {
+        loyaltyPointsApplied = 0;
+        loyaltyDiscount = 0;
+        total = tienSauVoucher();
+        datThongBaoDiem(
+            result.errorKey,
+            result.errorOptions || {},
+            '#FCA5A5'
+        );
+        return;
+    }
+    apDungKetQuaDiemTaiMay(result);
+}
+
+function capNhatHopDiem() {
+    const box = document.getElementById('loyaltyBox');
+    if (!box) return;
+    capNhatLuaChonBoUuDaiOffline();
+    // Không cho bắt đầu một lần dùng điểm mới khi offline. Nếu đang retry một
+    // payload cũ có điểm, phần giảm vẫn nằm ở bảng tổng nhưng hộp nhập bị ẩn.
+    const online = !window.OfflineBan?.dangOffline();
+    const visible = coTheDungDiemChoKhach() && online;
+    box.style.display = visible ? 'block' : 'none';
+    if (!visible) return;
+
+    const balance = Math.trunc(Number(selectedCustomerPointsBalance) || 0);
+    document.getElementById('loyaltyBalanceText').innerText = dich(
+        'pos.loyalty.balance',
+        { points: dinhDangSoPOS(balance) }
+    );
+    document.getElementById('loyaltyRuleText').innerText = dich(
+        'pos.loyalty.rule',
+        {
+            points: dinhDangSoPOS(loyaltyProgram.redeem_points || 0),
+            amount: dinhDangTien(loyaltyProgram.redeem_amount || 0),
+            percent: dinhDangSoPOS(loyaltyProgram.max_redeem_percent || 0)
+        }
+    );
+    const locked = Boolean(
+        currentOrderId || pendingCashOrderId || checkoutOperationId || voucherBusy
+    );
+    const input = document.getElementById('loyaltyPointsInput');
+    const button = document.getElementById('btnApplyLoyalty');
+    if (input) input.disabled = locked || balance <= 0;
+    if (button) button.disabled = locked || balance <= 0;
+
+    const msg = document.getElementById('loyaltyMsg');
+    if (msg) {
+        msg.style.color = loyaltyMessageColor;
+        msg.innerText = loyaltyMessageKey
+            ? dich(loyaltyMessageKey, loyaltyMessageOptions)
+            : '';
+    }
+    const preview = document.getElementById('loyaltyEarnPreview');
+    if (preview) {
+        preview.innerText = dich('pos.loyalty.earn_preview', {
+            points: dinhDangSoPOS(tinhDiemDuKienNhan())
+        });
+    }
+}
+
+/**
+ * Khi máy mất mạng trước lúc gửi request, cho thu ngân chủ động bỏ Voucher và
+ * điểm để đi tiếp bằng luồng bán offline. Voucher cần server đếm lượt dùng,
+ * điểm cần server khóa số dư, nên cả hai đều không được mang vào phiếu offline.
+ */
+function requestTaoDonCoTheDaRoiMay() {
+    return Boolean(
+        checkoutBusy
+        || checkoutOperationId
+        || currentOrderId
+        || pendingCashOrderId
+        || pendingCheckoutState?.phase === 'creating'
+    );
+}
+
+function khoaThongBaoRetryUuDai(payload = null) {
+    return payload?.voucher_code || currentVoucher
+        ? 'pos.online_discount.network_retry'
+        : 'pos.loyalty.network_retry';
+}
+
+function chiTietUuDaiOnline({
+    voucherCode = currentVoucher,
+    voucherDiscount = discount,
+    points = loyaltyPointsApplied,
+    pointsDiscount = loyaltyDiscount
+} = {}) {
+    const coVoucher = Boolean(voucherCode);
+    const soDiem = Math.max(0, Math.trunc(Number(points) || 0));
+    const coDiem = soDiem > 0;
+    let loai = 'points';
+    let moTa = '';
+    if (coVoucher && coDiem) {
+        loai = 'both';
+        moTa = dich('pos.online_discount.name_both', {
+            code: voucherCode,
+            voucherAmount: dinhDangTien(voucherDiscount),
+            points: dinhDangSoPOS(soDiem),
+            pointsAmount: dinhDangTien(pointsDiscount)
+        });
+    } else if (coVoucher) {
+        loai = 'voucher';
+        moTa = dich('pos.online_discount.name_voucher', {
+            code: voucherCode,
+            amount: dinhDangTien(voucherDiscount)
+        });
+    } else if (coDiem) {
+        moTa = dich('pos.online_discount.name_points', {
+            points: dinhDangSoPOS(soDiem),
+            amount: dinhDangTien(pointsDiscount)
+        });
+    }
+    return { coVoucher, coDiem, loai, moTa };
+}
+
+function capNhatLuaChonBoUuDaiOffline() {
+    const box = document.getElementById('loyaltyOfflineChoice');
+    if (!box) return;
+    const chiTiet = chiTietUuDaiOnline();
+    const coTheBoUuDai = Boolean(
+        window.OfflineBan?.dangOffline()
+        && (chiTiet.coVoucher || chiTiet.coDiem)
+        && !requestTaoDonCoTheDaRoiMay()
+    );
+    box.style.display = coTheBoUuDai ? 'block' : 'none';
+    if (!coTheBoUuDai) return;
+
+    const title = document.getElementById('loyaltyOfflineTitle');
+    const summary = document.getElementById('loyaltyOfflineSummary');
+    const buttonText = document.getElementById('loyaltyOfflineButtonText');
+    if (title) title.innerText = dich('pos.online_discount.offline_title');
+    if (summary) {
+        summary.innerText = dich('pos.online_discount.offline_summary', {
+            discounts: chiTiet.moTa,
+            oldTotal: dinhDangTien(total),
+            newTotal: dinhDangTien(subtotal)
+        });
+    }
+    if (buttonText) {
+        buttonText.innerText = dich(`pos.online_discount.remove_${chiTiet.loai}`);
+    }
+}
+
+async function boUuDaiVaTiepTucBanOffline() {
+    // Không sửa một state đã có operation: request có thể đã rời máy dù kết quả
+    // chưa về. Nhánh đó chỉ được bấm “Thử tạo đơn lại” với exact payload cũ.
+    if (requestTaoDonCoTheDaRoiMay()) {
+        capNhatLuaChonBoUuDaiOffline();
+        return showToast(dich(khoaThongBaoRetryUuDai(
+            pendingCheckoutState?.create_payload
+        )));
+    }
+    const chiTiet = chiTietUuDaiOnline();
+    if (
+        !window.OfflineBan?.dangOffline()
+        || (!chiTiet.coVoucher && !chiTiet.coDiem)
+    ) {
+        capNhatLuaChonBoUuDaiOffline();
+        return;
+    }
+
+    // Chụp nguyên số đang được người dùng xác nhận. Barcode, response Voucher
+    // hoặc sự kiện có mạng lại vẫn có thể xảy ra trong lúc modal đang mở.
+    const snapshot = {
+        voucherCode: currentVoucher || null,
+        voucherDiscount: Number(discount) || 0,
+        points: Math.max(0, Math.trunc(Number(loyaltyPointsApplied) || 0)),
+        pointsDiscount: Number(loyaltyDiscount) || 0,
+        subtotal: Number(subtotal) || 0,
+        total: Number(total) || 0
+    };
+    const dongY = await xacNhan(
+        dich('pos.online_discount.confirm_title'),
+        dich('pos.online_discount.confirm_body', {
+            discounts: chiTiet.moTa,
+            oldTotal: dinhDangTien(snapshot.total),
+            newTotal: dinhDangTien(snapshot.subtotal)
+        })
+    );
+    if (!dongY) return;
+
+    // Mạng hoặc trạng thái request có thể đổi trong lúc hộp xác nhận đang mở.
+    // Kiểm lại trước khi đụng tới Voucher, điểm hoặc tổng tiền trên màn hình.
+    if (!window.OfflineBan?.dangOffline()) {
+        capNhatLuaChonBoUuDaiOffline();
+        return showToast(dich('pos.online_discount.online_again'));
+    }
+    if (requestTaoDonCoTheDaRoiMay()) {
+        capNhatLuaChonBoUuDaiOffline();
+        return showToast(dich(khoaThongBaoRetryUuDai(
+            pendingCheckoutState?.create_payload
+        )));
+    }
+    if (
+        snapshot.voucherCode !== (currentVoucher || null)
+        || snapshot.voucherDiscount !== (Number(discount) || 0)
+        || snapshot.points !== Math.max(0, Math.trunc(Number(loyaltyPointsApplied) || 0))
+        || snapshot.pointsDiscount !== (Number(loyaltyDiscount) || 0)
+        || snapshot.subtotal !== (Number(subtotal) || 0)
+        || snapshot.total !== (Number(total) || 0)
+    ) {
+        capNhatLuaChonBoUuDaiOffline();
+        return showToast(dich('pos.online_discount.changed'));
+    }
+
+    // Hủy mọi response áp Voucher đang trên đường về trước khi xóa ô nhập.
+    voucherRequestId += 1;
+    voucherBusy = false;
+    currentVoucher = null;
+    discount = 0;
+    voucherMessageKey = null;
+    voucherMessageRaw = '';
+    const voucherInput = document.getElementById('voucherInput');
+    if (voucherInput) voucherInput.value = '';
+    const voucherMessage = document.getElementById('voucherMsg');
+    if (voucherMessage) voucherMessage.innerText = '';
+    xoaDiemDaApDung({ clearInput: true, clearMessage: true });
+    // Offline chỉ bán tiền mặt. Đây mới là bước chuẩn bị lại màn hình; không
+    // tự tạo hay lưu phiếu. Thu ngân vẫn phải kiểm tiền khách đưa và bấm Hoàn
+    // tất để xem hộp xác nhận đơn như mọi giao dịch tiền mặt khác.
+    apDungPhuongThucThanhToan('cash', true);
+    updateUI();
+    showToast(dich('pos.online_discount.removed', {
+        total: dinhDangTien(total)
+    }));
+}
+
+function applyLoyaltyPoints() {
+    if (dangKhoaChinhSuaDon()) return;
+    if (voucherBusy) return showToast(dich('pos.loyalty.wait_voucher'));
+    if (!coTheDungDiemChoKhach()) return;
+    const input = document.getElementById('loyaltyPointsInput');
+    const raw = String(input?.value || '').trim();
+    if (raw.startsWith('-') || (raw && !/\d/.test(raw))) {
+        datThongBaoDiem('pos.loyalty.integer_required', {}, '#FCA5A5');
+        capNhatHopDiem();
+        return;
+    }
+    const requested = raw ? docGiaTriTien(raw) : 0;
+    if (requested === 0) {
+        xoaDiemDaApDung({ clearInput: true, clearMessage: true });
+        updateUI();
+        return;
+    }
+    const result = tinhDiemApDungTaiMay(requested);
+    if (result.errorKey) {
+        loyaltyPointsRequested = requested;
+        loyaltyPointsApplied = 0;
+        loyaltyDiscount = 0;
+        loyaltyInputDirty = false;
+        total = tienSauVoucher();
+        datThongBaoDiem(
+            result.errorKey,
+            result.errorOptions || {},
+            '#FCA5A5'
+        );
+        updateUI();
+        return;
+    }
+    apDungKetQuaDiemTaiMay(result);
+    if (input) input.value = dinhDangSoPOS(result.applied);
+    updateUI();
 }
 
 function renderCategories() {
@@ -469,8 +935,23 @@ function calcCart() {
     try {
         if(!cart) cart = [];
         subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-        if(currentVoucher) applyVoucher(); // Re-apply voucher logic
-        else { discount = 0; total = subtotal; updateUI(); }
+        if (subtotal <= 0) {
+            discount = 0;
+            xoaDiemDaApDung({ clearInput: true, clearMessage: true });
+            updateUI();
+        } else if (
+            currentVoucher
+            || (
+                voucherBusy
+                && document.getElementById('voucherInput')?.value.trim()
+            )
+        ) {
+            applyVoucher(); // Voucher luôn tính trước, điểm tính lại sau response.
+        } else {
+            discount = 0;
+            tinhLaiDiemDaApDung();
+            updateUI();
+        }
     } catch (err) {
         console.error("Lỗi tính tiền:", err);
     }
@@ -478,22 +959,46 @@ function calcCart() {
 
 async function applyVoucher() {
     if (dangKhoaChinhSuaDon()) return;
+    const requestId = ++voucherRequestId;
+    const requestShopId = Number(currentShopId);
+    const requestSubtotal = Number(subtotal);
     const code = document.getElementById('voucherInput').value.toUpperCase();
+    voucherBusy = true;
+    // Trong lúc voucher chưa có kết quả, không được giữ phần giảm điểm tính
+    // trên nền tiền cũ và cũng không cho bấm chốt đơn.
+    currentVoucher = null;
+    discount = 0;
+    loyaltyPointsApplied = 0;
+    loyaltyDiscount = 0;
+    total = subtotal;
+    datThongBaoDiem(
+        loyaltyPointsRequested > 0 ? 'pos.loyalty.wait_voucher' : null,
+        {},
+        '#C4B5FD'
+    );
+    updateUI();
     if(!code) {
-        currentVoucher = null; discount = 0; total = subtotal;
         voucherMessageKey = null;
         voucherMessageRaw = '';
         document.getElementById('voucherMsg').innerText = "";
-        updateUI(); return;
+        voucherBusy = false;
+        tinhLaiDiemDaApDung();
+        updateUI();
+        return;
     }
-    if(subtotal === 0) return;
+    if(subtotal === 0) {
+        voucherBusy = false;
+        xoaDiemDaApDung({ clearInput: true, clearMessage: true });
+        updateUI();
+        return;
+    }
 
     const formData = new FormData();
-    formData.append('subtotal', subtotal);
+    formData.append('subtotal', requestSubtotal);
     formData.append('voucher_code', code);
 
     try {
-        const res = await fetch(`/api/vouchers/apply/${currentShopId}`, {
+        const res = await fetch(`/api/vouchers/apply/${requestShopId}`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${getToken()}`,
@@ -509,6 +1014,11 @@ async function applyVoucher() {
             error.translationKey = 'common.api_error';
             throw error;
         }
+        if (
+            requestId !== voucherRequestId
+            || requestShopId !== Number(currentShopId)
+            || requestSubtotal !== Number(subtotal)
+        ) return;
         if(!res.ok) {
             currentVoucher = null; discount = 0; total = subtotal;
             voucherMessageKey = null;
@@ -518,23 +1028,30 @@ async function applyVoucher() {
         } else {
             currentVoucher = code;
             discount = data.discount_amount;
-            total = data.new_total;
             voucherMessageKey = 'pos.voucher.success';
             voucherMessageRaw = '';
             document.getElementById('voucherMsg').innerText = dich(voucherMessageKey);
             document.getElementById('voucherMsg').style.color = 'var(--success)';
         }
-        updateUI();
     } catch(e) {
+        if (
+            requestId !== voucherRequestId
+            || requestShopId !== Number(currentShopId)
+            || requestSubtotal !== Number(subtotal)
+        ) return;
         currentVoucher = null;
         discount = 0;
-        total = subtotal;
         voucherMessageKey = e.translationKey || 'common.network_error';
         voucherMessageRaw = '';
         const voucherMessage = document.getElementById('voucherMsg');
         voucherMessage.innerText = dich(voucherMessageKey);
         voucherMessage.style.color = '#EF4444';
-        updateUI();
+    } finally {
+        if (requestId === voucherRequestId) {
+            voucherBusy = false;
+            tinhLaiDiemDaApDung();
+            updateUI();
+        }
     }
 }
 
@@ -564,7 +1081,9 @@ function updateUI() {
 
     document.getElementById('txtSubtotal').innerText = dinhDangTien(subtotal);
     document.getElementById('txtDiscount').innerText = dinhDangTien(-discount);
+    document.getElementById('txtLoyaltyDiscount').innerText = dinhDangTien(-loyaltyDiscount);
     document.getElementById('txtTotal').innerText = dinhDangTien(total);
+    capNhatHopDiem();
     renderCashQuickAmounts();
     capNhatTienKhachDua();
 }
@@ -612,15 +1131,45 @@ function apDungPhuongThucThanhToan(m, focusCash = false) {
 // trong lúc khách đang đứng đợi.
 
 /** Hiện nút "Thu nợ" khi khách đang chọn có nợ. Ẩn khi không nợ hoặc chưa chọn. */
-async function capNhatNutThuNo() {
+function capNhatDiemKhachTuChiTiet(kh, preservePendingPoints = false) {
+    selectedCustomerActive = Boolean(kh && kh.is_active !== false);
+    selectedCustomerPointsBalance = Math.trunc(Number(kh?.points_balance) || 0);
+    if (
+        !preservePendingPoints
+        && !checkoutOperationId
+        && !currentOrderId
+        && !pendingCashOrderId
+    ) {
+        if (!selectedCustomerActive) {
+            xoaDiemDaApDung({ clearInput: true, clearMessage: true });
+        } else {
+            tinhLaiDiemDaApDung();
+        }
+        updateUI();
+    } else {
+        capNhatHopDiem();
+    }
+}
+
+async function capNhatNutThuNo(preservePendingPoints = false) {
     const nut = document.getElementById('btnThuNoPOS');
     if (!nut) return;
     if (selectedCustomerId === null) {
+        customerDetailRequestId += 1;
         nut.style.display = 'none';
         return;
     }
+    const customerId = Number(selectedCustomerId);
+    const requestId = ++customerDetailRequestId;
     try {
-        const kh = await apiCall(`/customers/member/${selectedCustomerId}`);
+        // Đây cũng là nguồn số dư điểm mới nhất của POS. Không lấy
+        // `points_balance` từ kết quả tìm kiếm có thể đã cũ.
+        const kh = await apiCall(`/customers/member/${customerId}`);
+        if (
+            requestId !== customerDetailRequestId
+            || customerId !== Number(selectedCustomerId)
+        ) return;
+        capNhatDiemKhachTuChiTiet(kh, preservePendingPoints);
         const no = Number(kh.debt_amount || 0);
         if (no <= 0) {
             nut.style.display = 'none';
@@ -630,8 +1179,20 @@ async function capNhatNutThuNo() {
         if (nhan) nhan.innerText = dich('pos.debt.collect_button', { amount: dinhDangTien(no) });
         nut.style.display = 'block';
     } catch (e) {
+        if (
+            requestId !== customerDetailRequestId
+            || customerId !== Number(selectedCustomerId)
+        ) return;
         // Không đọc được nợ thì ẩn nút, đừng hiện một nút bấm vào không ra gì.
         nut.style.display = 'none';
+        selectedCustomerActive = false;
+        selectedCustomerPointsBalance = 0;
+        if (!preservePendingPoints) {
+            xoaDiemDaApDung({ clearInput: true, clearMessage: true });
+            updateUI();
+        } else {
+            capNhatHopDiem();
+        }
     }
 }
 
@@ -712,10 +1273,25 @@ async function thuNoDon(orderId, conNo) {
             // Một mã cho đúng một lần bấm: bấm lại vì mạng chậm không thu hai lần.
             operation_id: (crypto.randomUUID?.() || `${Date.now()}${Math.random()}`).replace(/-/g, '')
         });
-        showToast(dich('pos.debt.collect_done', {
-            amount: dinhDangTien(soTien),
-            remaining: dinhDangTien(res.remaining_amount || 0)
-        }));
+        const diemVuaCong = Math.max(0, Math.trunc(Number(
+            res.loyalty_points_earned || 0
+        )));
+        const soDuMoi = Math.trunc(Number(res.loyalty_balance) || 0);
+        showToast(dich(
+            diemVuaCong > 0
+                ? 'pos.debt.collect_done_points'
+                : 'pos.debt.collect_done',
+            {
+                amount: dinhDangTien(soTien),
+                remaining: dinhDangTien(res.remaining_amount || 0),
+                points: dinhDangSoPOS(diemVuaCong),
+                balance: dinhDangSoPOS(soDuMoi)
+            }
+        ));
+        if (Object.prototype.hasOwnProperty.call(res, 'loyalty_balance')) {
+            selectedCustomerPointsBalance = soDuMoi;
+            updateUI();
+        }
         await moModalThuNo();          // nạp lại danh sách còn nợ
         await capNhatNutThuNo();
         await loadCurrentShift(false); // tiền vừa vào két, số dự kiến của ca đổi theo
@@ -833,7 +1409,7 @@ function capNhatNutCheckout() {
     }
     const thieuTien = paymentMethod === 'cash' && cashTenderedAmount < total;
     const donQRDangCho = currentOrderId !== null && !pendingCashOrderId;
-    button.disabled = checkoutBusy || !activeShift || cart.length === 0 || thieuTien || donQRDangCho;
+    button.disabled = checkoutBusy || voucherBusy || !activeShift || cart.length === 0 || thieuTien || donQRDangCho;
     button.innerHTML = pendingCashOrderId
         ? htmlNut('ph-arrow-clockwise', 'pos.checkout.retry_cash')
         : (checkoutOperationId
@@ -844,6 +1420,7 @@ function capNhatNutCheckout() {
     else if (thieuTien) button.title = dich('pos.checkout.cash_short_title');
     else if (donQRDangCho) button.title = dich('pos.checkout.waiting_title');
     else button.title = '';
+    capNhatLuaChonBoUuDaiOffline();
 }
 
 function taoTrangThaiCheckout(body) {
@@ -864,10 +1441,18 @@ function taoTrangThaiCheckout(body) {
         cart: cart.map(item => ({ ...item })),
         subtotal: Number(subtotal) || 0,
         discount: Number(discount) || 0,
+        loyalty_points_requested: Number(loyaltyPointsRequested) || 0,
+        loyalty_points_applied: Number(loyaltyPointsApplied) || 0,
+        loyalty_discount: Number(loyaltyDiscount) || 0,
+        loyalty_balance: Number(selectedCustomerPointsBalance) || 0,
+        loyalty_program_snapshot: loyaltyProgram
+            ? JSON.parse(JSON.stringify(loyaltyProgram))
+            : null,
         total: Number(total) || 0,
         voucher_code: currentVoucher,
         selected_customer_id: selectedCustomerId,
         selected_customer_text: customerText,
+        selected_customer_active: selectedCustomerActive,
         qr_url: null
     });
 }
@@ -893,17 +1478,48 @@ function phucHoiCheckoutDangDo() {
     cart = restoredCart.map(item => ({ ...item }));
     currentVoucher = state.voucher_code || null;
     selectedCustomerId = state.selected_customer_id ?? null;
+    selectedCustomerActive = selectedCustomerId !== null
+        && state.selected_customer_active !== false;
+    selectedCustomerPointsBalance = Math.trunc(Number(
+        state.loyalty_balance ?? state.selected_customer_points_balance ?? 0
+    ) || 0);
     subtotal = Number(state.subtotal);
     if (!Number.isFinite(subtotal)) {
         subtotal = cart.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
     }
     discount = Number(state.discount) || 0;
+    loyaltyPointsApplied = Math.max(0, Math.trunc(Number(
+        state.loyalty_points_applied
+        ?? state.create_payload?.loyalty_points_to_use
+        ?? 0
+    ) || 0));
+    loyaltyPointsRequested = Math.max(0, Math.trunc(Number(
+        state.loyalty_points_requested ?? loyaltyPointsApplied
+    ) || 0));
+    loyaltyDiscount = Math.max(0, Number(state.loyalty_discount) || 0);
+    loyaltyInputDirty = false;
+    if (loyaltyPointsApplied > 0) {
+        datThongBaoDiem('pos.loyalty.applied', {
+            points: dinhDangSoPOS(loyaltyPointsApplied),
+            amount: dinhDangTien(loyaltyDiscount)
+        }, '#86EFAC');
+    } else {
+        datThongBaoDiem();
+    }
     const restoredTotal = state.server_total ?? state.total ?? state.confirmed_total;
-    total = Number.isFinite(Number(restoredTotal)) ? Number(restoredTotal) : Math.max(0, subtotal - discount);
+    total = Number.isFinite(Number(restoredTotal))
+        ? Number(restoredTotal)
+        : Math.max(0, subtotal - discount - loyaltyDiscount);
     cashTenderedAmount = Number(state.tendered_amount) || 0;
 
     const voucherInput = document.getElementById('voucherInput');
     if (voucherInput) voucherInput.value = currentVoucher || '';
+    const loyaltyInput = document.getElementById('loyaltyPointsInput');
+    if (loyaltyInput) {
+        loyaltyInput.value = loyaltyPointsApplied
+            ? dinhDangSoPOS(loyaltyPointsApplied)
+            : '';
+    }
     const cashInput = document.getElementById('cashTenderedInput');
     if (cashInput) {
         cashInput.value = cashTenderedAmount
@@ -921,6 +1537,9 @@ function phucHoiCheckoutDangDo() {
         const clearButton = document.getElementById('khachBoChon');
         if (chooser) chooser.style.display = 'none';
         if (clearButton) clearButton.style.display = 'block';
+        // Lấy số dư/active mới để hiển thị nhưng KHÔNG được tính lại hay sửa
+        // create_payload đang chờ retry.
+        capNhatNutThuNo(true);
     }
 
     apDungPhuongThucThanhToan(state.payment_method === 'cash' ? 'cash' : 'transfer');
@@ -1429,7 +2048,7 @@ async function hoanTatTienMatDangCho(state) {
         return false;
     }
 
-    await apiCall(`/orders/${idDon}/pay`, 'POST', {
+    const ketQuaThanhToan = await apiCall(`/orders/${idDon}/pay`, 'POST', {
         tendered_amount: cashTenderedAmount
     });
     // Pay đã trả success (kể cả idempotent "đã PAID"): từ đây mới được xóa
@@ -1439,8 +2058,62 @@ async function hoanTatTienMatDangCho(state) {
     showToast(dich('pos.checkout.cash_success', {
         amount: dinhDangTien(cashTenderedAmount - total)
     }));
-    await hienHoaDon(idDon);
+    await hienHoaDon(idDon, ketQuaThanhToan);
     return true;
+}
+
+function apDungKetQuaDiemServer(res, state) {
+    const payloadPoints = Math.max(0, Math.trunc(Number(
+        state.create_payload?.loyalty_points_to_use || 0
+    )));
+    const hasPoints = Object.prototype.hasOwnProperty.call(
+        res || {}, 'loyalty_points_redeemed'
+    );
+    const hasDiscount = Object.prototype.hasOwnProperty.call(
+        res || {}, 'loyalty_discount'
+    );
+    const applied = Math.max(0, Math.trunc(Number(
+        hasPoints ? res.loyalty_points_redeemed : payloadPoints
+    ) || 0));
+    const actualDiscount = Math.max(0, Number(
+        hasDiscount ? res.loyalty_discount : state.loyalty_discount
+    ) || 0);
+
+    // Chỉ cập nhật phần hiển thị/state kết quả. TUYỆT ĐỐI không sửa
+    // `state.create_payload`: retry phải gửi đúng payload của lần bấm đầu.
+    loyaltyPointsApplied = applied;
+    loyaltyPointsRequested = Math.max(
+        applied,
+        Math.trunc(Number(state.loyalty_points_requested ?? payloadPoints) || 0)
+    );
+    loyaltyDiscount = actualDiscount;
+    loyaltyInputDirty = false;
+    if (Object.prototype.hasOwnProperty.call(res || {}, 'loyalty_balance')) {
+        selectedCustomerPointsBalance = Math.trunc(Number(res.loyalty_balance) || 0);
+    }
+    state.loyalty_points_applied = applied;
+    state.loyalty_discount = actualDiscount;
+    state.loyalty_balance = selectedCustomerPointsBalance;
+    state.loyalty_points_earned = Math.max(0, Math.trunc(Number(
+        res?.loyalty_points_earned || 0
+    )));
+
+    const input = document.getElementById('loyaltyPointsInput');
+    if (input) input.value = applied ? dinhDangSoPOS(applied) : '';
+    if (applied > 0) {
+        datThongBaoDiem(
+            applied < payloadPoints
+                ? 'pos.loyalty.applied_adjusted'
+                : 'pos.loyalty.applied',
+            {
+                requested: dinhDangSoPOS(payloadPoints),
+                applied: dinhDangSoPOS(applied),
+                points: dinhDangSoPOS(applied),
+                amount: dinhDangTien(actualDiscount)
+            },
+            '#86EFAC'
+        );
+    }
 }
 
 async function guiYeuCauTaoDonDangDo(state) {
@@ -1455,12 +2128,26 @@ async function guiYeuCauTaoDonDangDo(state) {
     state.server_total = Number.isFinite(Number(res.total))
         ? Number(res.total)
         : Number(state.total) || 0;
+    apDungKetQuaDiemServer(res, state);
+
+    // Voucher/điểm có thể đưa đơn về 0đ; backend chốt PAID ngay vì không có
+    // giao dịch dương nào để chờ. Tuyệt đối không hiện QR 0đ hay bảo khách trả
+    // một khoản không còn tồn tại.
+    if (res.status === 'PAID') {
+        xoaCheckoutDangDo();
+        checkoutOperationId = null;
+        showToast(dich('pos.checkout.zero_total_done'));
+        await hienHoaDon(currentOrderId);
+        return;
+    }
 
     if (state.payment_method === 'transfer') {
         state.phase = 'transfer_pending';
         state.qr_url = res.qr_url || state.qr_url || null;
         luuCheckoutDangDo(state);
         if (state.qr_url) document.getElementById('qrImage').src = state.qr_url;
+        total = state.server_total;
+        updateUI();
         document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total);
         document.getElementById('qrSection').style.display = 'block';
         showToast(dich('pos.checkout.created_transfer'));
@@ -1477,7 +2164,7 @@ async function guiYeuCauTaoDonDangDo(state) {
         showToast(dich('pos.debt.created', {
             amount: dinhDangTien(state.server_total)
         }));
-        await hienHoaDon(currentOrderId);
+        await hienHoaDon(currentOrderId, res);
         currentOrderId = null;
         cart = [];
         currentVoucher = null;
@@ -1522,6 +2209,13 @@ async function capNhatHuyHieuOffline() {
     }
 }
 
+async function capNhatTrangThaiMangPOS() {
+    await capNhatHuyHieuOffline();
+    // Hộp điểm là tính năng online: mất mạng thì ẩn, có mạng lại thì hiện mà
+    // không sửa payload của một đơn đang chờ thử lại.
+    capNhatHopDiem();
+}
+
 /** Ghi phiếu đã bán vào hàng chờ rồi dọn giỏ như một đơn đã xong.
  *
  * Chỉ được gọi khi CHẮC CHẮN request chưa rời khỏi máy (`navigator.onLine`
@@ -1530,6 +2224,15 @@ async function capNhatHuyHieuOffline() {
  * idempotency nào chặn được.
  */
 async function luuBanOffline(state) {
+    // Phiếu offline không giữ Voucher/điểm. Nếu lọt một payload ưu đãi tới đây,
+    // tổng thu ở máy sẽ khác tổng server lúc sync, nên fail-closed thêm một lớp.
+    const payload = state?.create_payload || {};
+    if (
+        Boolean(payload.voucher_code)
+        || Number(payload.loyalty_points_to_use || 0) > 0
+    ) {
+        throw new Error(dich(khoaThongBaoRetryUuDai(payload)));
+    }
     const phieu = await OfflineBan.luuPhieu(
         currentShopId,
         cart,
@@ -1547,6 +2250,7 @@ async function luuBanOffline(state) {
     const oMsg = document.getElementById('voucherMsg');
     if (oMsg) oMsg.innerText = '';
     calcCart();
+    boChonKhach();
     await capNhatHuyHieuOffline();
     showToast(dich('pos.offline.da_luu_phieu'));
     return phieu;
@@ -1560,6 +2264,19 @@ async function thuTaoDonDangDo(state) {
     try {
         await guiYeuCauTaoDonDangDo(state);
     } catch (e) {
+        const coVoucher = Boolean(state.create_payload?.voucher_code);
+        const coDungDiem = Number(
+            state.create_payload?.loyalty_points_to_use || 0
+        ) > 0;
+        const coUuDaiOnline = coVoucher || coDungDiem;
+        // Với đơn có Voucher/điểm, mọi lỗi chưa xác định đều phải giữ
+        // đúng operation_id + payload để bấm thử lại. Tuyệt đối không biến nó
+        // thành phiếu offline vì server chưa đếm lượt/khóa điểm an toàn.
+        if (!currentOrderId && coUuDaiOnline && !laLoi4xx(e)) {
+            luuCheckoutDangDo(state);
+            showToast(dich(khoaThongBaoRetryUuDai(state.create_payload)));
+            return;
+        }
         // Mất mạng HẲN + tiền mặt + khách đã đưa đủ tiền => ghi vào hàng chờ.
         //
         // Ba điều kiện đều bắt buộc. `dangOffline()` chặt nhất: nó nghĩa là máy
@@ -1571,6 +2288,8 @@ async function thuTaoDonDangDo(state) {
             && window.OfflineBan
             && OfflineBan.dangOffline()
             && state.payment_method === 'cash'
+            && !state.create_payload?.voucher_code
+            && Number(state.create_payload?.loyalty_points_to_use || 0) === 0
             && cart.length
             && cashTenderedAmount >= Number(state.total || 0)
         ) {
@@ -1582,6 +2301,29 @@ async function thuTaoDonDangDo(state) {
             // operation cũ và cho sửa giỏ. Network/5xx phải giữ exact payload.
             checkoutOperationId = null;
             xoaCheckoutDangDo();
+            if (coDungDiem) {
+                const diemCu = Math.max(0, Math.trunc(Number(
+                    state.create_payload.loyalty_points_to_use || 0
+                )));
+                // Số dư/cấu hình có thể vừa đổi hoặc điểm vừa hết hạn. Bỏ phần
+                // giảm cũ, tải lại cả hai nguồn rồi bắt buộc bấm Áp dụng lại;
+                // giỏ hàng và khách đang chọn vẫn được giữ nguyên.
+                xoaDiemDaApDung({ clearInput: true, clearMessage: true });
+                updateUI();
+                await Promise.all([
+                    loadLoyaltyProgram(),
+                    capNhatNutThuNo()
+                ]);
+                if (coTheDungDiemChoKhach()) {
+                    loyaltyPointsRequested = diemCu;
+                    loyaltyInputDirty = diemCu > 0;
+                    const input = document.getElementById('loyaltyPointsInput');
+                    if (input) input.value = dinhDangSoPOS(diemCu);
+                    datThongBaoDiem('pos.loyalty.input_changed', {}, '#C4B5FD');
+                    total = tienSauVoucher();
+                    updateUI();
+                }
+            }
         } else if (!currentOrderId) {
             luuCheckoutDangDo(state);
         }
@@ -1605,6 +2347,7 @@ async function checkout() {
     }
     if (currentOrderId) return showToast(dich('pos.checkout.order_exists'));
     if(cart.length === 0) return showToast(dich('pos.checkout.empty_cart'));
+    if (voucherBusy) return showToast(dich('pos.loyalty.wait_voucher'));
     if(!activeShift) {
         showToast(dich('pos.checkout.open_shift_first'));
         return moModalMoCa();
@@ -1614,6 +2357,17 @@ async function checkout() {
     // thu ngân bấm xong, khách đứng đợi rồi mới báo không được.
     if (window.OfflineBan?.dangOffline() && paymentMethod !== 'cash') {
         return showToast(dich('pos.offline.chi_tien_mat'));
+    }
+    if (
+        window.OfflineBan?.dangOffline()
+        && (currentVoucher || loyaltyPointsApplied > 0)
+    ) {
+        capNhatLuaChonBoUuDaiOffline();
+        return showToast(dich(
+            currentVoucher
+                ? 'pos.online_discount.action_required'
+                : 'pos.loyalty.online_required'
+        ));
     }
     capNhatTienKhachDua();
     if (paymentMethod === 'cash' && cashTenderedAmount < total) {
@@ -1647,6 +2401,12 @@ async function checkout() {
             change: dinhDangTien(cashTenderedAmount - total)
         })
         : '';
+    const tomTatDiem = loyaltyPointsApplied > 0
+        ? dich('pos.checkout.confirm_loyalty', {
+            points: dinhDangSoPOS(loyaltyPointsApplied),
+            amount: dinhDangTien(loyaltyDiscount)
+        })
+        : '';
     const dongY = await xacNhan(
         dich('pos.checkout.confirm_title', {
             lineCount: cart.length,
@@ -1656,7 +2416,8 @@ async function checkout() {
             items: dongTomTat,
             total: dinhDangTien(total),
             method: tenPTTT,
-            cashSummary: tomTatTienMat
+            cashSummary: tomTatTienMat,
+            loyaltySummary: tomTatDiem
         })
     );
     if (!dongY) return;
@@ -1666,6 +2427,12 @@ async function checkout() {
         // nhưng server định danh sản phẩm bằng product_id.
         items: cart.map(i => ({product_id: i.product_id, product_name: i.product_name, price: i.price, quantity: i.quantity})),
         voucher_code: currentVoucher,
+        // Gửi số đã qua quy tắc block + trần %, không gửi con số người dùng gõ
+        // trước khi bấm Áp dụng. Server vẫn là nơi kiểm tra và chốt cuối cùng.
+        loyalty_points_to_use: Math.max(
+            0,
+            Math.trunc(Number(loyaltyPointsApplied) || 0)
+        ),
         payment_method: paymentMethod,
         operation_id: taoOperationId()
     };
@@ -1785,7 +2552,7 @@ async function kiemTraThanhToan() {
                 );
                 showToast(dich('pos.payment.transfer_success'));
             }
-            await hienHoaDon(idDon);
+            await hienHoaDon(idDon, statusRes);
         } else if(statusRes.status === 'CANCELLED') {
             stopPaymentPolling();
             showToast(dich('pos.payment.cancelled'));
@@ -1891,7 +2658,7 @@ async function buTienMatPhanThieu() {
         if(result.status === 'PAID') {
             stopPaymentPolling();
             showToast(dich('pos.payment.topup_success'));
-            await hienHoaDon(idDon);
+            await hienHoaDon(idDon, result);
         } else {
             renderPaymentStatus(result);
         }
@@ -1917,11 +2684,24 @@ function stopPaymentPolling() {
  * vẽ sau thì tờ hóa đơn vừa tạo mới không bị dọn mất. Quầy cũng sẵn sàng cho
  * khách tiếp theo ngay trong lúc hóa đơn còn hiển thị.
  */
-async function hienHoaDon(orderId) {
+async function hienHoaDon(orderId, ketQuaDiemMoiNhat = null) {
     if (!orderId) return resetPOS();
     let d = null;
     try {
         d = await apiCall(`/orders/${orderId}/detail`);
+        // Một số response thanh toán trả số dư/điểm vừa cộng mới hơn response
+        // detail. Chỉ ghép đúng bốn field điểm từ chính server, không kéo theo
+        // total/status của endpoint khác vào hóa đơn.
+        [
+            'loyalty_discount',
+            'loyalty_points_redeemed',
+            'loyalty_points_earned',
+            'loyalty_balance'
+        ].forEach(field => {
+            if (Object.prototype.hasOwnProperty.call(ketQuaDiemMoiNhat || {}, field)) {
+                d[field] = ketQuaDiemMoiNhat[field];
+            }
+        });
     } catch (e) {
         resetPOS();
         return showToast(dich('pos.order.paid_receipt_error', {
@@ -1966,6 +2746,25 @@ function veHoaDon(d) {
     const coTienMat = Number(d.cash_paid_amount || 0) > 0;
     const coTienKhachDua = d.cash_tendered_amount !== null
         && d.cash_tendered_amount !== undefined;
+    // Hóa đơn chỉ dùng con số server đã ghi vào đơn. Không tính lại theo cấu
+    // hình hiện tại vì chủ shop có thể đổi chương trình sau lúc bán.
+    const giamBangDiem = Math.max(
+        0,
+        Number(d.loyalty_discount ?? d.loyalty_discount_amount) || 0
+    );
+    const diemDaDung = Math.max(
+        0,
+        Math.trunc(Number(d.loyalty_points_redeemed) || 0)
+    );
+    const diemDaNhan = Math.max(
+        0,
+        Math.trunc(Number(d.loyalty_points_earned) || 0)
+    );
+    const coSoDuDiem = d.loyalty_balance !== null
+        && d.loyalty_balance !== undefined;
+    // Trả hàng có thể làm số dư âm khi điểm đã cộng trước đó đã được khách dùng
+    // mất. Phải in đúng số âm để shop nhìn thấy, không che thành 0.
+    const soDuDiem = Math.trunc(Number(d.loyalty_balance) || 0);
     const pttt = coChuyenKhoan && coTienMat
         ? 'Chuyển khoản + tiền mặt'
         : (coChuyenKhoan ? 'Chuyển khoản' : 'Tiền mặt');
@@ -1982,6 +2781,9 @@ function veHoaDon(d) {
         const ma = d.voucher_code ? ` (${escapeHtml(d.voucher_code)})` : '';
         tongKet += `<div style="display:flex; justify-content:space-between; color:#B45309;"><span>Giảm giá${ma}</span><span>- ${dinhDangTienHoaDon(d.discount_amount)}</span></div>`;
     }
+    if (giamBangDiem > 0) {
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#6D28D9;"><span>Giảm bằng ${dinhDangSoHoaDon(diemDaDung)} điểm</span><span>- ${dinhDangTienHoaDon(giamBangDiem)}</span></div>`;
+    }
     tongKet += `<div style="display:flex; justify-content:space-between; font-size:1.15rem; font-weight:700; margin-top:0.4rem; padding-top:0.4rem; border-top:2px solid #0F172A;"><span>TỔNG CỘNG</span><span>${dinhDangTienHoaDon(d.total_amount)}</span></div>`;
     if (coChuyenKhoan && coTienMat) {
         tongKet += `<div style="display:flex; justify-content:space-between; margin-top:0.35rem;"><span>Qua ngân hàng</span><span>${dinhDangTienHoaDon(d.bank_paid_amount)}</span></div>`;
@@ -1994,6 +2796,12 @@ function veHoaDon(d) {
     if (d.refund_pending) {
         tongKet += `<div style="display:flex; justify-content:space-between; color:#B91C1C; font-weight:700; margin-top:0.35rem;"><span>Thực nhận</span><span>${dinhDangTienHoaDon(d.received_amount)}</span></div>`;
         tongKet += `<div style="display:flex; justify-content:space-between; color:#B91C1C; font-weight:700;"><span>CẦN HOÀN KHÁCH</span><span>${dinhDangTienHoaDon(d.refund_due_amount)}</span></div>`;
+    }
+    if (diemDaNhan > 0) {
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#047857; margin-top:0.35rem;"><span>Điểm vừa nhận</span><span>+${dinhDangSoHoaDon(diemDaNhan)} điểm</span></div>`;
+    }
+    if (coSoDuDiem) {
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#475569;"><span>Số dư điểm</span><span>${dinhDangSoHoaDon(soDuDiem)} điểm</span></div>`;
     }
 
     const warning = document.getElementById('hoaDonCanhBao');
@@ -2034,6 +2842,9 @@ function resetPOS() {
     stopPaymentPolling();
     dongHoaDon();
     xoaCheckoutDangDo();
+    // Mọi response voucher cũ về sau thời điểm reset đều đã hết giá trị.
+    voucherRequestId += 1;
+    voucherBusy = false;
     cart = [];
     currentVoucher = null;
     voucherMessageKey = null;
@@ -2168,8 +2979,11 @@ function veFormTraHang(d) {
 
     // Đơn có giảm giá thì tiền hoàn tính theo tỷ lệ thực thu, không theo giá
     // niêm yết - nói trước để thu ngân không bị khách thắc mắc tại quầy.
+    const coGiamBangDiem = Number(
+        d.loyalty_discount ?? d.loyalty_discount_amount ?? 0
+    ) > 0;
     document.getElementById('returnDiscountNote').style.display =
-        (d.discount_amount || 0) > 0 ? 'block' : 'none';
+        (d.discount_amount || 0) > 0 || coGiamBangDiem ? 'block' : 'none';
     document.getElementById('returnMethod').value = 'cash';
     document.getElementById('returnReference').value = '';
     document.getElementById('returnReason').value = '';
@@ -2246,12 +3060,26 @@ async function ghiNhanTraHang() {
                 : null,
             operation_id: maThaoTacTraHang
         });
-        showToast(dich('pos.return.done', {
-            amount: dinhDangTien(res.return?.refund_amount || 0)
-        }));
+        const diemHoanLai = Math.max(0, Math.trunc(Number(
+            res.return?.loyalty_points_restored || 0
+        )));
+        const diemTruLai = Math.max(0, Math.trunc(Number(
+            res.return?.loyalty_points_reversed || 0
+        )));
+        showToast(dich(
+            diemHoanLai > 0 || diemTruLai > 0
+                ? 'pos.return.done_with_points'
+                : 'pos.return.done',
+            {
+                amount: dinhDangTien(res.return?.refund_amount || 0),
+                restored: dinhDangSoPOS(diemHoanLai),
+                reversed: dinhDangSoPOS(diemTruLai)
+            }
+        ));
         dongModalTraHang();
         loadProducts();          // tồn kho vừa đổi vì hàng nhập lại
         loadCurrentShift(false); // hoàn tiền mặt vừa trừ vào két của ca
+        if (selectedCustomerId !== null) capNhatNutThuNo();
     } catch (e) {
         showToast(e.message);
     } finally {
@@ -2262,7 +3090,11 @@ async function ghiNhanTraHang() {
 // ===== C2d: gắn khách hàng vào đơn ở POS =====
 function boChonKhach() {
     if (dangKhoaChinhSuaDon()) return;
+    customerDetailRequestId += 1;
     selectedCustomerId = null;
+    selectedCustomerActive = false;
+    selectedCustomerPointsBalance = 0;
+    xoaDiemDaApDung({ clearInput: true, clearMessage: true });
     const el = id => document.getElementById(id);
     if (el('khachDaChon')) {
         el('khachDaChon').setAttribute('data-i18n', 'pos.customer.walk_in');
@@ -2275,11 +3107,16 @@ function boChonKhach() {
     if (el('posCustNewForm')) el('posCustNewForm').style.display = 'none';
     capNhatNutThuNo();
     capNhatCanhBaoGhiNo();
+    updateUI();
 }
 
 function chonKhach(id, ten, sdt) {
     if (dangKhoaChinhSuaDon()) return;
     selectedCustomerId = id;
+    selectedCustomerActive = false;
+    selectedCustomerPointsBalance = 0;
+    xoaDiemDaApDung({ clearInput: true, clearMessage: true });
+    updateUI();
     capNhatNutThuNo();
     const selected = document.getElementById('khachDaChon');
     selected.removeAttribute('data-i18n');
@@ -2344,8 +3181,51 @@ async function taoKhachPOS() {
 // Cài đặt đọc tiền nằm ở tab Cài Đặt của trang Người bán, không ở đây: màn POS
 // phải gọn cho người đứng quầy, mà cấu hình thì chỉ đặt một lần rồi thôi.
 
+function capNhatNhapVoucher() {
+    const input = document.getElementById('voucherInput');
+    if (currentOrderId || pendingCashOrderId || checkoutOperationId) {
+        if (input) input.value = currentVoucher || '';
+        return;
+    }
+    const codeMoi = String(input?.value || '').trim().toUpperCase();
+    if (!voucherBusy && codeMoi === String(currentVoucher || '')) return;
+
+    // Gõ sửa mã sau khi đã áp dụng phải bỏ ngay kết quả voucher cũ. Nếu không,
+    // màn hình hiện mã mới nhưng payload/tổng tiền vẫn âm thầm dùng mã cũ.
+    voucherRequestId += 1;
+    voucherBusy = false;
+    currentVoucher = null;
+    discount = 0;
+    voucherMessageKey = null;
+    voucherMessageRaw = '';
+    const message = document.getElementById('voucherMsg');
+    if (message) message.innerText = '';
+    tinhLaiDiemDaApDung();
+    updateUI();
+}
+
+function capNhatNhapDiem() {
+    if (currentOrderId || pendingCashOrderId || checkoutOperationId) return;
+    const input = document.getElementById('loyaltyPointsInput');
+    const requested = docGiaTriTien(input?.value);
+    loyaltyPointsRequested = requested;
+    // Sửa con số trong ô KHÔNG đồng nghĩa đã áp dụng. Xóa phần giảm cũ để thu
+    // ngân phải bấm “Áp dụng điểm” và nhìn lại số tiền trước khi chốt đơn.
+    loyaltyPointsApplied = 0;
+    loyaltyDiscount = 0;
+    loyaltyInputDirty = requested > 0;
+    total = tienSauVoucher();
+    datThongBaoDiem(
+        requested > 0 ? 'pos.loyalty.input_changed' : null,
+        {},
+        '#C4B5FD'
+    );
+    updateUI();
+}
+
 [
     ['cashTenderedInput', capNhatTienKhachDua],
+    ['loyaltyPointsInput', capNhatNhapDiem],
     ['openingCashInput', null],
     ['movementAmountInput', capNhatMovementDraft],
     ['actualCashInput', capNhatChenhLechKetCa]
@@ -2358,7 +3238,14 @@ async function taoKhachPOS() {
     });
 });
 
+document.getElementById('loyaltyPointsInput')?.addEventListener('keydown', event => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    applyLoyaltyPoints();
+});
+
 document.getElementById('movementNote')?.addEventListener('input', capNhatMovementDraft);
+document.getElementById('voucherInput')?.addEventListener('input', capNhatNhapVoucher);
 
 document.querySelectorAll('.pos-modal').forEach(modal => {
     modal.addEventListener('click', event => {
@@ -2414,6 +3301,7 @@ function capNhatNgonNguPOS() {
     });
     [
         'cashTenderedInput',
+        'loyaltyPointsInput',
         'openingCashInput',
         'movementAmountInput',
         'actualCashInput'
@@ -2474,7 +3362,7 @@ if (window.OfflineBan) {
             await capNhatHuyHieuOffline();
         }
     );
-    window.addEventListener('online', capNhatHuyHieuOffline);
-    window.addEventListener('offline', capNhatHuyHieuOffline);
-    capNhatHuyHieuOffline();
+    window.addEventListener('online', capNhatTrangThaiMangPOS);
+    window.addEventListener('offline', capNhatTrangThaiMangPOS);
+    capNhatTrangThaiMangPOS();
 }

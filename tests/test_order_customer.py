@@ -125,6 +125,7 @@ def test_lich_su_mua_cua_khach(client):
         "customer", "total_paid", "order_count", "orders",
         # F4: tổng khách còn nợ tại thời điểm hiện tại.
         "debt_amount",
+        "loyalty_history",
     }
     assert body["customer"]["id"] == kh_id
     assert body["order_count"] == 2

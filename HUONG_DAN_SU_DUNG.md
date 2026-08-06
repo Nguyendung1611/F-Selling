@@ -1,7 +1,8 @@
 # Hướng Dẫn Sử Dụng F-Selling
 
 Ứng dụng quản lý bán hàng (POS) cho nhiều cửa hàng: quản lý sản phẩm, danh mục,
-khuyến mãi, bán hàng, thống kê doanh thu, và trang quản trị (admin).
+khách hàng, khuyến mãi, tích điểm, bán hàng, thống kê doanh thu, và trang quản
+trị (admin).
 
 ## 1. Yêu cầu
 
@@ -71,11 +72,13 @@ trình duyệt, không phải lỗi app. Dùng link ngrok ở mục 3 là có `h
 | Việc | Khi mất mạng |
 |---|---|
 | Mở app, xem giao diện | ✅ được |
-| Xem sản phẩm, tạo đơn, thu tiền | ❌ **không** — báo lỗi mạng |
+| Xem danh mục sản phẩm đã tải gần nhất | ✅ được |
+| Bán và thu **tiền mặt** | ✅ được, phiếu sẽ chờ đồng bộ |
+| Chuyển khoản, ghi nợ, Voucher, khách hàng, tích/đổi điểm | ❌ không dùng offline |
 
-Đây là **cố ý**. Giá và tồn kho luôn phải lấy từ máy chủ: thà báo lỗi rõ ràng
-còn hơn cho thu ngân nhìn thấy "còn 5 cái" trong khi kho đã hết. Bán hàng khi
-offline là tính năng riêng, chưa làm.
+Đơn offline chỉ dùng giá đã chụp trên máy lúc còn mạng và chỉ nhận tiền mặt.
+Khi có mạng lại, app tự gửi các phiếu đang chờ lên server. Không dùng điểm khi
+offline vì máy không thể kiểm tra số dư mới nhất; đoán sai ở đây là lệch tiền.
 
 ### Nếu app hiện bản cũ sau khi cập nhật
 
@@ -109,6 +112,40 @@ Từ đó app không tự đổi nữa, bạn quản lý mật khẩu bằng ch�
 - Đăng nhập → tạo **Cửa hàng** (tối đa 3), thêm **Danh mục**, **Sản phẩm**, **Khuyến mãi**.
 - Mở **POS** để bán hàng: chọn sản phẩm, áp voucher, thanh toán (chuyển khoản QR hoặc tiền mặt).
 - Xem **Dashboard**: doanh thu, số đơn, sản phẩm bán chạy, biểu đồ.
+
+### Tự cài chương trình tích điểm
+
+Chỉ **chủ cửa hàng** sửa được luật điểm; nhân viên ở POS chỉ dùng luật đã lưu.
+
+1. Đăng nhập tài khoản chủ shop → bấm tab **Tích Điểm**.
+2. Nếu có nhiều cửa hàng, chọn cửa hàng ở ô **Cửa hàng** trên đầu trang.
+3. Nhập lần lượt:
+   - khách chi bao nhiêu tiền thì được bao nhiêu điểm;
+   - dùng bao nhiêu điểm thì giảm bao nhiêu tiền;
+   - số điểm tối thiểu cho một lần dùng;
+   - tối đa được giảm bao nhiêu phần trăm hóa đơn;
+   - số ngày hết hạn (để trống nếu điểm không hết hạn).
+   Các ô này chỉ nhận số nguyên, không nhập số lẻ.
+4. Nhìn ô xem trước ở cuối form. Đúng ý thì đánh dấu **Bật chương trình** → bấm
+   **Lưu chương trình tích điểm**. Bạn sẽ thấy dòng trạng thái màu xanh báo POS
+   đã có thể cộng và dùng điểm.
+
+Ở POS: chọn khách hàng trước. Khi chương trình đang bật, ngay dưới tên khách sẽ
+hiện khung **Điểm khách thân thiết** và số dư hiện tại. Nhập số điểm → bấm
+**Áp dụng điểm**; dòng **Giảm bằng điểm** và **Tổng cần thu** sẽ đổi ngay. Nếu có
+Voucher thì hệ thống trừ Voucher trước, rồi mới tính điểm và giới hạn phần trăm.
+
+Điểm mới chỉ được cộng sau khi đơn đã báo **Đã thanh toán**. Đơn ghi nợ phải thu
+đủ mới cộng. Tắt chương trình thì số dư cũ vẫn giữ nguyên nhưng POS tạm ngừng cả
+cộng lẫn dùng điểm. Bán offline không cộng và không dùng điểm. Nếu đã áp điểm
+rồi mới mất mạng, bấm **Bỏ dùng điểm và tiếp tục bán offline** → nhìn lại tổng
+tiền vừa tăng → xác nhận; app không tự ý đổi số tiền phải thu.
+
+Khách đã có lịch sử điểm sẽ không bị xóa mất sổ. Ở tab **Khách Hàng**, bấm nút
+xóa sẽ chuyển khách thành **Ngừng sử dụng**; khách biến khỏi danh sách chọn ở
+POS nhưng vẫn còn trong danh sách quản lý. Muốn dùng lại, bấm nút mũi tên xanh.
+Shop đã có chương trình hoặc lịch sử điểm cũng không xóa hẳn được: vào phần cửa
+hàng và bấm **Khóa** để ngừng sử dụng mà vẫn giữ nguyên sổ đối soát.
 
 ### Hàng có nhiều size / màu (biến thể)
 

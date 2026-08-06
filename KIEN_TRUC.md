@@ -1091,6 +1091,45 @@ Kiểm bằng cách nào: tắt hẳn server, ghi đè `navigator.onLine` về `
 console, bán một đơn tiền mặt, rồi bật server và bắn sự kiện `online`. Không có
 đường tắt — `fetch()` thành công không chứng minh được gì ở đây.
 
+### 30. Tích điểm là một sổ tiền, không phải một con số trên khách hàng
+
+Mỗi shop tự đặt chương trình và shop mới **mặc định tắt**; migration không được
+bịa tỷ lệ. Tiền, điểm, phần trăm và số ngày cấu hình đều là **số nguyên**. Đổi
+tỷ lệ không đổi số điểm khách đang có: lần đổi điểm sau dùng tỷ lệ hiện tại,
+nhưng điểm sẽ cộng của một đơn đã tạo phải dùng bản chụp tỷ lệ lúc tạo đơn.
+
+Thứ tự tiền cố định: **Voucher trước → điểm sau → tính điểm thưởng trên số tiền
+thực trả**. Điểm thưởng chỉ ghi khi đơn thành `PAID`; đơn nợ chỉ được cộng đúng
+một lần sau khi thu đủ. Tắt chương trình giữ nguyên sổ cũ nhưng ngừng cả cộng
+lẫn dùng điểm. Điểm được giữ ngay trong transaction tạo đơn, không chờ tới lúc
+thanh toán, nếu không hai quầy có thể cùng tiêu một số dư.
+
+Không có cột “balance” để tăng giảm trực tiếp. `loyalty_point_entries` là ledger
+bất biến, mỗi nghiệp vụ có `idempotency_key` và unique index bắt buộc lúc khởi
+động. Mỗi dòng dương là một lô có hạn riêng; dòng âm dùng lô hết hạn sớm trước.
+Nếu khách đã tiêu quá phần còn hợp lệ thì số dư được phép âm, và mọi điểm cộng
+hoặc hoàn sau đó phải bù nợ âm trước — chỉ phần dương còn lại mới mang hạn.
+
+**Hủy đơn khác trả hàng.** Hủy phải hoàn đúng các lô đã dùng, đúng hạn cũ, đúng
+một lần và trong cùng transaction hủy; điểm đã tự hết hạn khi nằm yên không
+được hồi sinh nhờ hủy. Trả hàng thì phần điểm đã dùng được hoàn với hạn mới tính
+từ ngày trả. Điểm thưởng bị thu hồi phải nhắm đúng `EARN` của chính đơn bị trả,
+không được trừ FEFO bừa từ đơn khác. Trả một phần tính theo giá trị hàng khách
+còn giữ: đơn từng được 19 điểm, trả nửa thì còn 9 và lần đầu phải thu hồi 10.
+Điểm nguồn đã hết hạn mà chưa dùng thì không tạo nợ âm; phần đã dùng rồi vẫn có
+thể làm số dư âm. Retry hủy/trả không bao giờ được ghi lần hai.
+
+Offline không cộng và không dùng điểm. Nếu đã áp điểm rồi mới mất mạng, thu ngân
+phải bấm rõ **Bỏ dùng điểm và tiếp tục bán offline**, nhìn tổng tiền tăng lại và
+xác nhận; không được âm thầm đổi số khách phải trả. Nếu request tạo đơn có thể
+đã rời máy thì payload + `operation_id` phải giữ nguyên, tuyệt đối không bỏ điểm
+trong một yêu cầu đang chờ retry.
+
+Lịch sử có giá trị đối soát nên không xóa vật lý: khách có ledger chỉ chuyển
+sang **Ngừng sử dụng**; shop có chương trình hoặc lịch sử điểm không được DELETE,
+hãy dùng nút **Khóa**. SQLite production không bật foreign key, xóa rồi tái sử
+dụng ID có thể khiến shop/khách mới nhận nhầm cấu hình hoặc điểm cũ.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

@@ -69,6 +69,7 @@ ROUTES_BO_SUNG = {
     ("GET", "/api/customers/{shop_id}"),             # C2b: danh sách/tìm khách
     ("GET", "/api/customers/member/{customer_id}"),  # C2b: chi tiết khách
     ("PUT", "/api/customers/member/{customer_id}"),  # C2b: sửa khách
+    ("PUT", "/api/customers/member/{customer_id}/status"),  # H1: dùng lại/ngừng khách
     ("DELETE", "/api/customers/member/{customer_id}"),  # C2b: xóa khách
     ("GET", "/api/customers/member/{customer_id}/history"),  # C2c: lịch sử mua
     ("GET", "/api/products/{shop_id}/barcode/{barcode}"),  # B1a: tra SP theo mã vạch
@@ -115,6 +116,9 @@ ROUTES_BO_SUNG = {
     # G3: màn "Ai làm gì" của chủ shop. Khác /api/logs/admin: chỉ việc của người
     # thuộc shop này, và đã lọc bỏ hành động không đụng tiền hay kho.
     ("GET", "/api/logs/shop/{shop_id}"),
+    # H1: chủ shop tự cài luật tích/đổi điểm; POS và nhân viên bán hàng được đọc.
+    ("GET", "/api/loyalty/{shop_id}"),
+    ("PUT", "/api/loyalty/{shop_id}"),
 }
 
 

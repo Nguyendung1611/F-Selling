@@ -18,3 +18,7 @@ class CustomerUpdate(BaseModel):
     address: Optional[str] = None
     note: Optional[str] = None
     credit_limit: Optional[float] = None
+
+
+class CustomerStatusUpdate(BaseModel):
+    is_active: bool

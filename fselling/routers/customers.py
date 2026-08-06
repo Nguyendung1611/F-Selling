@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..dependencies import get_current_user, get_db
-from ..schemas.customer import CustomerCreate, CustomerUpdate
+from ..schemas.customer import CustomerCreate, CustomerStatusUpdate, CustomerUpdate
 from ..services import customer_service
 
 router = APIRouter(prefix="/api/customers", tags=["customers"])
@@ -26,10 +26,17 @@ def create_customer(
 def list_customers(
     shop_id: int,
     q: Optional[str] = Query(None, description="Tìm theo tên hoặc SĐT"),
+    include_inactive: bool = Query(False, description="Gồm cả khách đã ngừng sử dụng"),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return customer_service.list_customers(db, current_user, shop_id, q=q)
+    return customer_service.list_customers(
+        db,
+        current_user,
+        shop_id,
+        q=q,
+        include_inactive=include_inactive,
+    )
 
 
 @router.get("/member/{customer_id}")
@@ -58,6 +65,18 @@ def update_customer(
     current_user: models.User = Depends(get_current_user),
 ):
     return customer_service.update_customer(db, current_user, customer_id, data)
+
+
+@router.put("/member/{customer_id}/status")
+def update_customer_status(
+    customer_id: int,
+    data: CustomerStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return customer_service.update_customer_status(
+        db, current_user, customer_id, data
+    )
 
 
 @router.delete("/member/{customer_id}")

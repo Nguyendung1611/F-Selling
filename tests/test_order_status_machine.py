@@ -154,7 +154,11 @@ def test_thu_cong_pending_sang_paid(client):
     ctx, order_id = _tao_don(client, payment_method="cash")
     res = client.post(f"/api/orders/{order_id}/pay", headers=auth(ctx["token"]))
     assert res.status_code == 200
-    assert res.json() == {"msg": "Paid successfully"}
+    assert res.json() == {
+        "msg": "Paid successfully",
+        "loyalty_points_earned": 0,
+        "loyalty_balance": 0,
+    }
     assert _trang_thai(order_id) == STATUS_PAID
 
 
@@ -164,7 +168,11 @@ def test_thu_cong_bam_trung_tren_don_da_paid_tra_200_im_lang(client):
 
     res = client.post(f"/api/orders/{order_id}/pay", headers=auth(ctx["token"]))
     assert res.status_code == 200
-    assert res.json() == {"msg": "Paid successfully"}
+    assert res.json() == {
+        "msg": "Paid successfully",
+        "loyalty_points_earned": 0,
+        "loyalty_balance": 0,
+    }
     assert _trang_thai(order_id) == STATUS_PAID
     # Không ghi thêm log thanh toán cho lần bấm trùng
     assert _dem_log("PAY_ORDER", f"#{order_id} ") == 1
@@ -343,6 +351,8 @@ def test_get_order_hien_thi_trang_thai_moi(client, webhook_secret):
     body = client.get(f"/api/orders/{order_id}", headers=auth(ctx["token"])).json()
     assert set(body.keys()) == {
         "id", "shop_id", "status", "total_amount", "payment_method",
+        "loyalty_points_redeemed", "loyalty_discount_amount",
+        "loyalty_points_earned", "loyalty_balance",
     } | PAYMENT_SUMMARY_KEYS
     assert body["status"] == STATUS_UNRECONCILED
     assert body["reconciliation_reason"] == "LATE_PAYMENT"

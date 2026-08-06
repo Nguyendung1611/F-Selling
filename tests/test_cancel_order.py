@@ -435,6 +435,7 @@ def test_contract_phan_hoi_huy_don(client):
         "restored_items",
         "unrestored_items",
         "voucher_released",
+        "loyalty_points_restored",
     }
     assert body["order_id"] == order["order_id"]
 

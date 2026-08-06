@@ -29,6 +29,9 @@ class OrderCreate(BaseModel):
     operation_id: Optional[str] = Field(default=None, min_length=8, max_length=128)
     # Gắn khách vào đơn (tùy chọn). Bỏ trống = khách vãng lai.
     customer_id: Optional[int] = None
+    # Số điểm nguyên khách muốn dùng. Server đọc lại chương trình + số dư,
+    # áp Voucher trước rồi mới tính phần giảm bằng điểm.
+    loyalty_points_to_use: int = Field(default=0, ge=0)
 
 
 class OfflineOrderItem(BaseModel):

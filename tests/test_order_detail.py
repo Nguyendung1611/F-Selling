@@ -50,6 +50,10 @@ def test_chi_tiet_don_mot_san_pham(client):
         # F2: lịch sử trả hàng của đơn (rỗng khi chưa ai trả).
         "returns",
         "returned_total",
+        "loyalty_points_redeemed",
+        "loyalty_discount_amount",
+        "loyalty_points_earned",
+        "loyalty_balance",
     } | PAYMENT_SUMMARY_KEYS
     assert len(body["items"]) == 1
     dong = body["items"][0]

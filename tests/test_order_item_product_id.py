@@ -184,7 +184,11 @@ def test_contract_tao_don_giu_nguyen(client):
     )
     assert res.status_code == 200
     body = res.json()
-    assert set(body.keys()) == {"order_id", "subtotal", "discount", "total", "qr_url"}
+    assert set(body.keys()) == {
+        "order_id", "subtotal", "discount", "total", "qr_url", "status",
+        "loyalty_points_redeemed", "loyalty_discount",
+        "loyalty_points_earned", "loyalty_balance",
+    }
     assert body["subtotal"] == 200000
     assert body["total"] == 200000
     assert f"ORDER{body['order_id']}" in body["qr_url"]

@@ -29,7 +29,11 @@ def test_tao_don_dung_gia_tu_database_bo_qua_gia_client(client):
     body = res.json()
     assert body["subtotal"] == 200000
     assert body["total"] == 200000
-    assert set(body.keys()) == {"order_id", "subtotal", "discount", "total", "qr_url"}
+    assert set(body.keys()) == {
+        "order_id", "subtotal", "discount", "total", "qr_url", "status",
+        "loyalty_points_redeemed", "loyalty_discount",
+        "loyalty_points_earned", "loyalty_balance",
+    }
     assert "img.vietqr.io" in body["qr_url"]
     assert f"ORDER{body['order_id']}" in body["qr_url"]
 
@@ -154,12 +158,18 @@ def test_xac_nhan_thanh_toan_thu_cong(client):
 
     res = client.post(f"/api/orders/{order_id}/pay", headers=auth(a["token"]))
     assert res.status_code == 200
-    assert res.json() == {"msg": "Paid successfully"}
+    assert res.json() == {
+        "msg": "Paid successfully",
+        "loyalty_points_earned": 0,
+        "loyalty_balance": 0,
+    }
 
     got = client.get(f"/api/orders/{order_id}", headers=auth(a["token"])).json()
     assert got["status"] == "PAID"
     assert set(got.keys()) == {
         "id", "shop_id", "status", "total_amount", "payment_method",
+        "loyalty_points_redeemed", "loyalty_discount_amount",
+        "loyalty_points_earned", "loyalty_balance",
     } | PAYMENT_SUMMARY_KEYS
     assert got["cash_paid_amount"] == 100000
     assert got["invoice_issued"] is True

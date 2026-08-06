@@ -64,6 +64,21 @@ class Order(Base):
     offline_issue = Column(String(120), nullable=True, index=True)
     offline_device = Column(String(64), nullable=True)
 
+    # --- H1: tích điểm khách thân thiết ---
+    # `discount_amount` phía trên CỐ Ý vẫn chỉ mang nghĩa voucher. Tách phần
+    # giảm bằng điểm để hóa đơn, trả hàng và kiểm toán không nhập nhằng hai loại.
+    loyalty_points_redeemed = Column(Integer, nullable=False, default=0)
+    loyalty_discount_amount = Column(Float, nullable=False, default=0)
+    # Ảnh chụp luật CỘNG tại lúc bán. Đơn nợ/chuyển khoản có thể thanh toán sau
+    # khi chủ shop đã đổi chương trình; lịch sử của đơn không được đổi theo.
+    loyalty_earn_amount_step = Column(Float, nullable=True)
+    loyalty_earn_points_step = Column(Integer, nullable=True)
+    loyalty_expiry_days_snapshot = Column(Integer, nullable=True)
+    loyalty_points_earned = Column(Integer, nullable=False, default=0)
+    # Kể cả kết quả cộng là 0 (chương trình vừa tắt), mốc này vẫn chốt rằng lần
+    # chuyển PAID đã được xét; retry sau khi bật lại không được cộng hồi tố.
+    loyalty_awarded_at = Column(DateTime, nullable=True)
+
     shop = relationship("Shop", back_populates="orders")
     items = relationship("OrderItem", back_populates="order")
     customer = relationship("Customer")
@@ -123,6 +138,10 @@ class OrderReturn(Base):
     # trả có tiền hoàn bằng 0 (đơn giảm giá 100%) không sinh dòng ledger nào,
     # mà vẫn phải chặn được lần bấm thứ hai.
     idempotency_key = Column(String(128), nullable=True)
+    # Cùng operation_id chỉ là retry khi TOÀN BỘ yêu cầu vật chất giống nhau.
+    # Nếu không có fingerprint, đổi số lượng/cách hoàn vẫn bị trả 200 như thể
+    # yêu cầu mới đã làm xong.
+    operation_fingerprint = Column(String(64), nullable=True)
     # Tiền thực hoàn cho khách, ĐÃ trừ phần giảm giá voucher phân bổ cho các
     # dòng bị trả. Hoàn theo giá niêm yết là shop chịu trọn phần đã giảm.
     refund_amount = Column(Float, nullable=False, default=0)
@@ -133,6 +152,10 @@ class OrderReturn(Base):
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     shift_id = Column(Integer, ForeignKey("cash_shifts.id"), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    # Điểm điều chỉnh của RIÊNG lần trả này. Nhiều lần trả cộng dồn theo tỷ lệ
+    # lũy kế; hai cột giúp lịch sử và retry không phải suy đoán lại.
+    loyalty_points_restored = Column(Integer, nullable=False, default=0)
+    loyalty_points_reversed = Column(Integer, nullable=False, default=0)
 
     order = relationship("Order", back_populates="returns")
     items = relationship("OrderReturnItem", back_populates="parent_return")

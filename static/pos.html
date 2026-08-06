@@ -127,6 +127,7 @@
             <div class="checkout-box">
                 <div class="summary-row"><span data-i18n="pos.checkout.subtotal">Tạm tính:</span><span id="txtSubtotal">0 ₫</span></div>
                 <div class="summary-row" style="color: #F59E0B;"><span data-i18n="pos.checkout.discount">Giảm giá (Voucher):</span><span id="txtDiscount">- 0 ₫</span></div>
+                <div class="summary-row" style="color: #A78BFA;"><span data-i18n="pos.loyalty.discount">Giảm bằng điểm:</span><span id="txtLoyaltyDiscount">- 0 ₫</span></div>
                 <div class="summary-row total"><span data-i18n="pos.checkout.total_due">Tổng cần thu:</span><span id="txtTotal">0 ₫</span></div>
             </div>
 
@@ -156,6 +157,34 @@
                     <i class="ph ph-hand-coins"></i> <span id="btnThuNoLabel"></span>
                 </button>
                 <button id="khachBoChon" onclick="boChonKhach()" class="btn-outline" style="display: none; width: 100%; padding: 0.3rem; font-size: 0.8rem;" data-i18n="pos.customer.clear">Bỏ chọn khách</button>
+            </div>
+
+            <!-- Chỉ hiện khi chương trình đang bật VÀ khách được chọn vẫn đang
+                 hoạt động. Điểm là dữ liệu online: số dư luôn tải lại từ API
+                 chi tiết khách, không lấy con số cũ trong danh sách tìm kiếm. -->
+            <div id="loyaltyBox" style="display:none; margin-bottom:1rem; padding:0.75rem; background:#1E1B4B; border:1px solid #6D28D9; border-radius:8px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; margin-bottom:0.45rem;">
+                    <strong style="color:#EDE9FE;"><i class="ph ph-star"></i> <span data-i18n="pos.loyalty.title">Điểm khách thân thiết</span></strong>
+                    <span id="loyaltyBalanceText" style="color:#C4B5FD; font-size:0.85rem;"></span>
+                </div>
+                <small id="loyaltyRuleText" style="display:block; color:#A5B4FC; margin-bottom:0.5rem;"></small>
+                <div style="display:flex; gap:0.45rem;">
+                    <input id="loyaltyPointsInput" type="text" inputmode="numeric" pattern="[0-9.]*" autocomplete="off" placeholder="Nhập số điểm muốn dùng" data-i18n-placeholder="pos.loyalty.placeholder" style="flex:1; min-width:0; margin:0; padding:0.45rem; background:#0F172A; border:1px solid #6D28D9; color:#fff; border-radius:5px;">
+                    <button id="btnApplyLoyalty" type="button" onclick="applyLoyaltyPoints()" style="padding:0.45rem 0.75rem; white-space:nowrap;"><i class="ph ph-check"></i> <span data-i18n="pos.loyalty.apply">Áp dụng điểm</span></button>
+                </div>
+                <small id="loyaltyMsg" style="display:block; min-height:1.1rem; margin-top:0.3rem; color:#C4B5FD;"></small>
+                <small id="loyaltyEarnPreview" style="display:block; color:#86EFAC;"></small>
+            </div>
+
+            <!-- Chỉ hiện khi máy thật sự offline, giỏ đang áp Voucher/điểm và
+                 request tạo đơn CHƯA rời khỏi máy. Nếu đã có operation đang
+                 chờ retry, tuyệt đối không đổi payload cũ sang đơn offline. -->
+            <div id="loyaltyOfflineChoice" aria-live="polite" style="display:none; margin-bottom:1rem; padding:0.75rem; background:#451A03; border:1px solid #F59E0B; border-radius:8px; color:#FDE68A;">
+                <strong style="display:block; margin-bottom:0.35rem;"><i class="ph ph-wifi-slash"></i> <span id="loyaltyOfflineTitle">Mất mạng — ưu đãi online chưa thể sử dụng</span></strong>
+                <small id="loyaltyOfflineSummary" style="display:block; line-height:1.45; margin-bottom:0.65rem;"></small>
+                <button id="btnRemoveLoyaltyOffline" type="button" onclick="boUuDaiVaTiepTucBanOffline()" style="width:100%; padding:0.55rem 0.7rem; background:#B45309;">
+                    <i class="ph ph-arrow-counter-clockwise"></i> <span id="loyaltyOfflineButtonText">Bỏ dùng điểm và tiếp tục bán offline</span>
+                </button>
             </div>
 
             <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
@@ -363,7 +392,7 @@
                     <span data-i18n="pos.return.refund_total">Tổng tiền hoàn khách</span>
                     <strong id="returnTotal" style="font-size:1.25rem;">0 ₫</strong>
                 </div>
-                <small id="returnDiscountNote" style="display:none; color:#FBBF24;" data-i18n="pos.return.discount_note">Đơn có giảm giá nên tiền hoàn được tính theo tỷ lệ thực thu, thấp hơn giá niêm yết.</small>
+                <small id="returnDiscountNote" style="display:none; color:#FBBF24;" data-i18n="pos.return.discount_note">Đơn có giảm bằng voucher hoặc điểm nên tiền hoàn được tính theo tỷ lệ thực thu, thấp hơn giá niêm yết.</small>
             </div>
 
             <div class="pos-modal-actions">
@@ -408,7 +437,7 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/pos.js?v=20260806-thu-no2"></script>
+    <script src="/js/locales/pos.js?v=20260806-tich-diem-offline"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260803-bo-alert"></script>
     <!-- barcode.js phải nạp trước pos.js: pos.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
@@ -426,7 +455,7 @@
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
     <script src="/js/offline-ban.js?v=20260806-thu-no2"></script>
-    <script src="/js/pos.js?v=20260806-thu-no2"></script>
+    <script src="/js/pos.js?v=20260806-tich-diem-offline-runtime1"></script>
     <script src="/js/pwa.js?v=20260806-pwa"></script>
 </body>
 </html>

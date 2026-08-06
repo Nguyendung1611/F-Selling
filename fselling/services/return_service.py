@@ -15,7 +15,9 @@ là sự kiện xảy ra sau đó, nằm ở bảng `order_returns` chứ không
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
@@ -31,7 +33,7 @@ from ..dependencies import (
     require_staff_permission,
 )
 from ..schemas.order import OrderReturnCreate
-from . import order_service
+from . import loyalty_service, order_service
 
 ENTRY_RETURN_CASH = "RETURN_CASH"
 ENTRY_RETURN_TRANSFER = "RETURN_TRANSFER"
@@ -56,6 +58,62 @@ def _khoa_thao_tac(operation_id: str) -> str:
     return "return:" + hashlib.sha256(ma.encode("utf-8")).hexdigest()
 
 
+def _return_operation_fingerprint(request: OrderReturnCreate) -> str:
+    """Dấu vân tay của đúng yêu cầu mà một operation_id đại diện."""
+    payload = {
+        "items": sorted(
+            (
+                {
+                    "order_item_id": int(item.order_item_id),
+                    "quantity": int(item.quantity),
+                    "restock": bool(item.restock),
+                }
+                for item in request.items
+            ),
+            key=lambda item: item["order_item_id"],
+        ),
+        "method": request.method,
+        "reason": (request.reason or "").strip()[:200] or None,
+        "note": (request.note or "").strip()[:500] or None,
+        "reference": (request.reference or "").strip()[:128] or None,
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _stored_return_fingerprint(ban_ghi: models.OrderReturn) -> str:
+    """Dựng fingerprint cho phiếu legacy chưa có cột ảnh chụp."""
+    payload = {
+        "items": sorted(
+            (
+                {
+                    "order_item_id": int(item.order_item_id),
+                    "quantity": int(item.quantity),
+                    "restock": bool(item.restocked),
+                }
+                for item in ban_ghi.items
+            ),
+            key=lambda item: item["order_item_id"],
+        ),
+        "method": ban_ghi.refund_method,
+        "reason": (ban_ghi.reason or "").strip()[:200] or None,
+        "note": (ban_ghi.note or "").strip()[:500] or None,
+        "reference": (ban_ghi.reference or "").strip()[:128] or None,
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _serialize_return(ban_ghi: models.OrderReturn) -> Dict[str, Any]:
     return {
         "id": ban_ghi.id,
@@ -65,6 +123,8 @@ def _serialize_return(ban_ghi: models.OrderReturn) -> Dict[str, Any]:
         "reason": ban_ghi.reason,
         "note": ban_ghi.note,
         "reference": ban_ghi.reference,
+        "loyalty_points_restored": int(ban_ghi.loyalty_points_restored or 0),
+        "loyalty_points_reversed": int(ban_ghi.loyalty_points_reversed or 0),
         "created_by_user_id": ban_ghi.created_by_user_id,
         "shift_id": ban_ghi.shift_id,
         "created_at": ban_ghi.created_at,
@@ -123,6 +183,167 @@ def tong_da_hoan(db: Session, order_id: int) -> float:
     )
 
 
+def _la_tra_het(
+    dong_don: Dict[int, models.OrderItem],
+    da_tra: Dict[int, int],
+    chi_tiet: List[Dict[str, Any]],
+) -> bool:
+    """Lần này có trả hết toàn bộ số lượng còn lại của đơn hay không."""
+    return bool(dong_don) and all(
+        d_qty(chi_tiet, dong.id) + da_tra.get(dong.id, 0)
+        == int(dong.quantity or 0)
+        for dong in dong_don.values()
+    )
+
+
+def _diem_theo_ty_le(tong_diem: int, tu_so: float, mau_so: float) -> int:
+    """Phân bổ điểm nguyên theo tỷ lệ và luôn làm tròn xuống.
+
+    Dùng ``Decimal(str(...))`` để một sai số float kiểu 2.999999999 không làm
+    khách mất oan một điểm. Trả hết được xử lý riêng ở caller để khớp tuyệt đối.
+    """
+    if tong_diem <= 0 or tu_so <= MONEY_EPSILON or mau_so <= MONEY_EPSILON:
+        return 0
+    try:
+        numerator = Decimal(str(tong_diem)) * Decimal(str(tu_so))
+        denominator = Decimal(str(mau_so))
+        if not numerator.is_finite() or not denominator.is_finite():
+            raise InvalidOperation
+        result = int(
+            (numerator / denominator).to_integral_value(rounding=ROUND_FLOOR)
+        )
+    except (InvalidOperation, ValueError, OverflowError, ZeroDivisionError):
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Dữ liệu tích điểm của đơn không hợp lệ; chưa thể nhận trả"),
+        )
+    return min(max(result, 0), tong_diem)
+
+
+def _tinh_dieu_chinh_diem(
+    db: Session,
+    order: models.Order,
+    dong_don: Dict[int, models.OrderItem],
+    da_tra: Dict[int, int],
+    chi_tiet: List[Dict[str, Any]],
+    event_at: datetime,
+) -> tuple[int, int]:
+    """Trả ``(điểm kiếm bị trừ, điểm đã dùng được hoàn)`` của lần trả này.
+
+    Cả hai phép tính đều dựa trên MỨC LŨY KẾ sau lần trả hiện tại rồi trừ phần
+    các phiếu trước đã xử lý. Nhờ vậy tách một lần trả thành nhiều phiếu không
+    thay đổi tổng điểm vì làm tròn ở từng phiếu.
+    """
+    earned = int(order.loyalty_points_earned or 0)
+    redeemed = int(order.loyalty_points_redeemed or 0)
+    if earned <= 0 and redeemed <= 0:
+        return 0, 0
+    if order.customer_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Đơn có phát sinh điểm nhưng không còn hồ sơ khách hàng; "
+                "chưa thể tự điều chỉnh điểm"
+            ),
+        )
+
+    reversed_before, restored_before = (
+        db.query(
+            func.coalesce(func.sum(models.OrderReturn.loyalty_points_reversed), 0),
+            func.coalesce(func.sum(models.OrderReturn.loyalty_points_restored), 0),
+        )
+        .filter(models.OrderReturn.order_id == order.id)
+        .one()
+    )
+    reversed_before = int(reversed_before or 0)
+    restored_before = int(restored_before or 0)
+    if reversed_before > earned or restored_before > redeemed:
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Lịch sử điều chỉnh điểm của đơn không khớp; chưa thể nhận trả"),
+        )
+
+    tra_het = _la_tra_het(dong_don, da_tra, chi_tiet)
+
+    # Điểm đã kiếm: xét lại số điểm khách đáng được giữ theo đúng số tiền shop
+    # còn giữ sau TẤT CẢ các lần hoàn. Dùng tỷ lệ đã chụp trên đơn, không đọc
+    # cấu hình hiện tại vì chủ shop có thể đã đổi chương trình từ sau lúc bán.
+    if tra_het:
+        reversed_target = earned
+    elif earned > 0:
+        earn_amount = order.loyalty_earn_amount_step
+        earn_points = order.loyalty_earn_points_step
+        if earn_amount is None or float(earn_amount) <= 0 or not earn_points:
+            raise HTTPException(
+                status_code=409,
+                detail=tr(
+                    "Đơn thiếu ảnh chụp tỷ lệ cộng điểm; chưa thể tự điều chỉnh điểm"
+                ),
+            )
+        # `phieu` đã flush trước khi vào hàm này, nên tổng trong DB đã gồm
+        # `tien_hoan` của lần hiện tại. Cộng thêm lần nữa sẽ trừ điểm quá tay.
+        refunded_after = tong_da_hoan(db, order.id)
+        retained_amount = max(float(order.total_amount or 0) - refunded_after, 0.0)
+        kept = loyalty_service.calculate_earn(
+            {
+                "enabled": True,
+                "earn_amount": float(earn_amount),
+                "earn_points": int(earn_points),
+            },
+            retained_amount,
+        )
+        reversed_target = max(earned - min(kept, earned), 0)
+    else:
+        reversed_target = 0
+
+    # Điểm đã dùng: hoàn theo tỷ lệ lũy kế GIÁ NIÊM YẾT của hàng đã trả trên
+    # tổng giá niêm yết. Tiền mặt đã được `_tinh_tien_hoan` giảm tương ứng nên
+    # hoàn lại phần điểm này không làm khách nhận gấp đôi.
+    if tra_het:
+        restored_target = redeemed
+    elif redeemed > 0:
+        subtotal = sum(
+            float(dong.price or 0) * int(dong.quantity or 0)
+            for dong in dong_don.values()
+        )
+        nominal_returned_before = sum(
+            float(dong.price or 0) * da_tra.get(dong.id, 0)
+            for dong in dong_don.values()
+        )
+        nominal_returned_after = nominal_returned_before + sum(
+            float(d["tien_hang"] or 0) for d in chi_tiet
+        )
+        restored_target = _diem_theo_ty_le(
+            redeemed, nominal_returned_after, subtotal
+        )
+    else:
+        restored_target = 0
+
+    if reversed_target < reversed_before or restored_target < restored_before:
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Lịch sử trả hàng và điểm không khớp; chưa thể nhận trả"),
+        )
+    reversible_now, ledger_reversed_before = (
+        loyalty_service.reversible_points_for_order(
+            db,
+            order.shop_id,
+            order.customer_id,
+            order.id,
+            reversed_target,
+            as_of=event_at,
+        )
+    )
+    if ledger_reversed_before != reversed_before:
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Sổ điểm và lịch sử trả hàng không khớp; chưa thể nhận trả"
+            ),
+        )
+    return reversible_now, restored_target - restored_before
+
+
 def bo_sung_thong_tin_tra_hang(
     db: Session, chi_tiet: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -164,7 +385,10 @@ def _kiem_yeu_cau(request: OrderReturnCreate) -> None:
 
 
 def _phieu_da_ghi(
-    db: Session, operation_key: str, order_id: int
+    db: Session,
+    operation_key: str,
+    order_id: int,
+    operation_fingerprint: str,
 ) -> Optional[models.OrderReturn]:
     """Phiếu trả đã tạo trước đó với đúng mã thao tác này.
 
@@ -182,6 +406,16 @@ def _phieu_da_ghi(
         raise HTTPException(
             status_code=409,
             detail=tr("Mã thao tác trả hàng đã được dùng cho một đơn khác"),
+        )
+    stored_fingerprint = (
+        truoc.operation_fingerprint or _stored_return_fingerprint(truoc)
+    )
+    if stored_fingerprint != operation_fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Mã thao tác trả hàng đã được dùng cho một yêu cầu khác"
+            ),
         )
     return truoc
 
@@ -201,8 +435,11 @@ def create_return(
 
     _kiem_yeu_cau(request)
     operation_key = _khoa_thao_tac(request.operation_id)
+    operation_fingerprint = _return_operation_fingerprint(request)
 
-    truoc = _phieu_da_ghi(db, operation_key, order_id)
+    truoc = _phieu_da_ghi(
+        db, operation_key, order_id, operation_fingerprint
+    )
     if truoc is not None:
         return _ket_qua(db, order, truoc, lap_lai=True)
 
@@ -213,7 +450,9 @@ def create_return(
     db.refresh(order)
 
     # Kiểm lại sau khi có lock: một request song song cùng mã có thể vừa xong.
-    truoc = _phieu_da_ghi(db, operation_key, order_id)
+    truoc = _phieu_da_ghi(
+        db, operation_key, order_id, operation_fingerprint
+    )
     if truoc is not None:
         ket_qua = _ket_qua(db, order, truoc, lap_lai=True)
         db.rollback()
@@ -307,6 +546,7 @@ def create_return(
         created_by_user_id=current_user.id,
         shift_id=shift.id if shift else None,
         idempotency_key=operation_key,
+        operation_fingerprint=operation_fingerprint,
         created_at=datetime.utcnow(),
     )
     db.add(phieu)
@@ -315,10 +555,53 @@ def create_return(
     except IntegrityError:
         # Unique idempotency_key: một request song song cùng mã đã ghi trước.
         db.rollback()
-        truoc = _phieu_da_ghi(db, operation_key, order_id)
+        truoc = _phieu_da_ghi(
+            db, operation_key, order_id, operation_fingerprint
+        )
         if truoc is not None:
             return _ket_qua(db, order, truoc, lap_lai=True)
         raise
+
+    diem_bi_tru, diem_duoc_hoan = _tinh_dieu_chinh_diem(
+        db,
+        order,
+        dong_don,
+        da_tra,
+        chi_tiet,
+        phieu.created_at,
+    )
+    phieu.loyalty_points_reversed = diem_bi_tru
+    phieu.loyalty_points_restored = diem_duoc_hoan
+
+    if diem_bi_tru > 0:
+        loyalty_service.add_entry(
+            db,
+            order.shop_id,
+            order.customer_id,
+            loyalty_service.ENTRY_RETURN_REVERSE,
+            -diem_bi_tru,
+            f"return-reverse:{phieu.id}",
+            order_id=order_id,
+            return_id=phieu.id,
+            created_by_user_id=current_user.id,
+            note=f"Trừ lại điểm đã cộng khi trả hàng đơn #{order_id}",
+            created_at=phieu.created_at,
+        )
+    if diem_duoc_hoan > 0:
+        loyalty_service.add_entry(
+            db,
+            order.shop_id,
+            order.customer_id,
+            loyalty_service.ENTRY_RETURN_RESTORE,
+            diem_duoc_hoan,
+            f"return-restore:{phieu.id}",
+            order_id=order_id,
+            return_id=phieu.id,
+            created_by_user_id=current_user.id,
+            note=f"Hoàn điểm đã dùng khi trả hàng đơn #{order_id}",
+            expiry_days=order.loyalty_expiry_days_snapshot,
+            created_at=phieu.created_at,
+        )
 
     for d in chi_tiet:
         dong = d["dong"]
@@ -376,6 +659,10 @@ def create_return(
     khong_nhap_lai = [d for d in chi_tiet if not d["restock"]]
     if khong_nhap_lai:
         mo_ta += f" - {len(khong_nhap_lai)} dòng KHÔNG nhập lại kho"
+    if diem_bi_tru:
+        mo_ta += f" - trừ lại {diem_bi_tru} điểm đã cộng"
+    if diem_duoc_hoan:
+        mo_ta += f" - hoàn {diem_duoc_hoan} điểm đã dùng"
     if phieu.reason:
         mo_ta += f" - lý do: {phieu.reason}"
     order_service._them_nhat_ky(db, current_user.id, "ORDER_RETURN", mo_ta)
@@ -408,29 +695,45 @@ def _tinh_tien_hoan(
         float(order.total_amount or 0) - tong_da_hoan(db, order.id), 0.0
     )
 
-    tra_het = all(
-        d_qty(chi_tiet, dong.id) + da_tra.get(dong.id, 0) == int(dong.quantity or 0)
-        for dong in dong_don.values()
-    )
+    tra_het = _la_tra_het(dong_don, da_tra, chi_tiet)
 
     tong = 0.0
     for d in chi_tiet:
         d["tien_hoan"] = float(round(d["tien_hang"] * ty_le))
         tong += d["tien_hoan"]
 
-    if tra_het:
-        # Dồn phần chênh do làm tròn vào dòng cuối để tổng khớp tuyệt đối.
-        chenh = con_lai_cua_don - tong
-        if chi_tiet and abs(chenh) > MONEY_EPSILON:
-            chi_tiet[-1]["tien_hoan"] += chenh
-        tong = con_lai_cua_don
+    # Trả hết phải khớp đúng phần còn lại; trả một phần không được vượt phần đó.
+    # Chênh âm phải rải qua NHIỀU dòng: dồn hết vào dòng cuối có thể làm tiền
+    # hoàn của dòng đó âm khi các lần trả trước đã dùng hết phần tiền còn lại.
+    muc_tieu = con_lai_cua_don if tra_het else min(tong, con_lai_cua_don)
+    chenh = muc_tieu - tong
+    if chi_tiet and chenh > MONEY_EPSILON:
+        chi_tiet[-1]["tien_hoan"] += chenh
+    elif chenh < -MONEY_EPSILON:
+        can_giam = -chenh
+        for d in reversed(chi_tiet):
+            if can_giam <= MONEY_EPSILON:
+                break
+            dang_hoan = max(float(d["tien_hoan"] or 0), 0.0)
+            giam = min(dang_hoan, can_giam)
+            d["tien_hoan"] = dang_hoan - giam
+            can_giam -= giam
+        if can_giam > MONEY_EPSILON:
+            raise HTTPException(
+                status_code=409,
+                detail=tr("Không phân bổ được tiền hoàn; chưa thể nhận trả"),
+            )
 
-    # Không bao giờ hoàn quá số khách đã trả cho đơn, kể cả khi làm tròn đẩy lên.
-    if tong > con_lai_cua_don:
-        thua = tong - con_lai_cua_don
-        chi_tiet[-1]["tien_hoan"] = max(chi_tiet[-1]["tien_hoan"] - thua, 0.0)
-        tong = con_lai_cua_don
-    return max(tong, 0.0)
+    tong_sau_phan_bo = sum(float(d["tien_hoan"] or 0) for d in chi_tiet)
+    if (
+        any(float(d["tien_hoan"] or 0) < -MONEY_EPSILON for d in chi_tiet)
+        or abs(tong_sau_phan_bo - muc_tieu) > MONEY_EPSILON
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Tổng tiền hoàn theo dòng không khớp; chưa thể nhận trả"),
+        )
+    return max(tong_sau_phan_bo, 0.0)
 
 
 def d_qty(chi_tiet: List[Dict[str, Any]], order_item_id: int) -> int:
@@ -457,5 +760,7 @@ def _ket_qua(
         "order_status": order.status,
         "total_amount": order.total_amount,
         "returned_total": tong_da_hoan(db, order.id),
+        "loyalty_points_restored": int(phieu.loyalty_points_restored or 0),
+        "loyalty_points_reversed": int(phieu.loyalty_points_reversed or 0),
         "return": _serialize_return(phieu),
     }

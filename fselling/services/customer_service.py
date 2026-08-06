@@ -17,11 +17,16 @@ from ..dependencies import (
     require_shop_access,
     require_staff_permission,
 )
-from ..schemas.customer import CustomerCreate, CustomerUpdate
+from ..schemas.customer import CustomerCreate, CustomerStatusUpdate, CustomerUpdate
+from . import loyalty_service, order_service
 from .log_service import log_system_action
 
 
-def _to_out(c: models.Customer, cong_no: Optional[float] = None) -> Dict:
+def _to_out(
+    c: models.Customer,
+    cong_no: Optional[float] = None,
+    diem: Optional[int] = None,
+) -> Dict:
     ket_qua = {
         "id": c.id,
         "shop_id": c.shop_id,
@@ -31,9 +36,12 @@ def _to_out(c: models.Customer, cong_no: Optional[float] = None) -> Dict:
         "note": c.note,
         # None = không giới hạn, khác hẳn 0 = không cho nợ đồng nào.
         "credit_limit": c.credit_limit,
+        "is_active": bool(c.is_active),
     }
     if cong_no is not None:
         ket_qua["debt_amount"] = cong_no
+    if diem is not None:
+        ket_qua["points_balance"] = int(diem)
     return ket_qua
 
 
@@ -96,15 +104,21 @@ def create_customer(
     log_system_action(
         db, current_user.id, "CREATE_CUSTOMER", f"Thêm khách '{name}' ({phone}) cho shop #{shop_id}"
     )
-    return _to_out(kh)
+    return _to_out(kh, diem=0)
 
 
 def list_customers(
-    db: Session, current_user: models.User, shop_id: int, q: Optional[str] = None
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    q: Optional[str] = None,
+    include_inactive: bool = False,
 ) -> List[Dict]:
     require_shop_access(db, shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_CUSTOMER)
     query = db.query(models.Customer).filter(models.Customer.shop_id == shop_id)
+    if not include_inactive:
+        query = query.filter(models.Customer.is_active.is_(True))
     if q and q.strip():
         like = f"%{q.strip()}%"
         query = query.filter(
@@ -114,7 +128,17 @@ def list_customers(
     # Nợ của từng khách gom bằng MỘT truy vấn cho cả danh sách, không gọi
     # `cong_no_cua_khach` trong vòng lặp: 200 khách là 200 lượt truy vấn.
     no_theo_khach = _no_theo_khach(db, [c.id for c in khs])
-    return [_to_out(c, no_theo_khach.get(c.id, 0.0)) for c in khs]
+    diem_theo_khach = loyalty_service.balances_for_customers(
+        db, [c.id for c in khs], shop_id=shop_id
+    )
+    return [
+        _to_out(
+            c,
+            no_theo_khach.get(c.id, 0.0),
+            diem_theo_khach.get(c.id, 0),
+        )
+        for c in khs
+    ]
 
 
 def _no_theo_khach(db: Session, customer_ids: List[int]) -> Dict[int, float]:
@@ -156,7 +180,11 @@ def _get_owned_customer(
 
 def get_customer(db: Session, current_user: models.User, customer_id: int) -> Dict:
     kh = _get_owned_customer(db, current_user, customer_id)
-    return _to_out(kh, _no_theo_khach(db, [kh.id]).get(kh.id, 0.0))
+    return _to_out(
+        kh,
+        _no_theo_khach(db, [kh.id]).get(kh.id, 0.0),
+        loyalty_service.balance_for_customer(db, kh.id, shop_id=kh.shop_id),
+    )
 
 
 def update_customer(
@@ -190,7 +218,12 @@ def update_customer(
     db.commit()
     db.refresh(kh)
     log_system_action(db, current_user.id, "UPDATE_CUSTOMER", f"Cập nhật khách '{name}' ({phone})")
-    return _to_out(kh)
+    return _to_out(
+        kh,
+        diem=loyalty_service.balance_for_customer(
+            db, kh.id, shop_id=kh.shop_id
+        ),
+    )
 
 
 def customer_history(db: Session, current_user: models.User, customer_id: int) -> Dict:
@@ -206,10 +239,17 @@ def customer_history(db: Session, current_user: models.User, customer_id: int) -
     tong_da_chi = sum(o.total_amount or 0 for o in orders if o.status == "PAID")
     cong_no = _no_theo_khach(db, [kh.id]).get(kh.id, 0.0)
     return {
-        "customer": _to_out(kh, cong_no),
+        "customer": _to_out(
+            kh,
+            cong_no,
+            loyalty_service.balance_for_customer(db, kh.id, shop_id=kh.shop_id),
+        ),
         "total_paid": tong_da_chi,
         "debt_amount": cong_no,
         "order_count": len(orders),
+        "loyalty_history": loyalty_service.history_for_customer(
+            db, kh.id, shop_id=kh.shop_id
+        ),
         "orders": [
             {
                 "id": o.id,
@@ -233,7 +273,26 @@ def customer_history(db: Session, current_user: models.User, customer_id: int) -
 
 def delete_customer(db: Session, current_user: models.User, customer_id: int) -> Dict[str, str]:
     kh = _get_owned_customer(db, current_user, customer_id)
+    # Cùng hàng rào với tạo/thanh toán đơn: nếu thu ngân đang chốt lần cộng
+    # điểm đầu tiên thì nút Xóa phải chờ. Sau khi lấy được lock mới kiểm lại
+    # lịch sử, nếu không có thể xóa cứng khách ngay sau lúc ledger vừa commit.
+    order_service._lock_shop_for_order(db, kh.shop_id)
+    kh = _get_owned_customer(db, current_user, customer_id)
     ten = kh.name
+
+    # Sổ điểm là chứng từ bất biến. Khách đã từng có điểm phải giữ nguyên hồ
+    # sơ để mọi bút toán cũ còn đúng người; nút Xóa lúc này chỉ ngừng cho POS
+    # chọn khách trong đơn mới.
+    if loyalty_service.has_history(db, customer_id, shop_id=kh.shop_id):
+        kh.is_active = False
+        db.commit()
+        log_system_action(
+            db,
+            current_user.id,
+            "DEACTIVATE_CUSTOMER",
+            f"Ngừng sử dụng khách '{ten}' vì đã có lịch sử điểm",
+        )
+        return {"msg": "Deactivated"}
 
     # Không xóa cứng liên kết trên đơn cũ: gỡ tham chiếu để giữ lịch sử đơn,
     # rồi mới xóa hồ sơ khách. Đơn vẫn còn, chỉ không còn gắn khách.
@@ -244,3 +303,26 @@ def delete_customer(db: Session, current_user: models.User, customer_id: int) ->
     db.commit()
     log_system_action(db, current_user.id, "DELETE_CUSTOMER", f"Xóa khách '{ten}'")
     return {"msg": "Deleted"}
+
+
+def update_customer_status(
+    db: Session,
+    current_user: models.User,
+    customer_id: int,
+    data: CustomerStatusUpdate,
+) -> Dict:
+    kh = _get_owned_customer(db, current_user, customer_id)
+    kh.is_active = bool(data.is_active)
+    db.commit()
+    db.refresh(kh)
+    log_system_action(
+        db,
+        current_user.id,
+        "REACTIVATE_CUSTOMER" if kh.is_active else "DEACTIVATE_CUSTOMER",
+        f"{'Dùng lại' if kh.is_active else 'Ngừng sử dụng'} khách '{kh.name}'",
+    )
+    return _to_out(
+        kh,
+        _no_theo_khach(db, [kh.id]).get(kh.id, 0.0),
+        loyalty_service.balance_for_customer(db, kh.id, shop_id=kh.shop_id),
+    )

@@ -30,7 +30,7 @@ from ..schemas.order import (
     OrderCreate,
     RefundComplete,
 )
-from . import inventory_service, payment_service, voucher_service
+from . import inventory_service, loyalty_service, payment_service, voucher_service
 from .log_service import log_system_action
 
 
@@ -299,6 +299,7 @@ def _order_operation_fingerprint(order: OrderCreate) -> str:
         "voucher_code": (order.voucher_code or "").strip().upper() or None,
         "payment_method": order.payment_method,
         "customer_id": order.customer_id,
+        "loyalty_points_to_use": int(order.loyalty_points_to_use or 0),
     }
     canonical = json.dumps(
         payload,
@@ -310,14 +311,27 @@ def _order_operation_fingerprint(order: OrderCreate) -> str:
 
 
 def _create_order_response(
-    shop: models.Shop, existing: models.Order
+    db: Session, shop: models.Shop, existing: models.Order
 ) -> Dict[str, Any]:
     discount = _so_tien(existing.discount_amount)
+    loyalty_discount = _so_tien(existing.loyalty_discount_amount)
     total = _so_tien(existing.total_amount)
+    loyalty_balance = (
+        loyalty_service.balance_for_customer(
+            db, existing.customer_id, shop_id=existing.shop_id
+        )
+        if existing.customer_id is not None
+        else 0
+    )
     return {
         "order_id": existing.id,
-        "subtotal": total + discount,
+        "status": existing.status,
+        "subtotal": total + discount + loyalty_discount,
         "discount": discount,
+        "loyalty_discount": loyalty_discount,
+        "loyalty_points_redeemed": int(existing.loyalty_points_redeemed or 0),
+        "loyalty_points_earned": int(existing.loyalty_points_earned or 0),
+        "loyalty_balance": loyalty_balance,
         "total": total,
         "qr_url": payment_service.build_qr_url(shop, total, existing.id),
     }
@@ -346,7 +360,7 @@ def _existing_operation_order(
             status_code=409,
             detail=tr("Mã retry tạo đơn đã được dùng cho một đơn khác"),
         )
-    return _create_order_response(shop, existing)
+    return _create_order_response(db, shop, existing)
 
 
 def cong_no_cua_khach(db: Session, customer_id: int) -> float:
@@ -414,6 +428,56 @@ def _lock_shop_for_order(db: Session, shop_id: int) -> None:
         raise HTTPException(status_code=404, detail=tr("Không tìm thấy cửa hàng"))
 
 
+def _award_loyalty_paid_order(
+    db: Session,
+    order: models.Order,
+    created_by_user_id: Optional[int],
+) -> int:
+    """Chốt điểm đúng một lần khi đơn lần đầu trở thành PAID.
+
+    Tỷ lệ cộng lấy từ ảnh chụp lúc tạo đơn, nhưng chương trình phải vẫn đang
+    bật tại lúc khách trả đủ. Kể cả kết quả là 0, ``loyalty_awarded_at`` vẫn
+    được ghi để retry sau khi bật lại không cộng hồi tố.
+    """
+    if order.loyalty_awarded_at is not None:
+        return int(order.loyalty_points_earned or 0)
+
+    order.loyalty_awarded_at = datetime.utcnow()
+    order.loyalty_points_earned = 0
+    if (
+        order.customer_id is None
+        or order.loyalty_earn_amount_step is None
+        or order.loyalty_earn_points_step is None
+    ):
+        return 0
+
+    current_program = loyalty_service.get_program_model(db, order.shop_id)
+    if current_program is None or not current_program.enabled:
+        return 0
+
+    snapshot = {
+        "enabled": True,
+        "earn_amount": order.loyalty_earn_amount_step,
+        "earn_points": order.loyalty_earn_points_step,
+    }
+    points = loyalty_service.calculate_earn(snapshot, _so_tien(order.total_amount))
+    order.loyalty_points_earned = points
+    if points > 0:
+        loyalty_service.add_entry(
+            db,
+            order.shop_id,
+            order.customer_id,
+            loyalty_service.ENTRY_EARN,
+            points,
+            f"earn:order:{order.id}",
+            order_id=order.id,
+            created_by_user_id=created_by_user_id,
+            note=f"Cộng điểm khi đơn #{order.id} đã thanh toán đủ",
+            expiry_days=order.loyalty_expiry_days_snapshot,
+        )
+    return points
+
+
 def create_order(
     db: Session, current_user: models.User, shop_id: int, order: OrderCreate
 ) -> Dict[str, Any]:
@@ -476,9 +540,7 @@ def create_order(
         db, shop_id, order.voucher_code, subtotal
     )
 
-    total = subtotal - discount_amount
-    if total < 0:
-        total = 0
+    amount_after_voucher = max(subtotal - discount_amount, 0)
     current_shift = _current_cash_shift(
         db,
         current_user,
@@ -504,7 +566,51 @@ def create_order(
                 status_code=404,
                 detail=tr("Khách hàng không tồn tại trong cửa hàng này"),
             )
+        if not khach.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail=tr("Khách hàng này đã ngừng sử dụng"),
+            )
         customer_id = khach.id
+
+    loyalty_program = loyalty_service.get_program_model(db, shop_id)
+    loyalty_points = 0
+    loyalty_discount = 0.0
+    # Cùng một mốc cho cả kiểm số dư và bút toán dùng điểm. Nếu gọi utcnow hai
+    # lần, một lô có thể hết hạn ở giữa: khách vẫn được giảm tiền nhưng ledger
+    # lại coi số điểm đó đã hết hạn và biến thành nợ âm.
+    loyalty_event_at = datetime.utcnow()
+    earn_amount_snapshot = None
+    earn_points_snapshot = None
+    expiry_days_snapshot = None
+    if khach is not None and loyalty_program is not None and loyalty_program.enabled:
+        earn_amount_snapshot = loyalty_program.earn_amount
+        earn_points_snapshot = loyalty_program.earn_points
+        expiry_days_snapshot = loyalty_program.expiry_days
+
+    points_requested = int(order.loyalty_points_to_use or 0)
+    if points_requested > 0:
+        if khach is None:
+            raise HTTPException(
+                status_code=400,
+                detail=tr("Phải chọn khách hàng trước khi dùng điểm"),
+            )
+        balance = loyalty_service.balance_for_customer(
+            db,
+            khach.id,
+            as_of=loyalty_event_at,
+            shop_id=shop_id,
+        )
+        redeemed = loyalty_service.calculate_redeem(
+            loyalty_program,
+            balance,
+            points_requested,
+            amount_after_voucher,
+        )
+        loyalty_points = int(redeemed["applied_points"])
+        loyalty_discount = _so_tien(redeemed["discount"])
+
+    total = max(amount_after_voucher - loyalty_discount, 0)
 
     ghi_no = order.payment_method == PAYMENT_METHOD_DEBT
     if ghi_no:
@@ -521,6 +627,11 @@ def create_order(
         operation_fingerprint=operation_fingerprint if operation_id else None,
         total_amount=total,
         discount_amount=discount_amount,
+        loyalty_points_redeemed=loyalty_points,
+        loyalty_discount_amount=loyalty_discount,
+        loyalty_earn_amount_step=earn_amount_snapshot,
+        loyalty_earn_points_step=earn_points_snapshot,
+        loyalty_expiry_days_snapshot=expiry_days_snapshot,
         voucher_code=order.voucher_code,
         payment_method=order.payment_method,
         customer_id=customer_id,
@@ -547,6 +658,20 @@ def create_order(
             if existing_response is not None:
                 return existing_response
         raise
+
+    if loyalty_points > 0:
+        loyalty_service.add_entry(
+            db,
+            shop_id,
+            customer_id,
+            loyalty_service.ENTRY_REDEEM,
+            -loyalty_points,
+            f"redeem:order:{new_order.id}",
+            order_id=new_order.id,
+            created_by_user_id=current_user.id,
+            note=f"Giữ điểm để dùng cho đơn #{new_order.id}",
+            created_at=loyalty_event_at,
+        )
 
     # Trừ kho TRƯỚC khi dựng dòng đơn: với sản phẩm theo lô, giá vốn của dòng
     # phải lấy từ đúng các lô vừa xuất, nên phải biết đã lấy lô nào rồi mới ghi
@@ -598,10 +723,13 @@ def create_order(
     if applied_voucher is not None:
         applied_voucher.usage_count = (applied_voucher.usage_count or 0) + 1
 
+    if new_order.status == STATUS_PAID:
+        _award_loyalty_paid_order(db, new_order, current_user.id)
+
     db.commit()
     db.refresh(new_order)
 
-    return _create_order_response(shop, new_order)
+    return _create_order_response(db, shop, new_order)
 
 
 def get_order(db: Session, current_user: models.User, order_id: int) -> Dict[str, Any]:
@@ -626,6 +754,16 @@ def get_order(db: Session, current_user: models.User, order_id: int) -> Dict[str
         "status": order.status,
         "total_amount": order.total_amount,
         "payment_method": order.payment_method,
+        "loyalty_points_redeemed": int(order.loyalty_points_redeemed or 0),
+        "loyalty_discount_amount": _so_tien(order.loyalty_discount_amount),
+        "loyalty_points_earned": int(order.loyalty_points_earned or 0),
+        "loyalty_balance": (
+            loyalty_service.balance_for_customer(
+                db, order.customer_id, shop_id=order.shop_id
+            )
+            if order.customer_id is not None
+            else None
+        ),
     }
     result.update(payment_summary(order))
     return result
@@ -636,7 +774,7 @@ def pay_order(
     current_user: models.User,
     order_id: int,
     request: Optional[CashPayment] = None,
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """Thu tiền mặt cho đơn PENDING.
 
     Đơn chuyển khoản phải do webhook xác nhận; không còn đường bấm tay biến
@@ -662,7 +800,17 @@ def pay_order(
         )
 
     if order.status == STATUS_PAID:
-        return {"msg": "Paid successfully"}
+        return {
+            "msg": "Paid successfully",
+            "loyalty_points_earned": int(order.loyalty_points_earned or 0),
+            "loyalty_balance": (
+                loyalty_service.balance_for_customer(
+                    db, order.customer_id, shop_id=order.shop_id
+                )
+                if order.customer_id is not None
+                else 0
+            ),
+        }
 
     total_amount = _so_tien(order.total_amount)
     tendered_amount = (
@@ -689,7 +837,18 @@ def pay_order(
         db.rollback()
         current = read_status(db, order_id)
         if current == STATUS_PAID:
-            return {"msg": "Paid successfully"}
+            fresh = db.query(models.Order).filter(models.Order.id == order_id).one()
+            return {
+                "msg": "Paid successfully",
+                "loyalty_points_earned": int(fresh.loyalty_points_earned or 0),
+                "loyalty_balance": (
+                    loyalty_service.balance_for_customer(
+                        db, fresh.customer_id, shop_id=fresh.shop_id
+                    )
+                    if fresh.customer_id is not None
+                    else 0
+                ),
+            }
         raise HTTPException(
             status_code=409,
             detail=tr(
@@ -731,8 +890,19 @@ def pay_order(
         "PAY_ORDER",
         f"Thanh toán tiền mặt đơn #{order_id} - Tổng tiền: {total_amount:,.0f}đ",
     )
+    _award_loyalty_paid_order(db, order, current_user.id)
     db.commit()
-    return {"msg": "Paid successfully"}
+    return {
+        "msg": "Paid successfully",
+        "loyalty_points_earned": int(order.loyalty_points_earned or 0),
+        "loyalty_balance": (
+            loyalty_service.balance_for_customer(
+                db, order.customer_id, shop_id=order.shop_id
+            )
+            if order.customer_id is not None
+            else 0
+        ),
+    }
 
 
 def _cash_topup_amount(order: models.Order, request: CashTopup) -> float:
@@ -866,6 +1036,7 @@ def cash_topup(
         f"Order {order_id}: thu bù tiền mặt {amount:,.0f}đ"
         + (f" - {note}" if note else ""),
     )
+    _award_loyalty_paid_order(db, order, current_user.id)
     db.commit()
     db.refresh(order)
     response = {
@@ -877,6 +1048,14 @@ def cash_topup(
         "id": order.id,
         "status": order.status,
         "total_amount": order.total_amount,
+        "loyalty_points_earned": int(order.loyalty_points_earned or 0),
+        "loyalty_balance": (
+            loyalty_service.balance_for_customer(
+                db, order.customer_id, shop_id=order.shop_id
+            )
+            if order.customer_id is not None
+            else 0
+        ),
     }
     response.update(payment_summary(order))
     return response
@@ -916,17 +1095,31 @@ def debt_payment(
             detail=tr("Số tiền thu phải lớn hơn 0"),
         )
 
+    expected_entry_type = (
+        ENTRY_DEBT_CASH
+        if request.method == "cash"
+        else ENTRY_DEBT_TRANSFER
+    )
+
+    def same_debt_request(payment: models.OrderPayment) -> bool:
+        return (
+            payment.order_id == order_id
+            and payment.entry_type == expected_entry_type
+            and abs(_so_tien(payment.amount) - so_tien) <= MONEY_EPSILON
+            and (payment.note or None)
+            == ((request.note or "").strip()[:500] or None)
+            and (payment.reference or None)
+            == ((request.reference or "").strip()[:128] or None)
+        )
+
     da_ghi = (
         db.query(models.OrderPayment)
         .filter(models.OrderPayment.idempotency_key == operation_key)
         .first()
     )
     if da_ghi is not None:
-        if da_ghi.order_id == order_id and da_ghi.entry_type in (
-            ENTRY_DEBT_CASH,
-            ENTRY_DEBT_TRANSFER,
-        ):
-            return _ket_qua_thu_no(order, lap_lai=True)
+        if same_debt_request(da_ghi):
+            return _ket_qua_thu_no(db, order, lap_lai=True)
         raise HTTPException(
             status_code=409,
             detail=tr("Mã thao tác thu nợ đã được dùng cho một giao dịch khác"),
@@ -972,7 +1165,7 @@ def debt_payment(
     db.add(
         models.OrderPayment(
             order_id=order_id,
-            entry_type=ENTRY_DEBT_CASH if tien_mat else ENTRY_DEBT_TRANSFER,
+            entry_type=expected_entry_type,
             amount=so_tien,
             idempotency_key=operation_key,
             created_by_user_id=current_user.id,
@@ -992,8 +1185,15 @@ def debt_payment(
             .filter(models.OrderPayment.idempotency_key == operation_key)
             .first()
         )
-        if fresh and da_ghi and da_ghi.order_id == order_id:
-            return _ket_qua_thu_no(fresh, lap_lai=True)
+        if fresh and da_ghi and same_debt_request(da_ghi):
+            return _ket_qua_thu_no(db, fresh, lap_lai=True)
+        if da_ghi is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=tr(
+                    "Mã thao tác thu nợ đã được dùng cho một giao dịch khác"
+                ),
+            )
         raise
 
     # Cộng dồn vào đúng cột mà `payment_summary` đang đọc, thay vì dựng thêm một
@@ -1034,6 +1234,8 @@ def debt_payment(
             status_code=409,
             detail=tr("Trạng thái đơn vừa thay đổi; vui lòng tải lại"),
         )
+    if tra_het:
+        _award_loyalty_paid_order(db, order, current_user.id)
 
     _them_nhat_ky(
         db,
@@ -1046,10 +1248,12 @@ def debt_payment(
     )
     db.commit()
     db.refresh(order)
-    return _ket_qua_thu_no(order, lap_lai=False)
+    return _ket_qua_thu_no(db, order, lap_lai=False)
 
 
-def _ket_qua_thu_no(order: models.Order, lap_lai: bool) -> Dict[str, Any]:
+def _ket_qua_thu_no(
+    db: Session, order: models.Order, lap_lai: bool
+) -> Dict[str, Any]:
     ket_qua = {
         "msg": tr(
             "Lần thu nợ này đã được ghi nhận trước đó"
@@ -1059,6 +1263,14 @@ def _ket_qua_thu_no(order: models.Order, lap_lai: bool) -> Dict[str, Any]:
         "id": order.id,
         "status": order.status,
         "total_amount": order.total_amount,
+        "loyalty_points_earned": int(order.loyalty_points_earned or 0),
+        "loyalty_balance": (
+            loyalty_service.balance_for_customer(
+                db, order.customer_id, shop_id=order.shop_id
+            )
+            if order.customer_id is not None
+            else 0
+        ),
     }
     ket_qua.update(payment_summary(order))
     return ket_qua
@@ -1385,6 +1597,16 @@ def get_order_detail(db: Session, current_user: models.User, order_id: int) -> D
         "cash_change_amount": order.cash_change_amount,
         "voucher_code": order.voucher_code,
         "discount_amount": order.discount_amount or 0,
+        "loyalty_points_redeemed": int(order.loyalty_points_redeemed or 0),
+        "loyalty_discount_amount": _so_tien(order.loyalty_discount_amount),
+        "loyalty_points_earned": int(order.loyalty_points_earned or 0),
+        "loyalty_balance": (
+            loyalty_service.balance_for_customer(
+                db, order.customer_id, shop_id=order.shop_id
+            )
+            if order.customer_id is not None
+            else None
+        ),
         "total_amount": order.total_amount,
         "customer": customer,
         "subtotal": sum((i.price or 0) * (i.quantity or 0) for i in items),
@@ -1439,7 +1661,13 @@ def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[
     require_staff_permission(current_user, PERMISSION_SALE)
 
     if order.status == STATUS_CANCELLED:
-        return _ket_qua_huy(order_id, restored=0, unrestored=0, voucher_released=False)
+        return _ket_qua_huy(
+            order_id,
+            restored=0,
+            unrestored=0,
+            voucher_released=False,
+            loyalty_restored=_diem_da_hoan_khi_huy(db, order_id),
+        )
 
     # Đơn ghi nợ đã thu được một phần thì KHÔNG hủy được: hủy sẽ hoàn tồn kho
     # cho số hàng khách đã cầm về, và biến khoản tiền đã thu thành tiền vô chủ -
@@ -1466,7 +1694,13 @@ def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[
         db.rollback()
         current = read_status(db, order_id)
         if current == STATUS_CANCELLED:
-            return _ket_qua_huy(order_id, restored=0, unrestored=0, voucher_released=False)
+            return _ket_qua_huy(
+                order_id,
+                restored=0,
+                unrestored=0,
+                voucher_released=False,
+                loyalty_restored=_diem_da_hoan_khi_huy(db, order_id),
+            )
         raise HTTPException(
             status_code=409,
             detail=tr(
@@ -1475,6 +1709,12 @@ def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[
             ),
         )
 
+    loyalty_restored = _hoan_diem_khi_huy(
+        db,
+        order,
+        created_by_user_id=current_user.id,
+        cancelled_at=datetime.utcnow(),
+    )
     restored, unrestored, voucher_released = _hoan_lai(
         db, order_id, shop_id, voucher_code, discount_amount
     )
@@ -1482,9 +1722,78 @@ def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[
         db,
         current_user.id,
         "CANCEL_ORDER",
-        _mo_ta_huy(order_id, restored, unrestored, voucher_code, voucher_released),
+        _mo_ta_huy(
+            order_id,
+            restored,
+            unrestored,
+            voucher_code,
+            voucher_released,
+            loyalty_restored,
+        ),
     )
-    return _ket_qua_huy(order_id, restored, unrestored, voucher_released)
+    return _ket_qua_huy(
+        order_id,
+        restored,
+        unrestored,
+        voucher_released,
+        loyalty_restored,
+    )
+
+
+def _diem_da_hoan_khi_huy(db: Session, order_id: int) -> int:
+    entries = (
+        db.query(models.LoyaltyPointEntry.points_delta)
+        .filter(
+            models.LoyaltyPointEntry.order_id == order_id,
+            models.LoyaltyPointEntry.entry_type
+            == loyalty_service.ENTRY_CANCEL_RESTORE,
+        )
+        .all()
+    )
+    return sum(max(int(points or 0), 0) for (points,) in entries)
+
+
+def _hoan_diem_khi_huy(
+    db: Session,
+    order: models.Order,
+    *,
+    created_by_user_id: Optional[int],
+    cancelled_at: datetime,
+) -> int:
+    """Hoàn đúng allocation REDEEM còn hạn, chưa commit.
+
+    Hàm được gọi sau khi UPDATE trạng thái thắng và trước `_hoan_lai` commit,
+    nên trạng thái + kho + voucher + điểm cùng thành công hoặc cùng rollback.
+    """
+    redeemed = int(order.loyalty_points_redeemed or 0)
+    if redeemed <= 0 or order.customer_id is None:
+        return 0
+    plan = loyalty_service.cancel_restore_plan(
+        db,
+        order.shop_id,
+        order.customer_id,
+        order.id,
+        as_of=cancelled_at,
+    )
+    restored = 0
+    for index, (points, expiry) in enumerate(plan, start=1):
+        if points <= 0:
+            continue
+        loyalty_service.add_entry(
+            db,
+            order.shop_id,
+            order.customer_id,
+            loyalty_service.ENTRY_CANCEL_RESTORE,
+            int(points),
+            f"cancel-restore:order:{order.id}:slice:{index}",
+            order_id=order.id,
+            created_by_user_id=created_by_user_id,
+            note=f"Hoàn điểm đã giữ khi hủy đơn #{order.id}",
+            expires_at=expiry,
+            created_at=cancelled_at,
+        )
+        restored += int(points)
+    return restored
 
 
 def _hoan_lai(
@@ -1509,12 +1818,15 @@ def _mo_ta_huy(
     unrestored: int,
     voucher_code: Optional[str],
     voucher_released: bool,
+    loyalty_restored: int = 0,
 ) -> str:
     chi_tiet = f"Hủy đơn #{order_id} - hoàn kho {restored} dòng"
     if unrestored:
         chi_tiet += f", KHÔNG hoàn được {unrestored} dòng (thiếu product_id hoặc SP đã xóa)"
     if voucher_released:
         chi_tiet += f", trả lại 1 lượt voucher '{voucher_code}'"
+    if loyalty_restored:
+        chi_tiet += f", hoàn {loyalty_restored} điểm đã giữ"
     return chi_tiet
 
 
@@ -1534,6 +1846,12 @@ def cancel_expired_order(db: Session, order: models.Order) -> bool:
         db.rollback()
         return False
 
+    loyalty_restored = _hoan_diem_khi_huy(
+        db,
+        order,
+        created_by_user_id=None,
+        cancelled_at=datetime.utcnow(),
+    )
     restored, unrestored, voucher_released = _hoan_lai(
         db, order_id, shop_id, voucher_code, discount_amount
     )
@@ -1542,14 +1860,25 @@ def cancel_expired_order(db: Session, order: models.Order) -> bool:
         None,  # hệ thống, không phải người dùng
         "AUTO_CANCEL_ORDER",
         "Tự động "
-        + _mo_ta_huy(order_id, restored, unrestored, voucher_code, voucher_released)
+        + _mo_ta_huy(
+            order_id,
+            restored,
+            unrestored,
+            voucher_code,
+            voucher_released,
+            loyalty_restored,
+        )
         + " (quá hạn thanh toán)",
     )
     return True
 
 
 def _ket_qua_huy(
-    order_id: int, restored: int, unrestored: int, voucher_released: bool
+    order_id: int,
+    restored: int,
+    unrestored: int,
+    voucher_released: bool,
+    loyalty_restored: int = 0,
 ) -> Dict[str, Any]:
     return {
         "msg": "Cancelled successfully",
@@ -1557,6 +1886,7 @@ def _ket_qua_huy(
         "restored_items": restored,
         "unrestored_items": unrestored,
         "voucher_released": voucher_released,
+        "loyalty_points_restored": loyalty_restored,
     }
 
 
@@ -1891,6 +2221,8 @@ def _apply_bank_transaction(
             _them_nhat_ky(db, None, "WEBHOOK_PAYMENT", detail)
         result = "paid"
 
+    if result == "paid":
+        _award_loyalty_paid_order(db, order, None)
     _add_account_warning(db, order, gd)
     db.commit()
     return result

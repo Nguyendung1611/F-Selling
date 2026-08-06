@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Dict, List
 
 from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -126,8 +127,59 @@ def list_shops(db: Session, current_user: models.User) -> List[models.Shop]:
     return shops
 
 
+def _lock_shop_for_delete(db: Session, shop_id: int, owner_id: int) -> None:
+    """Tuần tự hóa nút Xóa với mọi lần ghi điểm/cấu hình cùng shop.
+
+    SQLite không có ``SELECT FOR UPDATE``. Cùng no-op UPDATE trên hàng ``shops``
+    mà luồng đơn hàng dùng sẽ giữ write lock tới commit/rollback, nhờ vậy lần
+    kiểm lịch sử bên dưới không thể vừa thấy trống thì một bút toán điểm chen
+    vào trước lúc xóa shop.
+    """
+    locked = db.execute(
+        text(
+            "UPDATE shops SET id = id "
+            "WHERE id = :shop_id AND owner_id = :owner_id"
+        ),
+        {"shop_id": shop_id, "owner_id": owner_id},
+    )
+    if locked.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy cửa hàng"))
+
+
+def _has_loyalty_data(db: Session, shop_id: int) -> bool:
+    """Có cấu hình hoặc một dòng sổ điểm là đã có chứng từ cần giữ."""
+    has_program = (
+        db.query(models.LoyaltyProgram.id)
+        .filter(models.LoyaltyProgram.shop_id == shop_id)
+        .first()
+        is not None
+    )
+    if has_program:
+        return True
+    return (
+        db.query(models.LoyaltyPointEntry.id)
+        .filter(models.LoyaltyPointEntry.shop_id == shop_id)
+        .first()
+        is not None
+    )
+
+
 def delete_shop(db: Session, current_user: models.User, shop_id: int) -> Dict[str, str]:
+    # Lấy lock trước lần đọc quyết định. Điều kiện owner_id giữ nguyên hành vi
+    # 404 cho người không phải chủ mà không cần mở một read transaction trước.
+    _lock_shop_for_delete(db, shop_id, current_user.id)
     db_shop = require_own_shop(db, shop_id, current_user)
+    if _has_loyalty_data(db, shop_id):
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Cửa hàng đã có chương trình hoặc lịch sử tích điểm nên không "
+                "thể xóa. Hãy bấm nút Khóa để ngừng sử dụng cửa hàng và giữ "
+                "nguyên sổ điểm."
+            ),
+        )
     shop_name = db_shop.name
 
     order_ids = [

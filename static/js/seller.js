@@ -92,6 +92,10 @@ let doiSoatBadgeRequestId = 0;
 let staffRequestId = 0;
 let customersRequestId = 0;
 let customerHistoryRequestId = 0;
+let loyaltyProgramCache = null;
+let loyaltyProgramShopId = null;
+let loyaltyRequestId = 0;
+let loyaltySaveBusy = false;
 
 function dinhDangSoSeller(value, options = {}) {
     return window.FSellingI18n?.formatNumber(value, options)
@@ -152,6 +156,9 @@ function xoaDuLieuShopCuKhoiGiaoDien() {
     categoriesRequestId += 1;
     productsRequestId += 1;
     vouchersRequestId += 1;
+    loyaltyRequestId += 1;
+    loyaltyProgramCache = null;
+    loyaltyProgramShopId = null;
 
     cancelEditCategory();
     cancelEditProduct();
@@ -193,6 +200,10 @@ function renderBankOptions() {
 }
 
 function switchTab(tabId, buttonEl = null) {
+    if (tabId === 'loyalty' && MY_ROLE !== 'SELLER') {
+        showToast(t('seller.loyalty.owner_only'));
+        return;
+    }
     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.tab-btn[data-main-tab]').forEach(el => el.classList.remove('active'));
     const tab = document.getElementById(tabId);
@@ -205,6 +216,7 @@ function switchTab(tabId, buttonEl = null) {
     // Nạp lô mỗi lần MỞ tab chứ không nạp một lần lúc khởi động: hàng nhập vào
     // giữa buổi phải đếm được, và số lượng của lô là thứ thay đổi liên tục.
     if (tabId === 'kiemke') kkNapLo();
+    if (tabId === 'loyalty') loadLoyaltyProgram();
 }
 
 // Live Preview Logic
@@ -373,6 +385,7 @@ function doiCuaHangChung(giaTri) {
     else if (tab === 'reconciliation') loadDoiSoat();
     else if (tab === 'nhatky') loadNhatKy();
     else if (tab === 'customers') loadCustomers();
+    else if (tab === 'loyalty') loadLoyaltyProgram();
     else if (tab === 'settings') loadStaff();
 }
 
@@ -1398,6 +1411,10 @@ function loadDataForCurrentShop() {
         document.getElementById('vcShopName').innerText = shop.name;
         loadVouchers();
     }
+    if (
+        MY_ROLE === 'SELLER'
+        && document.getElementById('loyalty')?.classList.contains('active')
+    ) loadLoyaltyProgram();
 }
 
 // Settings List Render
@@ -3488,6 +3505,16 @@ function renderChiTietDon(d) {
         const ma = d.voucher_code ? ` (${d.voucher_code})` : '';
         tongKet += `<div style="color: #F59E0B;">${escapeHtml(t('seller.order_detail.discount', { code: ma }))}: −${escapeHtml(dinhDangTienDoiSoat(d.discount_amount))}</div>`;
     }
+    if (Number(d.loyalty_discount_amount || 0) > 0) {
+        tongKet += `<div style="color:#2563EB;">${escapeHtml(t('seller.order_detail.loyalty_discount', {
+            points: dinhDangSoSeller(d.loyalty_points_redeemed || 0)
+        }))}: −${escapeHtml(dinhDangTienDoiSoat(d.loyalty_discount_amount))}</div>`;
+    }
+    if (Number(d.loyalty_points_earned || 0) > 0) {
+        tongKet += `<div style="color:#2563EB;">${escapeHtml(t('seller.order_detail.loyalty_earned', {
+            points: dinhDangSoSeller(d.loyalty_points_earned)
+        }))}</div>`;
+    }
     tongKet += `<div style="font-size: 1.2rem; margin-top: 0.5rem;">${escapeHtml(t('seller.order_detail.grand_total'))}: <strong>${escapeHtml(dinhDangTienDoiSoat(d.total_amount || 0))}</strong></div>`;
     document.getElementById('odTongKet').innerHTML = tongKet;
     veLichSuTraHang(d);
@@ -3537,6 +3564,12 @@ function veLichSuTraHang(d) {
         if (p.reason) {
             html += `<div style="padding-left:0.75rem; font-style:italic;">${escapeHtml(p.reason)}</div>`;
         }
+        if (Number(p.loyalty_points_restored || 0) || Number(p.loyalty_points_reversed || 0)) {
+            html += `<div style="padding-left:0.75rem; color:#2563EB;">${escapeHtml(t('seller.order_detail.return_points', {
+                restored: dinhDangSoSeller(p.loyalty_points_restored || 0),
+                reversed: dinhDangSoSeller(p.loyalty_points_reversed || 0)
+            }))}</div>`;
+        }
         html += '</div>';
     });
     html += '</div>';
@@ -3578,8 +3611,216 @@ function dtKhoiTao() {
     dtCapNhatHien();
 }
 
+// ===== H1: chủ shop tự cài chương trình tích điểm =====
+
+function _giaTriSoLoyalty(id) {
+    const raw = (document.getElementById(id)?.value || '').trim();
+    return raw === '' ? null : Number(raw);
+}
+
+function _loyaltySoNguyenHopLe(value, minimum = 0) {
+    return Number.isInteger(value) && value >= minimum;
+}
+
+function capNhatLoyaltyPreview() {
+    const preview = document.getElementById('loyaltyPreview');
+    if (!preview) return;
+    const earnAmount = _giaTriSoLoyalty('loyaltyEarnAmount');
+    const earnPoints = _giaTriSoLoyalty('loyaltyEarnPoints');
+    const redeemPoints = _giaTriSoLoyalty('loyaltyRedeemPoints');
+    const redeemAmount = _giaTriSoLoyalty('loyaltyRedeemAmount');
+    const minRedeem = _giaTriSoLoyalty('loyaltyMinRedeem');
+    const maxPercent = _giaTriSoLoyalty('loyaltyMaxPercent');
+    const expiryDays = _giaTriSoLoyalty('loyaltyExpiryDays');
+    if (
+        !_loyaltySoNguyenHopLe(earnAmount, 1)
+        || !_loyaltySoNguyenHopLe(earnPoints, 1)
+        || !_loyaltySoNguyenHopLe(redeemPoints, 1)
+        || !_loyaltySoNguyenHopLe(redeemAmount, 1)
+        || !_loyaltySoNguyenHopLe(minRedeem, 0)
+        || !_loyaltySoNguyenHopLe(maxPercent, 1)
+        || maxPercent > 100
+        || (expiryDays !== null && !_loyaltySoNguyenHopLe(expiryDays, 1))
+    ) {
+        preview.innerText = t('seller.loyalty.preview_incomplete');
+        return;
+    }
+    const expiry = expiryDays === null
+        ? t('seller.loyalty.no_expiry')
+        : t('seller.loyalty.expires_in', { days: expiryDays });
+    preview.innerText = t('seller.loyalty.preview', {
+        earnAmount: dinhDangTienDoiSoat(earnAmount),
+        earnPoints: dinhDangSoSeller(earnPoints),
+        redeemPoints: dinhDangSoSeller(redeemPoints),
+        redeemAmount: dinhDangTienDoiSoat(redeemAmount),
+        maxPercent: dinhDangSoSeller(maxPercent),
+        expiry
+    });
+}
+
+function renderLoyaltyProgram(program, shopId) {
+    const shop = allShops.find(item => Number(item.id) === Number(shopId));
+    const name = document.getElementById('loyaltyShopName');
+    if (name) name.innerText = shop?.name || '';
+    const enabled = document.getElementById('loyaltyEnabled');
+    if (enabled) enabled.checked = program?.enabled === true;
+    const values = {
+        loyaltyEarnAmount: program?.earn_amount,
+        loyaltyEarnPoints: program?.earn_points,
+        loyaltyRedeemPoints: program?.redeem_points,
+        loyaltyRedeemAmount: program?.redeem_amount,
+        loyaltyMinRedeem: program?.min_redeem_points ?? 0,
+        loyaltyMaxPercent: program?.max_redeem_percent ?? 100,
+        loyaltyExpiryDays: program?.expiry_days
+    };
+    Object.entries(values).forEach(([id, value]) => {
+        const input = document.getElementById(id);
+        if (input) input.value = value === null || value === undefined ? '' : String(value);
+    });
+    const status = document.getElementById('loyaltyStatusText');
+    if (status) {
+        status.innerText = t(program?.enabled
+            ? 'seller.loyalty.status_enabled'
+            : 'seller.loyalty.status_disabled');
+        status.style.color = program?.enabled ? 'var(--success)' : 'var(--text-muted)';
+    }
+    capNhatLoyaltyPreview();
+}
+
+function khoaFormLoyalty(locked) {
+    document.querySelectorAll('#loyalty input, #btnSaveLoyalty').forEach(control => {
+        control.disabled = Boolean(locked);
+    });
+    const commonShop = document.getElementById('shopChungSelect');
+    if (commonShop) commonShop.disabled = Boolean(locked);
+}
+
+async function loadLoyaltyProgram() {
+    if (MY_ROLE !== 'SELLER' || !currentShopId) return;
+    if (loyaltySaveBusy) return;
+    const shopId = Number(currentShopId);
+    const generation = currentShopGeneration;
+    const requestId = ++loyaltyRequestId;
+    const status = document.getElementById('loyaltyStatusText');
+    const shop = allShops.find(item => Number(item.id) === shopId);
+    const name = document.getElementById('loyaltyShopName');
+    if (name) name.innerText = shop?.name || '';
+    if (status) {
+        status.innerText = t('common.loading');
+        status.style.color = 'var(--text-muted)';
+    }
+    try {
+        const program = await apiCall(`/loyalty/${shopId}`);
+        if (
+            requestId !== loyaltyRequestId
+            || Number(currentShopId) !== shopId
+            || generation !== currentShopGeneration
+        ) return;
+        loyaltyProgramCache = program;
+        loyaltyProgramShopId = shopId;
+        renderLoyaltyProgram(program, shopId);
+    } catch (e) {
+        if (requestId === loyaltyRequestId && Number(currentShopId) === shopId) {
+            if (status) status.innerText = e.message;
+            showToast(e.message);
+        }
+    }
+}
+
+async function saveLoyaltyProgram() {
+    if (MY_ROLE !== 'SELLER') return showToast(t('seller.loyalty.owner_only'));
+    const shopId = Number(currentShopId);
+    if (!shopId || Number(loyaltyProgramShopId) !== shopId) {
+        return showToast(t('common.loading'));
+    }
+    const enabled = document.getElementById('loyaltyEnabled')?.checked === true;
+    const earnAmount = _giaTriSoLoyalty('loyaltyEarnAmount');
+    const earnPoints = _giaTriSoLoyalty('loyaltyEarnPoints');
+    const redeemPoints = _giaTriSoLoyalty('loyaltyRedeemPoints');
+    const redeemAmount = _giaTriSoLoyalty('loyaltyRedeemAmount');
+    const minRedeem = _giaTriSoLoyalty('loyaltyMinRedeem');
+    const maxPercent = _giaTriSoLoyalty('loyaltyMaxPercent');
+    const expiryDays = _giaTriSoLoyalty('loyaltyExpiryDays');
+
+    if (earnAmount !== null && !_loyaltySoNguyenHopLe(earnAmount, 1)) {
+        return showToast(t('seller.loyalty.amount_integer'));
+    }
+    if (redeemAmount !== null && !_loyaltySoNguyenHopLe(redeemAmount, 1)) {
+        return showToast(t('seller.loyalty.amount_integer'));
+    }
+    if (enabled && (
+        earnAmount === null
+        || !_loyaltySoNguyenHopLe(earnPoints, 1)
+        || !_loyaltySoNguyenHopLe(redeemPoints, 1)
+        || redeemAmount === null
+    )) return showToast(t('seller.loyalty.rates_required'));
+    if (earnPoints !== null && !_loyaltySoNguyenHopLe(earnPoints, 1)) {
+        return showToast(t('seller.loyalty.points_integer'));
+    }
+    if (redeemPoints !== null && !_loyaltySoNguyenHopLe(redeemPoints, 1)) {
+        return showToast(t('seller.loyalty.points_integer'));
+    }
+    if (!_loyaltySoNguyenHopLe(minRedeem, 0)) {
+        return showToast(t('seller.loyalty.min_invalid'));
+    }
+    if (!_loyaltySoNguyenHopLe(maxPercent, 1) || maxPercent > 100) {
+        return showToast(t('seller.loyalty.percent_invalid'));
+    }
+    if (expiryDays !== null && !_loyaltySoNguyenHopLe(expiryDays, 1)) {
+        return showToast(t('seller.loyalty.expiry_invalid'));
+    }
+
+    const body = {
+        enabled,
+        earn_amount: earnAmount,
+        earn_points: earnPoints,
+        redeem_points: redeemPoints,
+        redeem_amount: redeemAmount,
+        min_redeem_points: minRedeem,
+        max_redeem_percent: maxPercent,
+        expiry_days: expiryDays
+    };
+    const generation = currentShopGeneration;
+    // Vô hiệu mọi GET cũ đang bay; nếu không response cũ có thể về sau PUT và
+    // vẽ đè cấu hình vừa lưu. Khóa cả form để sửa trong lúc chờ không bị
+    // response ghi đè rồi mất mà người dùng không biết.
+    const requestId = ++loyaltyRequestId;
+    loyaltySaveBusy = true;
+    khoaFormLoyalty(true);
+    try {
+        const saved = await apiCall(`/loyalty/${shopId}`, 'PUT', body);
+        if (
+            Number(currentShopId) !== shopId
+            || generation !== currentShopGeneration
+            || requestId !== loyaltyRequestId
+        ) return;
+        loyaltyProgramCache = saved;
+        loyaltyProgramShopId = shopId;
+        renderLoyaltyProgram(saved, shopId);
+        showToast(t('seller.loyalty.saved'));
+    } catch (e) {
+        if (
+            Number(currentShopId) === shopId
+            && requestId === loyaltyRequestId
+        ) showToast(e.message);
+    } finally {
+        // Nút/form dùng chung giữa các shop; dù người dùng đổi shop lúc request
+        // đang bay vẫn phải mở khóa lại, nếu không chỉ reload trang mới cứu được.
+        loyaltySaveBusy = false;
+        khoaFormLoyalty(false);
+    }
+}
+
+[
+    'loyaltyEnabled', 'loyaltyEarnAmount', 'loyaltyEarnPoints',
+    'loyaltyRedeemPoints', 'loyaltyRedeemAmount', 'loyaltyMinRedeem',
+    'loyaltyMaxPercent', 'loyaltyExpiryDays'
+].forEach(id => document.getElementById(id)?.addEventListener('input', capNhatLoyaltyPreview));
+
 // ===== C1d: phân biệt vai trò SELLER / STAFF trên giao diện =====
 function applyRoleUI() {
+    const tabLoyalty = document.getElementById('tabLoyalty');
+    if (tabLoyalty && MY_ROLE === 'SELLER') tabLoyalty.style.display = '';
     if (!XEM_DUOC_GIA_VON) {
         // Ô giá vốn ở form sản phẩm. Nhân viên kho vẫn thêm/sửa sản phẩm được,
         // chỉ là không thấy và không gửi field này (xem createProduct).
@@ -3793,6 +4034,15 @@ function dongCongNo(kh) {
         }))}</span>`;
 }
 
+function dongDiemKhach(kh) {
+    const points = Number(kh.points_balance || 0);
+    const color = points < 0 ? '#B91C1C' : '#2563EB';
+    return `<br><span style="font-size:0.75rem; color:${color}; font-weight:600;">`
+        + `<i class="ph ph-star"></i> ${escapeHtml(t('seller.customers.points', {
+            points: dinhDangSoSeller(points)
+        }))}</span>`;
+}
+
 function renderCustomers(list) {
     const tbody = document.getElementById('customerList');
     tbody.innerHTML = '';
@@ -3803,13 +4053,20 @@ function renderCustomers(list) {
     list.forEach(kh => {
         const customerId = Number(kh.id);
         if (!Number.isInteger(customerId)) return;
-        tbody.innerHTML += `<tr>
-            <td>${escapeHtml(kh.name)}${dongCongNo(kh)}</td>
+        const inactive = kh.is_active === false;
+        const inactiveBadge = inactive
+            ? `<br><span style="font-size:0.72rem; color:#B91C1C; font-weight:700;">${escapeHtml(t('seller.customers.inactive'))}</span>`
+            : '';
+        const lastButton = inactive
+            ? `<button type="button" class="btn-outline" style="padding:0.2rem 0.5rem; color:var(--success);" data-customer-status-id="${customerId}" title="${escapeHtml(t('seller.customers.use_again'))}" aria-label="${escapeHtml(t('seller.customers.use_again'))}"><i class="ph ph-arrow-counter-clockwise"></i></button>`
+            : `<button type="button" class="btn-outline" style="padding:0.2rem 0.5rem; color:#ef4444;" data-customer-delete-id="${customerId}" title="${escapeHtml(t('common.delete'))}" aria-label="${escapeHtml(t('common.delete'))}"><i class="ph ph-trash"></i></button>`;
+        tbody.innerHTML += `<tr style="${inactive ? 'opacity:0.68;' : ''}">
+            <td>${escapeHtml(kh.name)}${inactiveBadge}${dongCongNo(kh)}${dongDiemKhach(kh)}</td>
             <td>${escapeHtml(kh.phone)}</td>
             <td style="text-align:right; white-space:nowrap;">
                 <button type="button" class="btn-outline" style="padding:0.2rem 0.5rem;" data-customer-history-id="${customerId}" title="${escapeHtml(t('seller.customers.history_action'))}" aria-label="${escapeHtml(t('seller.customers.history_action'))}"><i class="ph ph-clock-counter-clockwise"></i></button>
                 <button type="button" class="btn-outline" style="padding:0.2rem 0.5rem;" data-customer-edit-id="${customerId}" title="${escapeHtml(t('common.edit'))}" aria-label="${escapeHtml(t('common.edit'))}"><i class="ph ph-pencil-simple"></i></button>
-                <button type="button" class="btn-outline" style="padding:0.2rem 0.5rem; color:#ef4444;" data-customer-delete-id="${customerId}" title="${escapeHtml(t('common.delete'))}" aria-label="${escapeHtml(t('common.delete'))}"><i class="ph ph-trash"></i></button>
+                ${lastButton}
             </td>
         </tr>`;
     });
@@ -3826,6 +4083,11 @@ function renderCustomers(list) {
     tbody.querySelectorAll('[data-customer-delete-id]').forEach(button => {
         button.addEventListener('click', () => {
             deleteCustomer(Number(button.dataset.customerDeleteId));
+        });
+    });
+    tbody.querySelectorAll('[data-customer-status-id]').forEach(button => {
+        button.addEventListener('click', () => {
+            updateCustomerStatus(Number(button.dataset.customerStatusId), true);
         });
     });
 }
@@ -3848,7 +4110,9 @@ async function loadCustomers() {
         dongLichSuKhach();
     }
     try {
-        const url = q ? `/customers/${shopId}?q=${encodeURIComponent(q)}` : `/customers/${shopId}`;
+        const params = new URLSearchParams({ include_inactive: 'true' });
+        if (q) params.set('q', q);
+        const url = `/customers/${shopId}?${params.toString()}`;
         const list = await apiCall(url);
         const currentQuery = (document.getElementById('custSearch')?.value || '').trim();
         if (
@@ -3958,15 +4222,36 @@ function deleteCustomer(id) {
                 || !cacheThuocShop(currentCustomersShopId, shopId)
             ) return;
             try {
-                await apiCall(`/customers/member/${id}`, 'DELETE');
+                const result = await apiCall(`/customers/member/${id}`, 'DELETE');
                 if (shopDangChon('custShopSelect') !== shopId) return;
-                showToast(t('seller.customers.deleted'));
+                showToast(t(result?.msg === 'Deactivated'
+                    ? 'seller.customers.deactivated'
+                    : 'seller.customers.deleted'));
                 loadCustomers();
             } catch (e) {
                 if (shopDangChon('custShopSelect') === shopId) showToast(e.message);
             }
         }
     );
+}
+
+async function updateCustomerStatus(id, isActive) {
+    const shopId = damBaoCacheShopTrongSelector(
+        currentCustomersShopId,
+        'custShopSelect'
+    );
+    if (!shopId) return;
+    if (!(window._customersCache || []).some(item => Number(item.id) === Number(id))) return;
+    try {
+        await apiCall(`/customers/member/${id}/status`, 'PUT', { is_active: isActive });
+        if (shopDangChon('custShopSelect') !== shopId) return;
+        showToast(t(isActive
+            ? 'seller.customers.reactivated'
+            : 'seller.customers.deactivated'));
+        loadCustomers();
+    } catch (e) {
+        if (shopDangChon('custShopSelect') === shopId) showToast(e.message);
+    }
 }
 
 function renderCustomerHistory(d) {
@@ -3976,7 +4261,9 @@ function renderCustomerHistory(d) {
             count: d.order_count,
             formattedCount: dinhDangSoSeller(d.order_count),
             amount: dinhDangTienDoiSoat(d.total_paid || 0)
-        });
+        }) + ` • ${t('seller.customers.points', {
+            points: dinhDangSoSeller(d.customer.points_balance || 0)
+        })}`;
     const tbody = document.getElementById('chDanhSach');
     tbody.innerHTML = '';
     if (!d.orders.length) {
@@ -4329,6 +4616,23 @@ function capNhatSellerTheoNgonNgu() {
         && Number(customerHistoryCache.customer?.id) === openCustomerHistoryId
     ) {
         renderCustomerHistory(customerHistoryCache);
+    }
+    if (
+        loyaltyProgramCache
+        && Number(loyaltyProgramShopId) === Number(currentShopId)
+    ) {
+        // Đổi ngôn ngữ chỉ vẽ lại chữ/preview từ giá trị ĐANG GÕ. Gọi
+        // renderLoyaltyProgram ở đây sẽ lấy cache cũ ghi đè các ô chưa bấm Lưu.
+        const status = document.getElementById('loyaltyStatusText');
+        if (status) {
+            status.innerText = t(loyaltyProgramCache.enabled
+                ? 'seller.loyalty.status_enabled'
+                : 'seller.loyalty.status_disabled');
+            status.style.color = loyaltyProgramCache.enabled
+                ? 'var(--success)'
+                : 'var(--text-muted)';
+        }
+        capNhatLoyaltyPreview();
     }
 }
 

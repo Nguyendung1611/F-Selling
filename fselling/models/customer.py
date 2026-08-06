@@ -1,6 +1,7 @@
 import datetime
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -26,6 +27,9 @@ class Customer(Base):
     # nguyên hành vi cho mọi khách đã có). Chặn ở lúc TẠO đơn nợ mới; đơn nợ đã
     # phát sinh rồi thì hạ hạn mức không làm nó biến mất.
     credit_limit = Column(Float, nullable=True)
+    # Khách đã có lịch sử điểm không được xóa cứng. `False` nghĩa là ngừng sử
+    # dụng: POS không cho chọn cho đơn mới, nhưng sổ điểm và đơn cũ vẫn còn.
+    is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     shop = relationship("Shop")
