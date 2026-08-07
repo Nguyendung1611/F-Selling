@@ -7,9 +7,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..dependencies import get_current_user, get_db
+from ..dependencies import get_current_user, get_db, require_shop_access
 from ..schemas.shift import CashMovementCreate, ShiftClose, ShiftOpen
-from ..services import shift_service
+from ..services import shift_service, subscription_service
 
 router = APIRouter(prefix="/api/shifts", tags=["shifts"])
 
@@ -43,6 +43,9 @@ def open_shift(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    if current_user.role == "STAFF":
+        require_shop_access(db, shop_id, current_user)
+        subscription_service.require_pro(db, shop_id)
     return shift_service.open_shift(db, current_user, shop_id, request)
 
 
@@ -62,6 +65,15 @@ def create_movement(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    if current_user.role == "STAFF":
+        shift = (
+            db.query(models.CashShift)
+            .filter(models.CashShift.id == shift_id)
+            .first()
+        )
+        if shift is not None:
+            require_shop_access(db, shift.shop_id, current_user)
+            subscription_service.require_pro(db, shift.shop_id)
     return shift_service.create_movement(db, current_user, shift_id, request)
 
 

@@ -91,20 +91,21 @@ def test_tab_chi_hien_cho_chu_shop_admin_va_nap_lai_khi_mo_tab():
     assert "btnBackAdmin && MY_ROLE === 'ADMIN'" in seller_js
 
 
-def test_module_nap_sau_seller_va_tat_ca_file_da_bump_cung_phien_ban():
+def test_module_nap_sau_seller_va_moi_file_dung_dung_phien_ban():
     html = _read("static/seller.html")
-    shared_version = "20260807-nha-cung-cap-ui-f9"
+    purchasing_version = "20260807-nha-cung-cap-ui-f9"
+    seller_version = "20260807-goi-cuoc"
 
     expected = (
-        f"/css/seller.css?v={shared_version}",
-        f"/js/locales/seller.js?v={shared_version}",
-        f"/js/seller.js?v={shared_version}",
-        f"/js/purchasing.js?v={shared_version}",
+        f"/css/seller.css?v={purchasing_version}",
+        f"/js/locales/seller.js?v={purchasing_version}",
+        f"/js/seller.js?v={seller_version}",
+        f"/js/purchasing.js?v={purchasing_version}",
     )
     for path in expected:
         assert path in html, path
-    assert html.index(f"/js/seller.js?v={shared_version}") < html.index(
-        f"/js/purchasing.js?v={shared_version}"
+    assert html.index(f"/js/seller.js?v={seller_version}") < html.index(
+        f"/js/purchasing.js?v={purchasing_version}"
     )
 
 

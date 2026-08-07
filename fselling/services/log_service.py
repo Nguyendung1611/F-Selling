@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from sqlalchemy import and_, false, or_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -10,10 +11,20 @@ from .. import models
 
 
 def log_system_action(
-    db: Session, user_id: Optional[int], action: str, details: str = ""
+    db: Session,
+    user_id: Optional[int],
+    action: str,
+    details: str = "",
+    *,
+    shop_id: Optional[int] = None,
 ) -> None:
     try:
-        log_entry = models.SystemLog(user_id=user_id, action=action, details=details)
+        log_entry = models.SystemLog(
+            user_id=user_id,
+            shop_id=shop_id,
+            action=action,
+            details=details,
+        )
         db.add(log_entry)
         db.commit()
     except SQLAlchemyError as e:
@@ -48,18 +59,19 @@ KHONG_HIEN_O_SHOP = frozenset({
 
 
 def _nguoi_thao_tac_cua_shop(db: Session, shop_id: int) -> List[int]:
-    """ID những người có thể thao tác trên shop này: chủ shop + nhân viên của nó.
+    """ID chủ shop + nhân viên để đọc những dòng lịch sử chưa có ``shop_id``.
 
-    `system_logs` KHÔNG có cột `shop_id` — nó chỉ ghi AI làm GÌ. Đây là cách duy
-    nhất khoanh vùng được mà không phải bỏ đi 232 dòng lịch sử đã có.
+    Dòng mới có thể ghi thẳng ``shop_id``. Dòng cũ chỉ ghi AI làm GÌ nên vẫn cần
+    danh sách này để không bỏ đi lịch sử trước migration.
 
     Chấp nhận một điểm mờ: chủ shop có nhiều cửa hàng thì việc do chính họ làm
     không chỉ đích danh được cửa hàng nào. Đổi lại, câu hỏi thật sự cần trả lời
     ở màn này là "có ai hủy đơn hay hoàn tiền bất thường không" — với câu đó thì
     biết AI làm quan trọng hơn biết ở cửa hàng nào.
 
-    KHÔNG gộp ADMIN vào: tài khoản đó thao tác trên mọi shop, đưa vào là chủ
-    shop này nhìn thấy việc liên quan tới shop của người khác.
+    KHÔNG gộp ADMIN vào nhánh legacy: tài khoản đó thao tác trên mọi shop, đưa
+    vào là chủ shop này nhìn thấy việc liên quan tới shop của người khác. Log
+    Admin mới chỉ hiện khi chính dòng đó có ``shop_id`` tường minh.
     """
     shop = db.query(models.Shop).filter(models.Shop.id == shop_id).first()
     ids = set()
@@ -80,13 +92,20 @@ def nhat_ky_cua_shop(
     per_page = min(max(1, int(per_page or 30)), 100)
 
     nguoi = _nguoi_thao_tac_cua_shop(db, shop_id)
-    if not nguoi:
-        return {"logs": [], "page": page, "per_page": per_page, "total": 0, "total_pages": 0}
+    legacy_actor = (
+        models.SystemLog.user_id.in_(nguoi) if nguoi else false()
+    )
 
     truy_van = (
         db.query(models.SystemLog)
         .filter(
-            models.SystemLog.user_id.in_(nguoi),
+            or_(
+                models.SystemLog.shop_id == shop_id,
+                and_(
+                    models.SystemLog.shop_id.is_(None),
+                    legacy_actor,
+                ),
+            ),
             models.SystemLog.action.notin_(KHONG_HIEN_O_SHOP),
         )
         .order_by(models.SystemLog.created_at.desc(), models.SystemLog.id.desc())

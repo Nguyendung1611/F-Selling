@@ -10,6 +10,13 @@ from typing import Any, Dict, List, Optional
 from .. import models
 
 ORDER_CODE_RE = re.compile(r"ORDER(\d+)", re.IGNORECASE)
+# Mã thanh toán gói là một namespace riêng, không bao giờ suy từ ORDER hay từ
+# `payOS.data.orderCode` (trường đó chỉ là số, không mang namespace). Backend
+# sinh đúng 12 ký tự chữ/số sau tiền tố SUB; hai biên chữ/số ngăn một mã
+# dài/hỏng (hoặc ``XSUB...``) bị cắt cụt rồi gán nhầm vào checkout khác.
+SUBSCRIPTION_CODE_RE = re.compile(
+    r"(?<![A-Z0-9])SUB([A-Z0-9]{12})(?![A-Z0-9])", re.IGNORECASE
+)
 
 
 @dataclass
@@ -27,6 +34,27 @@ class GiaoDich:
     """
 
     order_id: int
+    amount: Optional[float] = None
+    direction: Optional[str] = None
+    txn_id: Optional[str] = None
+    account_no: Optional[str] = None
+    provider: Optional[str] = None
+    payload_fingerprint: Optional[str] = None
+
+
+@dataclass
+class GiaoDichThueBao:
+    """Một giao dịch ngân hàng dành cho gói cước.
+
+    `reference_code` để ``None`` khi tiền vào không mang mã SUB hợp lệ. Khác
+    parser ORDER, những giao dịch như vậy vẫn được trả về để service ghi vào
+    ledger ``UNAPPLIED``; bỏ hẳn chúng sẽ làm tiền thật chỉ còn nằm trong log.
+
+    Các field còn lại giữ đúng nghĩa của :class:`GiaoDich`, nhưng kiểu riêng
+    này ngăn code thuê bao vô tình truyền vào ``order_service``.
+    """
+
+    reference_code: Optional[str] = None
     amount: Optional[float] = None
     direction: Optional[str] = None
     txn_id: Optional[str] = None
@@ -135,32 +163,161 @@ def _tai_khoan(item: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _payload_fingerprint(item: Dict[str, Any]) -> str:
+    """Hash canonical của đúng một mục giao dịch, độc lập vị trí trong batch."""
+    return hashlib.sha256(
+        json.dumps(
+            item,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _transaction_fields(item: Dict[str, Any], provider: str) -> Dict[str, Any]:
+    """Đọc metadata ngân hàng dùng chung cho parser ORDER và SUB.
+
+    `amount` được đổi sang trị tuyệt đối sau khi chiều tiền đã được suy ra từ
+    giá trị thô. Nhờ vậy tiền âm vẫn là ``direction='out'`` như contract cũ.
+    """
+    raw_amount = _so_tien(
+        item.get("transferAmount"),
+        item.get("amount"),
+        item.get("value"),
+        item.get("money"),
+    )
+    return {
+        "amount": abs(raw_amount) if raw_amount is not None else None,
+        "direction": _chieu_tien(item, raw_amount),
+        "txn_id": _txn_id(item),
+        "account_no": _tai_khoan(item),
+        "provider": provider,
+        "payload_fingerprint": _payload_fingerprint(item),
+    }
+
+
 def _giao_dich_tu_item(
     item: Dict[str, Any], mo_ta: str, provider: str
 ) -> List[GiaoDich]:
     """Dựng GiaoDich cho một mục giao dịch, kèm mọi mã đơn tìm được trong mô tả."""
-    amount = _so_tien(
-        item.get("transferAmount"), item.get("amount"), item.get("value"), item.get("money")
-    )
-    chung = {
-        "amount": abs(amount) if amount is not None else None,
-        "direction": _chieu_tien(item, amount),
-        "txn_id": _txn_id(item),
-        "account_no": _tai_khoan(item),
-        "provider": provider,
-        # Retry không có mã giao dịch vẫn phải nhận ra được. Hash toàn bộ mục
-        # giao dịch (không dùng vị trí trong mảng vì provider có thể đổi thứ tự).
-        "payload_fingerprint": hashlib.sha256(
-            json.dumps(
-                item,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            ).encode("utf-8")
-        ).hexdigest(),
-    }
+    chung = _transaction_fields(item, provider)
     return [GiaoDich(order_id=oid, **chung) for oid in _match_order_code(mo_ta)]
+
+
+def _match_subscription_code(text: Any) -> Optional[str]:
+    """Lấy đúng mã SUB đầu tiên và chuẩn hóa chữ hoa."""
+    match = SUBSCRIPTION_CODE_RE.search(str(text or ""))
+    return match.group(0).upper() if match else None
+
+
+def _giao_dich_thue_bao_tu_item(
+    item: Dict[str, Any], mo_ta: Any, provider: str
+) -> GiaoDichThueBao:
+    """Dựng một giao dịch SUB, kể cả khi mô tả không có mã hợp lệ."""
+    return GiaoDichThueBao(
+        reference_code=_match_subscription_code(mo_ta),
+        **_transaction_fields(item, provider),
+    )
+
+
+def extract_subscription_transactions(
+    request_data: Dict[str, Any],
+) -> List[GiaoDichThueBao]:
+    """Rút giao dịch ngân hàng cho thanh toán gói cước.
+
+    Hàm này cố ý KHÔNG gọi ``extract_transactions`` và không tạo ``order_id``.
+    Một payload có ``ORDER42`` hoặc payOS ``orderCode=42`` vẫn tạo được bản ghi
+    giao dịch với ``reference_code=None`` để tầng thuê bao đối soát, nhưng
+    tuyệt đối không biến số 42 thành mã SUB.
+
+    Khác parser ORDER, một mục tiền vào không có mã vẫn được giữ. Đây là điều
+    kiện để ledger thuê bao ghi ``UNAPPLIED`` thay vì làm khoản tiền biến mất.
+    """
+    if not isinstance(request_data, dict):
+        return []
+
+    data = request_data.get("data")
+
+    if isinstance(data, list):
+        ket_qua: List[GiaoDichThueBao] = []
+        for item in data:
+            if isinstance(item, dict):
+                ket_qua.append(
+                    _giao_dich_thue_bao_tu_item(
+                        item,
+                        item.get("description", "") or item.get("content", ""),
+                        "casso",
+                    )
+                )
+        return ket_qua
+
+    if isinstance(data, dict):
+        # payOS `orderCode` là ID số của luồng ORDER, không phải mã thuê bao.
+        # Chỉ mô tả/reference có nguyên tiền tố SUB mới được nhận.
+        mo_ta = (
+            data.get("description", "")
+            or data.get("content", "")
+            or data.get("reference_code", "")
+            or data.get("subscription_code", "")
+        )
+        provider = "payos" if "orderCode" in data else "generic"
+        return [_giao_dich_thue_bao_tu_item(data, mo_ta, provider)]
+
+    if "content" in request_data or "transferAmount" in request_data:
+        mo_ta = (
+            request_data.get("content", "")
+            or request_data.get("description", "")
+            or request_data.get("reference_code", "")
+            or request_data.get("subscription_code", "")
+        )
+        return [_giao_dich_thue_bao_tu_item(request_data, mo_ta, "sepay")]
+
+    # Payload generic/fallback vẫn giữ metadata của chính object. Quét toàn bộ
+    # object chỉ để tìm mã SUB; không suy một số trần như `order_id` thành mã.
+    mo_ta = (
+        request_data.get("description", "")
+        or request_data.get("reference_code", "")
+        or request_data.get("subscription_code", "")
+        or str(request_data)
+    )
+    return [_giao_dich_thue_bao_tu_item(request_data, mo_ta, "fallback")]
+
+
+def bank_idempotency_key(
+    transaction: Any,
+    fallback_account: Optional[str] = None,
+    namespace: str = "bank",
+) -> str:
+    """Tạo khóa retry ngân hàng có namespace cho một ledger độc lập.
+
+    Thuê bao gọi với ``namespace='sub-bank'``. Không đưa mã SUB vào khóa: cùng
+    một giao dịch ngân hàng bị gửi lại với nội dung khác phải thành collision,
+    không được áp vào checkout thứ hai. ``bank_txn_id`` vẫn chỉ để tra cứu và
+    không được đặt unique.
+    """
+    provider = str(getattr(transaction, "provider", None) or "unknown").strip().lower()
+    account = "".join(
+        c
+        for c in str(
+            getattr(transaction, "account_no", None)
+            or fallback_account
+            or "unknown"
+        ).strip().upper()
+        if c.isalnum()
+    )
+    account = account.lstrip("0") or "0"
+    txn_id = getattr(transaction, "txn_id", None)
+    if txn_id and str(txn_id).strip():
+        raw = f"txn|{provider}|{account}|{str(txn_id).strip()}"
+    else:
+        raw = (
+            f"payload|{provider}|{account}|"
+            + str(getattr(transaction, "payload_fingerprint", None) or "")
+        )
+    prefix = str(namespace or "bank").strip().lower() or "bank"
+    return prefix + ":" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def extract_transactions(request_data: Dict[str, Any]) -> List[GiaoDich]:
@@ -220,3 +377,10 @@ def get_webhook_secret() -> str:
     import os
 
     return os.getenv("PAYMENT_WEBHOOK_SECRET", "")
+
+
+def get_subscription_webhook_secret() -> str:
+    """Secret RIÊNG của webhook gói cước, đọc động và fail-closed."""
+    import os
+
+    return os.getenv("SUBSCRIPTION_WEBHOOK_SECRET", "")

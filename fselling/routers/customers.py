@@ -5,11 +5,27 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..dependencies import get_current_user, get_db
+from ..dependencies import get_current_user, get_db, require_shop_access
 from ..schemas.customer import CustomerCreate, CustomerStatusUpdate, CustomerUpdate
-from ..services import customer_service
+from ..services import customer_service, subscription_service
 
 router = APIRouter(prefix="/api/customers", tags=["customers"])
+
+
+def _require_pro_for_staff_customer(
+    db: Session, current_user: models.User, customer_id: int
+) -> None:
+    if current_user.role != "STAFF":
+        return
+    customer = (
+        db.query(models.Customer)
+        .filter(models.Customer.id == customer_id)
+        .first()
+    )
+    if customer is None:
+        return  # service phía sau giữ nguyên phản hồi 404 cũ
+    require_shop_access(db, customer.shop_id, current_user)
+    subscription_service.require_pro(db, customer.shop_id)
 
 
 @router.post("/{shop_id}")
@@ -19,6 +35,9 @@ def create_customer(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    if current_user.role == "STAFF":
+        require_shop_access(db, shop_id, current_user)
+        subscription_service.require_pro(db, shop_id)
     return customer_service.create_customer(db, current_user, shop_id, data)
 
 
@@ -64,6 +83,7 @@ def update_customer(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    _require_pro_for_staff_customer(db, current_user, customer_id)
     return customer_service.update_customer(db, current_user, customer_id, data)
 
 
@@ -74,6 +94,7 @@ def update_customer_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    _require_pro_for_staff_customer(db, current_user, customer_id)
     return customer_service.update_customer_status(
         db, current_user, customer_id, data
     )
@@ -85,4 +106,5 @@ def delete_customer(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    _require_pro_for_staff_customer(db, current_user, customer_id)
     return customer_service.delete_customer(db, current_user, customer_id)

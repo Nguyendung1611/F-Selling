@@ -2,10 +2,10 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from ..dependencies import get_current_user, get_db
+from ..dependencies import get_current_user, get_db, require_own_shop
 from ..models.user import User
 from ..schemas.loyalty import LoyaltyProgramUpdate
-from ..services import loyalty_service
+from ..services import loyalty_service, subscription_service
 
 router = APIRouter(prefix="/api/loyalty", tags=["loyalty"])
 
@@ -26,6 +26,8 @@ def update_loyalty_program(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    require_own_shop(db, shop_id, current_user)
+    subscription_service.require_pro(db, shop_id)
     return loyalty_service.update_program(db, current_user, shop_id, data)
 
 

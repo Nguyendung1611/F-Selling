@@ -1,5 +1,6 @@
 """Nhóm B: phân trang + lọc theo khoảng ngày cho dashboard và thống kê."""
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from conftest import auth, create_category, create_product, create_shop, new_seller
 
@@ -7,9 +8,10 @@ from fselling import models
 from fselling.core.database import SessionLocal
 from fselling.services.report_service import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 
-HOM_NAY = datetime.utcnow().strftime("%Y-%m-%d")
-HOM_QUA = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
-TUAN_TRUOC = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
+_BAY_GIO_VIET_NAM = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh"))
+HOM_NAY = _BAY_GIO_VIET_NAM.strftime("%Y-%m-%d")
+HOM_QUA = (_BAY_GIO_VIET_NAM - timedelta(days=1)).strftime("%Y-%m-%d")
+TUAN_TRUOC = (_BAY_GIO_VIET_NAM - timedelta(days=7)).strftime("%Y-%m-%d")
 
 
 def _shop_co_nhieu_don(

@@ -16,6 +16,7 @@ from ..core.i18n import tr
 from ..core.security import hash_password, is_strong_password, new_session_id
 from ..dependencies import effective_staff_role, require_own_shop
 from ..schemas.staff import StaffCreate, StaffRoleUpdate
+from . import subscription_service
 from .log_service import log_system_action
 
 ROLE_STAFF = "STAFF"
@@ -37,6 +38,7 @@ def create_staff(
 ) -> Dict:
     # Chỉ chủ shop mới được tạo nhân viên cho shop của mình.
     require_own_shop(db, shop_id, current_user)
+    subscription_service.require_pro(db, shop_id)
 
     username = (data.username or "").strip()
     if not username:
@@ -170,6 +172,7 @@ def update_staff_role(
     if not staff:
         raise HTTPException(status_code=404, detail=tr("Không tìm thấy nhân viên"))
     require_own_shop(db, staff.staff_shop_id, current_user)
+    subscription_service.require_pro(db, staff.staff_shop_id)
 
     old_role = effective_staff_role(staff)
     staff.staff_role = data.staff_role

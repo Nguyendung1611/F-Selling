@@ -10,6 +10,7 @@ function switchTab(tabId, tabButton) {
     if (tabButton) tabButton.classList.add('active');
     
     if (tabId === 'logs') loadLogs();
+    if (tabId === 'subscriptions') window.FSellingSubscriptions?.loadAdmin?.();
 }
 
 function renderDashboard() {

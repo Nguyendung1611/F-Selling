@@ -273,6 +273,35 @@ _MIGRATIONS = [
     "ON supplier_payments(idempotency_key)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_supplier_payment_allocations_pair "
     "ON supplier_payment_allocations(payment_id, payable_entry_id)",
+    # J1: gói Free/Pro theo shop. Các bảng mới do create_all() tạo; khai lại
+    # các unique để DB cũ/khởi động lỗi dở tự chữa, rồi verify fail-fast bên dưới.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_shop_subscriptions_shop_id "
+    "ON shop_subscriptions(shop_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_subscription_grants_operation_id "
+    "ON subscription_grants(operation_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_subscription_grants_revoke_operation_id "
+    "ON subscription_grants(revoke_operation_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_subscription_checkouts_reference_code "
+    "ON subscription_checkouts(reference_code)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_subscription_checkouts_operation_id "
+    "ON subscription_checkouts(operation_id)",
+    "ALTER TABLE subscription_checkouts ADD COLUMN entitlement_starts_at DATETIME",
+    "ALTER TABLE subscription_checkouts ADD COLUMN entitlement_ends_at DATETIME",
+    "CREATE INDEX IF NOT EXISTS ix_subscription_checkouts_shop_entitlement "
+    "ON subscription_checkouts(shop_id, entitlement_starts_at, entitlement_ends_at)",
+    # Mã quá 24 giờ không còn là QR mở. Dọn trước khi dựng hàng rào một QR/shop.
+    "UPDATE subscription_checkouts SET status = 'EXPIRED' "
+    "WHERE status IN ('PENDING', 'UNDERPAID') "
+    "AND activated_at IS NULL AND expires_at <= CURRENT_TIMESTAMP",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_subscription_checkouts_one_open_per_shop "
+    "ON subscription_checkouts(shop_id) "
+    "WHERE status IN ('PENDING', 'UNDERPAID')",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_subscription_payments_idempotency_key "
+    "ON subscription_payments(idempotency_key)",
+    # Log mới ghi thẳng shop_id để thao tác của ADMIN (tặng/thu hồi Pro) hiện
+    # đúng ở "Ai Làm Gì" của shop đó mà không lẫn dữ liệu shop khác.
+    "ALTER TABLE system_logs ADD COLUMN shop_id INTEGER",
+    "CREATE INDEX IF NOT EXISTS ix_system_logs_shop_id ON system_logs(shop_id)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
@@ -300,6 +329,13 @@ _REQUIRED_INDEXES = [
     "ux_supplier_payable_entries_receipt_id",
     "ux_supplier_payments_idempotency_key",
     "ux_supplier_payment_allocations_pair",
+    "ux_shop_subscriptions_shop_id",
+    "ux_subscription_grants_operation_id",
+    "ux_subscription_grants_revoke_operation_id",
+    "ux_subscription_checkouts_reference_code",
+    "ux_subscription_checkouts_operation_id",
+    "ux_subscription_checkouts_one_open_per_shop",
+    "ux_subscription_payments_idempotency_key",
 ]
 
 # Thiếu/sai một index trong nhóm này thì tiếp tục chạy có thể nhân đôi tiền,
@@ -373,6 +409,41 @@ _FINANCIAL_INDEX_SPECS = {
     "ux_supplier_payment_allocations_pair": (
         "supplier_payment_allocations",
         ("payment_id", "payable_entry_id"),
+        None,
+    ),
+    "ux_shop_subscriptions_shop_id": (
+        "shop_subscriptions",
+        ("shop_id",),
+        None,
+    ),
+    "ux_subscription_grants_operation_id": (
+        "subscription_grants",
+        ("operation_id",),
+        None,
+    ),
+    "ux_subscription_grants_revoke_operation_id": (
+        "subscription_grants",
+        ("revoke_operation_id",),
+        None,
+    ),
+    "ux_subscription_checkouts_reference_code": (
+        "subscription_checkouts",
+        ("reference_code",),
+        None,
+    ),
+    "ux_subscription_checkouts_operation_id": (
+        "subscription_checkouts",
+        ("operation_id",),
+        None,
+    ),
+    "ux_subscription_checkouts_one_open_per_shop": (
+        "subscription_checkouts",
+        ("shop_id",),
+        "status IN ('PENDING', 'UNDERPAID')",
+    ),
+    "ux_subscription_payments_idempotency_key": (
+        "subscription_payments",
+        ("idempotency_key",),
         None,
     ),
 }
@@ -454,6 +525,79 @@ WHERE EXISTS (
 """
 
 _COUNT_EMPTY_CODES = "SELECT COUNT(*) FROM products WHERE code IS NULL OR TRIM(code) = ''"
+
+# Shop cũ không có created_at đáng tin cậy. Quyết định nghiệp vụ đã chốt là cấp
+# đúng một trial 30 ngày từ lúc migration đầu tiên; WHERE NOT EXISTS làm lệnh
+# chạy lặp lại mà không gia hạn trial sau mỗi lần restart.
+_BACKFILL_SHOP_SUBSCRIPTIONS = """
+INSERT INTO shop_subscriptions (
+    shop_id, trial_started_at, trial_ends_at, paid_until, updated_at
+)
+SELECT
+    s.id,
+    CURRENT_TIMESTAMP,
+    datetime(CURRENT_TIMESTAMP, '+30 days'),
+    NULL,
+    CURRENT_TIMESTAMP
+FROM shops s
+WHERE NOT EXISTS (
+    SELECT 1 FROM shop_subscriptions ss WHERE ss.shop_id = s.id
+)
+"""
+
+# Checkout đã kích hoạt trước khi model segment ra đời vẫn có đủ
+# paid_until_after + duration_days để khôi phục chính xác đoạn ngày đã mua.
+_BACKFILL_SUBSCRIPTION_ENTITLEMENTS = """
+UPDATE subscription_checkouts
+SET
+    entitlement_ends_at = COALESCE(
+        paid_until_after,
+        datetime(activated_at, printf('+%d days', duration_days))
+    ),
+    entitlement_starts_at = datetime(
+        COALESCE(
+            paid_until_after,
+            datetime(activated_at, printf('+%d days', duration_days))
+        ),
+        printf('-%d days', duration_days)
+    )
+WHERE activated_at IS NOT NULL
+  AND (
+      entitlement_starts_at IS NULL
+      OR entitlement_ends_at IS NULL
+  )
+"""
+
+_COUNT_MISSING_SUBSCRIPTION_ENTITLEMENTS = """
+SELECT COUNT(*)
+FROM subscription_checkouts
+WHERE activated_at IS NOT NULL
+  AND (
+      entitlement_starts_at IS NULL
+      OR entitlement_ends_at IS NULL
+      OR entitlement_ends_at <= entitlement_starts_at
+  )
+"""
+
+_SYNC_SUBSCRIPTION_PAID_UNTIL = """
+UPDATE shop_subscriptions
+SET
+    paid_until = (
+        SELECT MAX(sc.entitlement_ends_at)
+        FROM subscription_checkouts sc
+        WHERE sc.shop_id = shop_subscriptions.shop_id
+          AND sc.activated_at IS NOT NULL
+          AND sc.entitlement_ends_at IS NOT NULL
+    ),
+    updated_at = CURRENT_TIMESTAMP
+WHERE EXISTS (
+    SELECT 1
+    FROM subscription_checkouts sc
+    WHERE sc.shop_id = shop_subscriptions.shop_id
+      AND sc.activated_at IS NOT NULL
+      AND sc.entitlement_ends_at IS NOT NULL
+)
+"""
 
 # D4: ledger ra đời sau hai cột legacy trên orders. Mỗi đơn cũ có đủ mã giao
 # dịch được tạo đúng một dòng để retry mã cũ vẫn bị nhận ra kể cả sau khi
@@ -650,6 +794,55 @@ def backfill_legacy_order_payments(db: Session) -> int:
         return 0
 
 
+def backfill_shop_subscriptions(db: Session) -> int:
+    """Cấp trial một lần cho shop cũ; lỗi phải dừng khởi động.
+
+    Nếu nuốt lỗi ở đây, app vẫn chạy nhưng shop cũ không có aggregate thuê bao
+    sẽ bị xem là Free. Đây là lỗi quyền sử dụng khó nhìn thấy hơn một lần startup
+    thất bại rõ ràng, nên migration entitlement này cố ý fail-fast.
+    """
+    try:
+        result = db.execute(text(_BACKFILL_SHOP_SUBSCRIPTIONS))
+        db.commit()
+        inserted = max(result.rowcount or 0, 0)
+        if inserted:
+            print(
+                f"[MIGRATE] shop_subscriptions: cấp trial 30 ngày cho {inserted} shop cũ"
+            )
+        return inserted
+    except SQLAlchemyError as e:
+        db.rollback()
+        raise RuntimeError(
+            "Không thể cấp trial cho shop cũ; dừng khởi động để tránh "
+            "âm thầm chuyển shop sang Free"
+        ) from e
+
+
+def backfill_subscription_entitlements(db: Session) -> int:
+    """Khôi phục segment paid cũ; thiếu một dòng phải dừng startup."""
+    try:
+        result = db.execute(text(_BACKFILL_SUBSCRIPTION_ENTITLEMENTS))
+        db.execute(text(_SYNC_SUBSCRIPTION_PAID_UNTIL))
+        missing = (
+            db.execute(text(_COUNT_MISSING_SUBSCRIPTION_ENTITLEMENTS)).scalar()
+            or 0
+        )
+        if missing:
+            db.rollback()
+            raise RuntimeError(
+                "Không khôi phục được segment ngày Pro cho "
+                f"{missing} checkout đã thanh toán; dừng khởi động"
+            )
+        db.commit()
+        return max(result.rowcount or 0, 0)
+    except SQLAlchemyError as e:
+        db.rollback()
+        raise RuntimeError(
+            "Không thể backfill segment ngày Pro; dừng khởi động để tránh "
+            "làm mất ngày khách đã thanh toán"
+        ) from e
+
+
 def seed_admin(db: Session) -> None:
     """Tự đồng bộ tài khoản admin theo ADMIN_INITIAL_PASSWORD trong .env.
 
@@ -701,6 +894,8 @@ def initialize() -> None:
                 f"{', '.join(sorted(missing_financial_indexes))}; "
                 "dừng khởi động để tránh ghi trùng"
             )
+        backfill_shop_subscriptions(db)
+        backfill_subscription_entitlements(db)
         backfill_legacy_order_payments(db)
         backfill_order_item_product_id(db)
         seed_admin(db)

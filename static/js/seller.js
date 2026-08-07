@@ -159,6 +159,7 @@ function xoaDuLieuShopCuKhoiGiaoDien() {
     loyaltyRequestId += 1;
     loyaltyProgramCache = null;
     loyaltyProgramShopId = null;
+    window.FSellingSubscriptions?.resetSellerForShopChange?.();
     // Module Nhập hàng nằm ở file riêng để seller.js không phình thêm hàng
     // nghìn dòng. Nó vẫn dùng cùng generation/shop hiện tại của trang này.
     window.FSellingPurchasing?.resetForShopChange?.();
@@ -211,6 +212,10 @@ function switchTab(tabId, buttonEl = null) {
         showToast(t('seller.purchasing.owner_only'));
         return;
     }
+    if (tabId === 'subscription' && MY_ROLE !== 'SELLER') {
+        showToast(t('subscription.seller.owner_only'));
+        return;
+    }
     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.tab-btn[data-main-tab]').forEach(el => el.classList.remove('active'));
     const tab = document.getElementById(tabId);
@@ -225,6 +230,10 @@ function switchTab(tabId, buttonEl = null) {
     if (tabId === 'kiemke') kkNapLo();
     if (tabId === 'loyalty') loadLoyaltyProgram();
     if (tabId === 'purchasing') window.FSellingPurchasing?.load?.();
+    if (tabId === 'subscription') {
+        window.FSellingSubscriptions?.loadSeller?.(currentShopId, currentShopGeneration);
+    }
+    window.FSellingSubscriptions?.onSellerTabChange?.(tabId);
 }
 
 // Live Preview Logic
@@ -395,6 +404,9 @@ function doiCuaHangChung(giaTri) {
     else if (tab === 'customers') loadCustomers();
     else if (tab === 'loyalty') loadLoyaltyProgram();
     else if (tab === 'purchasing') window.FSellingPurchasing?.load?.();
+    else if (tab === 'subscription') {
+        window.FSellingSubscriptions?.loadSeller?.(id, currentShopGeneration);
+    }
     else if (tab === 'settings') loadStaff();
 }
 
@@ -878,7 +890,11 @@ const NHOM_HANH_DONG = {
     '#B45309': [
         'ADJUST_STOCK', 'STOCKTAKE', 'UPDATE_PRODUCT', 'TOGGLE_PRODUCT_STATUS',
         'CREATE_STAFF', 'UPDATE_STAFF_ROLE', 'RESET_STAFF_PASSWORD',
-        'UPDATE_VOUCHER', 'CREATE_VOUCHER', 'CHANGE_PASSWORD'
+        'UPDATE_VOUCHER', 'CREATE_VOUCHER', 'CHANGE_PASSWORD',
+        'SUBSCRIPTION_CHECKOUT_CREATED', 'SUBSCRIPTION_ADMIN_GIFT',
+        'SUBSCRIPTION_ADMIN_GIFT_REVOKED', 'SUBSCRIPTION_PAYMENT_REVIEW',
+        'SUBSCRIPTION_PAYMENT_OVERPAID', 'SUBSCRIPTION_PAYMENT_UNDERPAID',
+        'SUBSCRIPTION_IDEMPOTENCY_COLLISION', 'SUBSCRIPTION_ACTIVATED'
     ]
 };
 
@@ -3866,6 +3882,8 @@ function applyRoleUI() {
     if (tabLoyalty && MY_ROLE === 'SELLER') tabLoyalty.style.display = '';
     const tabPurchasing = document.getElementById('tabPurchasing');
     if (tabPurchasing && ['SELLER', 'ADMIN'].includes(MY_ROLE)) tabPurchasing.style.display = '';
+    const tabSubscription = document.getElementById('tabSubscription');
+    if (tabSubscription && MY_ROLE === 'SELLER') tabSubscription.style.display = '';
     if (!XEM_DUOC_GIA_VON) {
         // Ô giá vốn ở form sản phẩm. Nhân viên kho vẫn thêm/sửa sản phẩm được,
         // chỉ là không thấy và không gửi field này (xem createProduct).

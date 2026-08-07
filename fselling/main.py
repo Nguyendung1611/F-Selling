@@ -35,6 +35,7 @@ from .routers import (
     shifts,
     shops,
     staff,
+    subscriptions,
     suppliers,
     tts,
     vouchers,
@@ -175,6 +176,7 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
     application.include_router(orders.router)
     application.include_router(shifts.router)
     application.include_router(staff.router)
+    application.include_router(subscriptions.router)
     application.include_router(customers.router)
     application.include_router(loyalty.router)
     application.include_router(vouchers.router)

@@ -172,6 +172,20 @@ trống hướng dẫn. Không viết lại lịch sử Git nếu chưa có kế
 lại mật khẩu admin. Sau khi đăng nhập ổn định, có thể xóa dòng đó và quản lý mật
 khẩu bằng chức năng trong app.
 
+**Gói Free/Pro đã chốt theo từng shop:** 99.000đ/30 ngày hoặc 831.600đ/365
+ngày; mỗi shop có đúng một trial Pro 30 ngày, và chỉ gói trả tiền có 7 ngày
+grace. Tiền này đi vào tài khoản nền tảng qua `SUBSCRIPTION_BANK_*` và webhook
+secret riêng, tuyệt đối không dùng tài khoản nhận tiền bán hàng của shop và
+không đi qua `Order`/doanh thu/ca. ADMIN được tặng Pro có hạn khi nhập lý do,
+nhưng chỉ được thu hồi phần đã tặng — không được cắt ngày khách đã trả tiền.
+
+Hết Pro không xóa dữ liệu và không được chặn toàn shop. Luôn cho phép hoàn tất
+tiền/chứng từ đã phát sinh: đồng bộ offline, thanh toán/hoàn tiền, trả hàng,
+thu nợ khách cũ, trả nợ nhà cung cấp và đóng ca. Khóa việc tạo nghiệp vụ Pro
+mới; riêng báo cáo quá 31 ngày, xuất file và **Ai Làm Gì** cũng là màn đọc thuộc
+Pro nhưng dữ liệu vẫn giữ nguyên. Xem bẫy 33 trong `KIEN_TRUC.md` trước khi sửa
+entitlement/webhook.
+
 ## Việc đang treo
 
 GitHub Actions **không chạy** (tài khoản bị khóa thanh toán) nên CI không bắt
@@ -182,7 +196,7 @@ lỗi giúp. Bộ test chạy ở máy là lưới an toàn duy nhất — càng
 
 | File | Nội dung |
 |---|---|
-| `KIEN_TRUC.md` | Kiến trúc + 25 bẫy khi viết service. **Đọc trước khi sửa backend** |
+| `KIEN_TRUC.md` | Kiến trúc + 33 bẫy khi viết service. **Đọc trước khi sửa backend** |
 | `QUY_TRINH_LAM_VIEC.md` | Quy trình sửa → test → nhìn thử → commit → push |
 | `HUONG_DAN_SU_DUNG.md` | Hướng dẫn cho người dùng cuối |
 | `DEPLOY_FLY.md` | Deploy lên Fly.io (xem cảnh báo secret ở trên) |

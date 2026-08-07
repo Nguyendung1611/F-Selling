@@ -354,6 +354,50 @@ EN_MESSAGES = {
         "Supplier payable after receiving exceeds the {maximum} VND limit"
     ),
 
+    # Free/Pro subscriptions and feature gates
+    "Tính năng này cần gói Pro. Bạn có thể mở tab Gói cước để gia hạn.": (
+        "This feature requires Pro. Open the Plans tab to upgrade or renew."
+    ),
+    "Chỉ chủ cửa hàng mới quản lý được gói cước": (
+        "Only the store owner can manage the subscription"
+    ),
+    "Thanh toán gói Pro chưa được cấu hình tài khoản nhận tiền": (
+        "The receiving bank account for Pro payments is not configured"
+    ),
+    "Mã thao tác đã được dùng với nội dung khác. Hãy tải lại màn hình.": (
+        "This operation ID was already used with different details. Refresh the page."
+    ),
+    "Chưa tạo được mã thanh toán. Vui lòng thử lại": (
+        "The payment code could not be created. Please try again"
+    ),
+    "Cửa hàng đang có một mã thanh toán còn hiệu lực. Hãy dùng mã đó hoặc chờ mã hết hạn.": (
+        "This store already has an active payment code. Use that code or wait for it to expire."
+    ),
+    "Cửa hàng vừa tạo một mã thanh toán ở phiên khác. Hãy tải lại để dùng đúng mã đó.": (
+        "Another session just created a payment code for this store. Refresh to use that code."
+    ),
+    "Ngày hết hạn gói tặng không hợp lệ": "The gifted Pro expiry date is invalid",
+    "Ngày hết hạn gói tặng phải nằm trong tương lai": (
+        "The gifted Pro expiry date must be in the future"
+    ),
+    "Không tìm thấy gói Pro được tặng": "The gifted Pro grant was not found",
+    "Gói tặng này đã được thu hồi": "This gifted Pro grant has already been revoked",
+    "Mã thao tác thu hồi đã được dùng cho gói tặng khác": (
+        "This revoke operation ID was already used for another Pro grant"
+    ),
+    "Gói Free xem báo cáo trong 31 ngày gần nhất. Hãy mở tab Gói cước để xem kỳ cũ hơn.": (
+        "Free includes reports for the latest 31 days. Open the Plans tab to view older periods."
+    ),
+    "Cửa hàng đã có chương trình hoặc lịch sử tích điểm nên không thể xóa. Hãy bấm nút Khóa để ngừng sử dụng cửa hàng và giữ nguyên sổ điểm.": (
+        "This store has a loyalty program or point history and cannot be deleted. Deactivate it to preserve the point ledger."
+    ),
+    "Cửa hàng đã có nhà cung cấp hoặc lịch sử phiếu nhập/công nợ nên không thể xóa. Hãy bấm nút Khóa để giữ nguyên chứng từ.": (
+        "This store has supplier, purchase receipt, or payable history and cannot be deleted. Deactivate it to preserve the records."
+    ),
+    "Cửa hàng đã có lịch sử gói cước hoặc thanh toán nên không thể xóa. Hãy bấm nút Khóa để giữ nguyên chứng từ.": (
+        "This store has subscription or payment history and cannot be deleted. Deactivate it to preserve the records."
+    ),
+
     # Vietnamese speech service (the spoken money remains Vietnamese)
     "Server chưa cấu hình giọng đọc (thiếu TTS_PROVIDER/TTS_API_KEY)": (
         "The speech service is not configured "

@@ -145,12 +145,13 @@ if ($nguyHiem) {
 }
 
 # ---------- 3b. Chặn GIÁ TRỊ secret hiện tại lọt vào file Git ----------
-# Chặn theo tên file ở trên là chưa đủ: ba secret production từng bị chép thẳng
-# vào tài liệu deploy. Giá trị cũ vẫn còn trong lịch sử, nhưng giá trị mới trong
-# .env tuyệt đối không được xuất hiện trong bất kỳ file nào đang stage.
+# Chặn theo tên file ở trên là chưa đủ: secret production từng bị chép thẳng
+# vào tài liệu deploy. Giá trị cũ vẫn còn trong lịch sử, nhưng mọi giá trị hiện
+# tại trong .env tuyệt đối không được xuất hiện trong bất kỳ file nào đang stage.
 $tenSecretCanChan = @(
     'SECRET_KEY',
     'PAYMENT_WEBHOOK_SECRET',
+    'SUBSCRIPTION_WEBHOOK_SECRET',
     'ADMIN_INITIAL_PASSWORD'
 )
 $secretHienTai = @{}

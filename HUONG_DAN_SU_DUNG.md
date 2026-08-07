@@ -268,6 +268,55 @@ Xuất kho: xuất kho làm tồn giảm mà lãi vẫn báo như cũ, tức là
 > Thao tác này **không hoàn tác được**, và lô nào chưa khai giá vốn thì phần lỗ
 > của nó không tính được — hệ thống sẽ nói rõ thay vì coi như bằng 0.
 
+### Gói Free và Pro
+
+Gói tính **riêng cho từng cửa hàng**. Mỗi cửa hàng được dùng thử Pro đúng 30
+ngày một lần; cửa hàng đã có khi nâng cấp bản này cũng được cấp lần dùng thử đó.
+Sau đó shop tự về Free nếu chưa mua. Free vẫn dùng lâu dài để chủ shop bán tiền
+mặt/VietQR, bán offline, quản lý sản phẩm và kho cơ bản, khách hàng, trả hàng,
+tiếp tục dùng chương trình tích điểm đã cài và xem báo cáo 31 ngày gần nhất.
+
+Pro có giá **99.000đ/30 ngày** hoặc **831.600đ/365 ngày** (gói năm đã giảm đúng
+30%). Pro mở nhân viên/phân quyền, toàn bộ lịch sử và xuất Excel, màn **Ai Làm
+Gì**, bán ghi nợ, tùy chỉnh chương trình tích điểm, voucher, công nợ nhà cung
+cấp/phiếu nhập, kiểm kê, lô/hạn dùng và hủy hàng. Chỉ gói đã trả tiền có thêm 7
+ngày gia hạn; thời gian dùng thử và Pro do Admin tặng hết đúng ngày đã ghi.
+
+#### Chủ shop mua Pro
+
+1. Ở trang Seller, chọn đúng cửa hàng trong ô **Cửa hàng** phía trên → bấm tab
+   **Gói cước**.
+2. Bạn sẽ thấy nhãn Free / Dùng thử / Pro trả phí / Pro được tặng / Gia hạn và
+   ngày kết thúc tương ứng.
+3. Bấm **Mua Pro tháng** hoặc **Mua Pro năm**. Khi tài khoản nhận phí nền tảng
+   đã được cấu hình, màn hình hiện một mã QR, đúng số tiền và nội dung bắt đầu
+   bằng `SUB...`.
+4. Quét QR và giữ nguyên nội dung. Màn hình tự kiểm tra; khi ngân hàng báo tiền
+   về, bạn sẽ thấy **Đã kích hoạt Pro đến...**. Mua sớm được nối tiếp từ ngày
+   hết hạn đang có; mua trong 7 ngày gia hạn nối từ hạn trả phí cũ.
+
+Mã thanh toán sống 24 giờ. Chuyển thiếu được cộng dồn vào cùng mã nhưng chỉ đủ
+tiền mới cấp Pro. Chuyển thừa chỉ cấp đúng một kỳ; phần dư và tiền đến sai/hết
+mã sẽ hiện trong bảng Admin để xử lý, không tự đổi thành thêm ngày và không tự
+hoàn tiền.
+
+#### Admin tặng hoặc thu hồi Pro
+
+1. Ở trang Admin, bấm **Gói cước Shop**.
+2. Tìm đúng cửa hàng → bấm **Tặng Pro** hoặc **Gia hạn** → chọn **Dùng đến hết
+   ngày**, nhập lý do bắt buộc → bấm xác nhận. Gói tặng là 0đ và không đi vào
+   doanh thu.
+3. Nếu dòng có quà tặng đang còn hiệu lực, bấm **Thu hồi** và nhập lý do. Nút
+   này chỉ gỡ phần Admin đã tặng; không thể cắt thời gian khách đã trả tiền.
+4. Bảng **Thanh toán gói cần xử lý** cho biết khoản không mã, sai mã, sai tài
+   khoản, đến trễ, chuyển thiếu hoặc chuyển thừa.
+
+Khi Pro hết hạn, F-Selling không xóa dữ liệu. Phiếu nhập nháp cũ vẫn xem được
+nhưng không sửa/chốt; voucher cũ vẫn dùng được. Các việc giải quyết tiền đã phát
+sinh vẫn mở: đồng bộ đơn offline, hoàn/trả hàng, thu nợ khách, trả nợ nhà cung
+cấp và đóng ca. Báo cáo quá 31 ngày, xuất file và màn **Ai Làm Gì** sẽ mở lại
+khi gia hạn Pro; dữ liệu của các màn đó vẫn được giữ nguyên trong thời gian Free.
+
 ## 6. File cấu hình `.env`
 
 | Biến | Ý nghĩa |
@@ -275,6 +324,10 @@ Xuất kho: xuất kho làm tồn giảm mà lãi vẫn báo như cũ, tức là
 | `SECRET_KEY` | Khóa ký JWT. Bắt buộc, giữ bí mật. |
 | `ADMIN_INITIAL_PASSWORD` | Mật khẩu admin (app tự đồng bộ khi khởi động). |
 | `PAYMENT_WEBHOOK_SECRET` | Secret cho webhook thanh toán (thiếu thì webhook trả 503). |
+| `SUBSCRIPTION_BANK_CODE` | Mã ngân hàng nhận phí F-Selling (tài khoản nền tảng, không phải tài khoản của shop). |
+| `SUBSCRIPTION_BANK_ACCOUNT_NO` | Số tài khoản nền tảng nhận phí Pro. |
+| `SUBSCRIPTION_BANK_ACCOUNT_NAME` | Tên chủ tài khoản nền tảng nhận phí Pro. |
+| `SUBSCRIPTION_WEBHOOK_SECRET` | Secret riêng cho webhook tiền gói Pro; không dùng chung secret đơn bán. |
 | `ALLOWED_ORIGINS` | Domain được phép gọi API (CORS). |
 | `SMTP_HOST/PORT/USER/PASSWORD` | Cấu hình gửi email OTP (tùy chọn). |
 | `LOGIN_MAX_ATTEMPTS` | Sai mật khẩu bao nhiêu lần thì khóa tạm (mặc định 5). |

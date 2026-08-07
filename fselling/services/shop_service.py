@@ -13,6 +13,7 @@ from ..core.i18n import tr
 from ..core.security import new_session_id
 from ..dependencies import require_own_shop
 from ..schemas.shop import ShopCreate
+from . import subscription_service
 from .log_service import log_system_action
 
 # (thuộc tính trên model, giá trị từ request, thông báo lỗi khi rỗng)
@@ -67,6 +68,10 @@ def create_shop(db: Session, current_user: models.User, shop: ShopCreate) -> mod
     data = _clean_and_validate(shop)
     new_shop = models.Shop(owner_id=current_user.id, **data)
     db.add(new_shop)
+    # Trial bắt đầu đúng lúc TẠO shop, không phải lúc người dùng mở tab gói cước
+    # lần đầu. flush lấy id nhưng vẫn nằm trong cùng transaction với Shop.
+    db.flush()
+    subscription_service.create_trial_for_shop(db, new_shop.id)
     db.commit()
     db.refresh(new_shop)
     log_system_action(
@@ -188,6 +193,24 @@ def _has_supplier_data(db: Session, shop_id: int) -> bool:
     )
 
 
+def _has_subscription_history(db: Session, shop_id: int) -> bool:
+    """Đã có checkout/quà/tiền gói thì giữ shop để không mất dấu sổ tiền."""
+    return any(
+        query.first() is not None
+        for query in (
+            db.query(models.SubscriptionGrant.id).filter(
+                models.SubscriptionGrant.shop_id == shop_id
+            ),
+            db.query(models.SubscriptionCheckout.id).filter(
+                models.SubscriptionCheckout.shop_id == shop_id
+            ),
+            db.query(models.SubscriptionPayment.id).filter(
+                models.SubscriptionPayment.shop_id == shop_id
+            ),
+        )
+    )
+
+
 def delete_shop(db: Session, current_user: models.User, shop_id: int) -> Dict[str, str]:
     # Lấy lock trước lần đọc quyết định. Điều kiện owner_id giữ nguyên hành vi
     # 404 cho người không phải chủ mà không cần mở một read transaction trước.
@@ -210,6 +233,15 @@ def delete_shop(db: Session, current_user: models.User, shop_id: int) -> Dict[st
             detail=tr(
                 "Cửa hàng đã có nhà cung cấp hoặc lịch sử phiếu nhập/công nợ "
                 "nên không thể xóa. Hãy bấm nút Khóa để giữ nguyên chứng từ."
+            ),
+        )
+    if _has_subscription_history(db, shop_id):
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Cửa hàng đã có lịch sử gói cước hoặc thanh toán nên không thể "
+                "xóa. Hãy bấm nút Khóa để giữ nguyên chứng từ."
             ),
         )
     shop_name = db_shop.name
@@ -253,6 +285,11 @@ def delete_shop(db: Session, current_user: models.User, shop_id: int) -> Dict[st
     db.query(models.Voucher).filter(models.Voucher.shop_id == shop_id).delete(
         synchronize_session=False
     )
+    # Shop chỉ mới có trial mặc định, chưa phát sinh checkout/quà/tiền thì được
+    # xóa cứng; SQLite production không bật FK nên phải dọn aggregate tường minh.
+    db.query(models.ShopSubscription).filter(
+        models.ShopSubscription.shop_id == shop_id
+    ).delete(synchronize_session=False)
     # Shop không còn tồn tại thì mọi tài khoản nhân viên gán vào đó phải bị
     # vô hiệu ngay; giữ User để audit cũ vẫn truy ra đúng tên.
     db.query(models.User).filter(

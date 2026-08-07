@@ -187,4 +187,4 @@ def test_tab_tich_diem_chan_so_le_truoc_khi_goi_api_va_da_bump_cache():
     assert 'id="loyaltyEarnAmount" type="number" min="1" step="1"' in html
     assert 'id="loyaltyRedeemAmount" type="number" min="1" step="1"' in html
     assert "/js/locales/seller.js?v=20260807-nha-cung-cap-ui-f9" in html
-    assert "/js/seller.js?v=20260807-nha-cung-cap-ui-f9" in html
+    assert "/js/seller.js?v=20260807-goi-cuoc-f2" in html

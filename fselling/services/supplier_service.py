@@ -31,7 +31,7 @@ from ..schemas.supplier import (
     SupplierStatusUpdate,
     SupplierUpdate,
 )
-from . import catalog_service, shift_service
+from . import catalog_service, shift_service, subscription_service
 
 
 STATUS_DRAFT = "DRAFT"
@@ -248,6 +248,7 @@ def create_supplier(
     request: SupplierCreate,
 ) -> Dict[str, Any]:
     _authorize_shop(db, current_user, shop_id)
+    subscription_service.require_pro(db, shop_id)
     operation_id = _operation(request.operation_id, "Mã thao tác tạo nhà cung cấp")
     # Fingerprint idempotency phải dựa trên payload GỐC. Nếu request bỏ ngày
     # lúc 23:59, retry nguyên payload sau 00:00 vẫn phải nhận lại cùng kết quả,
@@ -389,6 +390,7 @@ def update_supplier(
     request: SupplierUpdate,
 ) -> Dict[str, Any]:
     supplier, _ = _get_supplier(db, current_user, supplier_id)
+    subscription_service.require_pro(db, supplier.shop_id)
     supplier.name = _name(request.name)
     supplier.phone = _clean(request.phone, 64)
     supplier.tax_code = _clean(request.tax_code, 64)
@@ -412,6 +414,7 @@ def update_supplier_status(
     request: SupplierStatusUpdate,
 ) -> Dict[str, Any]:
     supplier, _ = _get_supplier(db, current_user, supplier_id)
+    subscription_service.require_pro(db, supplier.shop_id)
     _lock_supplier(db, supplier.id, supplier.shop_id)
     db.refresh(supplier)
     supplier.is_active = bool(request.is_active)
@@ -431,6 +434,7 @@ def delete_supplier(
     db: Session, current_user: models.User, supplier_id: int
 ) -> Dict[str, str]:
     supplier, _ = _get_supplier(db, current_user, supplier_id)
+    subscription_service.require_pro(db, supplier.shop_id)
     _lock_supplier(db, supplier.id, supplier.shop_id)
     db.refresh(supplier)
     has_history = any(
@@ -731,6 +735,7 @@ def create_receipt_draft(
     request: PurchaseReceiptCreate,
 ) -> Dict[str, Any]:
     _authorize_shop(db, current_user, shop_id)
+    subscription_service.require_pro(db, shop_id)
     operation_id = _operation(request.operation_id, "Mã thao tác tạo phiếu nhập")
     values = _receipt_values(request)
     # Tương tự tạo NCC: create fingerprint giữ None nếu client bỏ ngày, còn
@@ -876,6 +881,7 @@ def update_receipt_draft(
     request: PurchaseReceiptUpdate,
 ) -> Dict[str, Any]:
     receipt, _ = _get_receipt(db, current_user, receipt_id)
+    subscription_service.require_pro(db, receipt.shop_id)
     _lock_shop(db, receipt.shop_id)
     db.expire_all()
     receipt = db.query(models.PurchaseReceipt).filter(
@@ -943,6 +949,7 @@ def delete_receipt_draft(
     db: Session, current_user: models.User, receipt_id: int
 ) -> Dict[str, str]:
     receipt, _ = _get_receipt(db, current_user, receipt_id)
+    subscription_service.require_pro(db, receipt.shop_id)
     _lock_shop(db, receipt.shop_id)
     db.expire_all()
     receipt = db.query(models.PurchaseReceipt).filter(
@@ -1155,6 +1162,7 @@ def confirm_receipt(
     request: PurchaseReceiptConfirm,
 ) -> Dict[str, Any]:
     receipt, _ = _get_receipt(db, current_user, receipt_id)
+    subscription_service.require_pro(db, receipt.shop_id)
     operation_id = _operation(request.operation_id, "Mã thao tác xác nhận phiếu")
     paid, method, note, reference = _normalize_payment(
         request.paid_amount, request.method, request.note, request.reference

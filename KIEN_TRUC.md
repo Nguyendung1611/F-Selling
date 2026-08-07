@@ -1196,6 +1196,46 @@ hàng; không được âm thầm “nâng cấp” mọi điều chỉnh dươn
 và công nợ chỉ chủ shop/Admin được xem và thao tác, cùng ranh giới quyền với giá
 vốn hiện có.
 
+### 33. Tiền gói Pro là tiền NỀN TẢNG, không phải doanh thu của cửa hàng
+
+Thanh toán thuê bao dùng namespace `SUB...`, tài khoản ngân hàng nền tảng và
+ledger `SubscriptionPayment` riêng. Tuyệt đối không đưa nó qua
+`Order`/`OrderPayment`, doanh thu shop, ca thu ngân hay webhook `ORDER...`: làm
+vậy thì phí phần mềm sẽ bị tính thành tiền bán hàng của khách, sai cả doanh thu,
+két và đối soát. Webhook thuê bao có secret và endpoint riêng; thiếu cấu hình
+tài khoản/secret phải fail-closed. Giao dịch không mã, sai mã, sai tài khoản,
+đến sau 24 giờ hoặc chuyển thừa vẫn phải nằm trong hàng chờ Admin, không được
+biến mất trong log. Chuyển thiếu được cộng dồn; chỉ khi đủ tiền mới nối đúng một
+kỳ. Unique idempotency, cập nhật checkout, nối hạn và audit phải cùng transaction;
+lỗi DB thật phải trả 5xx để ngân hàng retry.
+
+Quyền Pro được **suy ra theo thời gian mỗi request**, không chụp vào JWT hay
+localStorage. Mỗi shop có đúng một trial 30 ngày; tháng/năm là 30/365 ngày; chỉ
+gói đã trả tiền có 7 ngày grace. Mua sớm nối từ cuối quyền đang còn hiệu lực;
+mua trong grace nối từ hạn trả phí cũ. ADMIN chỉ tặng Pro có ngày hết hạn và lý
+do, không sinh doanh thu; nút thu hồi chỉ được gỡ đúng phần quà tặng, không bao
+giờ cắt thời gian khách đã trả tiền.
+
+Không được dùng một mình `ShopSubscription.paid_until` để trộn ngày quà với
+ngày đã mua. Mỗi checkout đủ tiền sở hữu segment
+`entitlement_starts_at`/`entitlement_ends_at` đúng 30/365 ngày; `paid_until` chỉ
+là cache/đường đọc legacy. Khi thu hồi quà, chỉ kéo **sớm** các segment paid
+chưa bắt đầu để đóng khoảng trống và kéo cả chuỗi downstream, không đẩy muộn
+segment đang chồng một quyền khác. Nếu đang trong grace thì vẫn nối từ cuối
+segment paid cũ, không nối từ “bây giờ” rồi tặng miễn số ngày grace đã qua.
+Database chỉ cho một checkout `PENDING/UNDERPAID` mỗi shop; tiền dư hiển thị một
+issue tổng hợp theo checkout với tổng đã nhận/phải trả/cần hoàn, không tách nhiều
+dòng khiến Admin hoàn lặp.
+
+Hết Pro không được xóa dữ liệu hay chặn một middleware trên toàn shop. Những
+việc giải quyết giao dịch đã phát sinh — đồng bộ đơn offline, thanh toán/hoàn
+tiền, trả hàng, thu nợ khách cũ, trả nợ nhà cung cấp và đóng ca — phải tiếp tục
+chạy. Chỉ chặn lúc **tạo nghiệp vụ Pro mới**; phiếu nhập nháp cũ vẫn xem được
+nhưng không sửa/chốt, voucher cũ vẫn áp được, và logic FEFO/hoàn đúng lô vẫn
+phải chạy dù màn quản lý lô nâng cao đang bị khóa. “Không xóa dữ liệu” không có
+nghĩa mọi màn đọc đều là Free: báo cáo quá 31 ngày, xuất file và **Ai Làm Gì**
+thuộc Pro theo chính sách gói; dữ liệu gốc vẫn được giữ để hiện lại khi gia hạn.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..dependencies import get_current_user, get_db
+from ..dependencies import get_current_user, get_db, require_shop_access
 from ..schemas.catalog import CategoryUpdate
-from ..services import catalog_service
+from ..services import catalog_service, subscription_service
 
 router = APIRouter(prefix="/api/categories", tags=["categories"])
 
@@ -16,6 +16,9 @@ def create_category(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    if current_user.role == "STAFF":
+        require_shop_access(db, shop_id, current_user)
+        subscription_service.require_pro(db, shop_id)
     return catalog_service.create_category(db, current_user, name, shop_id)
 
 
@@ -26,6 +29,15 @@ def update_category(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    if current_user.role == "STAFF":
+        category = (
+            db.query(models.Category)
+            .filter(models.Category.id == category_id)
+            .first()
+        )
+        if category is not None:
+            require_shop_access(db, category.shop_id, current_user)
+            subscription_service.require_pro(db, category.shop_id)
     return catalog_service.update_category(db, current_user, category_id, cat)
 
 

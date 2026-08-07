@@ -12,7 +12,7 @@ from ..schemas.order import (
     OrderReturnCreate,
     RefundComplete,
 )
-from ..services import offline_service, order_service, return_service
+from ..services import offline_service, order_service, return_service, subscription_service
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
@@ -24,6 +24,13 @@ def create_order(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    # Free vẫn bán tiền mặt/VietQR bằng tài khoản chủ shop. Nhân viên là tính
+    # năng Pro; bán ghi nợ cũng là nghiệp vụ Pro. Chỉ chặn lúc TẠO đơn mới —
+    # các endpoint thu nợ/hoàn tiền/trả hàng/đồng bộ offline phía dưới luôn mở
+    # để giải quyết tiền đã phát sinh.
+    require_shop_access(db, shop_id, current_user)
+    if current_user.role == "STAFF" or order.payment_method == "debt":
+        subscription_service.require_pro(db, shop_id)
     return order_service.create_order(db, current_user, shop_id, order)
 
 

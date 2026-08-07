@@ -136,6 +136,15 @@ ROUTES_BO_SUNG = {
     ("PUT", "/api/purchase-receipts/receipt/{receipt_id}"),
     ("DELETE", "/api/purchase-receipts/receipt/{receipt_id}"),
     ("POST", "/api/purchase-receipts/receipt/{receipt_id}/confirm"),
+    # J1: gói Free/Pro theo shop. Tiền thuê bao dùng webhook/ledger riêng, không
+    # đi vào OrderPayment/doanh thu bán hàng của shop.
+    ("GET", "/api/subscriptions/{shop_id}"),
+    ("POST", "/api/subscriptions/{shop_id}/checkouts"),
+    ("POST", "/api/subscriptions/webhook"),
+    ("GET", "/api/admin/subscriptions"),
+    ("POST", "/api/admin/subscriptions/{shop_id}/gifts"),
+    ("POST", "/api/admin/subscriptions/grants/{grant_id}/revoke"),
+    ("GET", "/api/admin/subscription-payments"),
 }
 
 
@@ -188,6 +197,15 @@ def test_webhook_dang_ky_truoc_route_shop_id(app):
     ]
     order_paths = [p for _, p in paths]
     assert order_paths.index("/api/orders/webhook") < order_paths.index("/api/orders/{shop_id}")
+
+    subscription_paths = [
+        r.path
+        for r in _iter_routes(app.routes)
+        if getattr(r, "path", "").startswith("/api/subscriptions")
+    ]
+    assert subscription_paths.index("/api/subscriptions/webhook") < (
+        subscription_paths.index("/api/subscriptions/{shop_id}")
+    )
 
 
 def test_trang_html_va_redirect(client):

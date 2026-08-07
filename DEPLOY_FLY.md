@@ -47,13 +47,17 @@ fly secrets set --app <ten-app> `
   SECRET_KEY="<dán giá trị SECRET_KEY trong file .env>" `
   ADMIN_INITIAL_PASSWORD="<dán giá trị ADMIN_INITIAL_PASSWORD trong file .env>" `
   PAYMENT_WEBHOOK_SECRET="<dán giá trị PAYMENT_WEBHOOK_SECRET trong file .env>" `
+  SUBSCRIPTION_BANK_CODE="<mã ngân hàng nhận phí F-Selling>" `
+  SUBSCRIPTION_BANK_ACCOUNT_NO="<số tài khoản nền tảng nhận phí Pro>" `
+  SUBSCRIPTION_BANK_ACCOUNT_NAME="<tên chủ tài khoản nhận phí Pro>" `
+  SUBSCRIPTION_WEBHOOK_SECRET="<secret riêng cho webhook tiền gói Pro>" `
   SMTP_HOST="smtp.gmail.com" `
   SMTP_PORT="587" `
   SMTP_USER="<email Gmail của bạn>" `
   SMTP_PASSWORD="<Gmail App Password mới>"
 ```
 
-- Ba dòng đầu chỉ là **chỗ trống hướng dẫn**. Mở file `.env` trên máy, sao chép
+- Bảy dòng đầu chỉ là **chỗ trống hướng dẫn**. Mở file `.env` trên máy, sao chép
   đúng giá trị tương ứng rồi dán vào PowerShell; tuyệt đối không dán giá trị thật
   vào tài liệu, `fly.toml` hoặc bất kỳ file nào sẽ commit.
 - Nhớ **tạo Gmail App Password MỚI** (cái cũ trong `.env` đã bị lộ, nên thu hồi).

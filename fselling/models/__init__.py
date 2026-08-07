@@ -30,6 +30,12 @@ from .supplier import (
     SupplierPaymentAllocation,
 )
 from .system_log import SystemLog
+from .subscription import (
+    ShopSubscription,
+    SubscriptionCheckout,
+    SubscriptionGrant,
+    SubscriptionPayment,
+)
 from .user import User
 
 __all__ = [
@@ -60,4 +66,8 @@ __all__ = [
     "SupplierPayableEntry",
     "SupplierPayment",
     "SupplierPaymentAllocation",
+    "ShopSubscription",
+    "SubscriptionGrant",
+    "SubscriptionCheckout",
+    "SubscriptionPayment",
 ]

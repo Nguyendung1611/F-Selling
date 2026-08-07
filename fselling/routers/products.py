@@ -4,11 +4,24 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from .. import models
-from ..dependencies import get_current_user, get_db
+from ..dependencies import get_current_user, get_db, require_shop_access
 from ..schemas.catalog import StockAdjust, StocktakeApply, WriteOffCreate
-from ..services import catalog_service, write_off_service
+from ..services import catalog_service, subscription_service, write_off_service
 
 router = APIRouter(prefix="/api/products", tags=["products"])
+
+
+def _product_for_plan_gate(
+    db: Session, current_user: models.User, product_id: int
+) -> Optional[models.Product]:
+    product = (
+        db.query(models.Product)
+        .filter(models.Product.id == product_id)
+        .first()
+    )
+    if product is not None:
+        require_shop_access(db, product.shop_id, current_user)
+    return product
 
 
 async def barcode_field(request: Request) -> Optional[str]:
@@ -75,6 +88,9 @@ def create_product(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    if current_user.role == "STAFF" or track_batches:
+        require_shop_access(db, shop_id, current_user)
+        subscription_service.require_pro(db, shop_id)
     return catalog_service.create_product(
         db,
         current_user,
@@ -150,6 +166,10 @@ def update_product(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    if current_user.role == "STAFF":
+        product = _product_for_plan_gate(db, current_user, product_id)
+        if product is not None:
+            subscription_service.require_pro(db, product.shop_id)
     return catalog_service.update_product(
         db,
         current_user,
@@ -172,6 +192,13 @@ def adjust_stock(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    product = _product_for_plan_gate(db, current_user, product_id)
+    if product is not None and (
+        current_user.role == "STAFF"
+        or bool(product.track_batches)
+        or bool((payload.expiry_date or "").strip())
+    ):
+        subscription_service.require_pro(db, product.shop_id)
     return catalog_service.adjust_stock(
         db, current_user, product_id, payload.delta, payload.unit_cost,
         payload.expiry_date, payload.reason,
@@ -195,6 +222,8 @@ def apply_stocktake(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    require_shop_access(db, shop_id, current_user)
+    subscription_service.require_pro(db, shop_id)
     return catalog_service.apply_stocktake(db, current_user, shop_id, payload.items)
 
 
@@ -205,6 +234,8 @@ def create_write_off(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    require_shop_access(db, shop_id, current_user)
+    subscription_service.require_pro(db, shop_id)
     return write_off_service.create_write_off(db, current_user, shop_id, payload)
 
 
@@ -234,6 +265,10 @@ def toggle_product_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    if current_user.role == "STAFF":
+        product = _product_for_plan_gate(db, current_user, product_id)
+        if product is not None:
+            subscription_service.require_pro(db, product.shop_id)
     return catalog_service.toggle_product_status(db, current_user, product_id)
 
 
@@ -243,4 +278,8 @@ def delete_product(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    if current_user.role == "STAFF":
+        product = _product_for_plan_gate(db, current_user, product_id)
+        if product is not None:
+            subscription_service.require_pro(db, product.shop_id)
     return catalog_service.delete_product(db, current_user, product_id)

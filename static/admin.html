@@ -13,6 +13,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
     <link rel="stylesheet" href="/css/admin.css?v=20260801-tra-hang">
+    <link rel="stylesheet" href="/css/subscriptions.css?v=20260807-goi-cuoc-f3">
 </head>
 <body>
     <div class="nav-bar">
@@ -41,6 +42,7 @@
         <!-- Tabs Header -->
         <div class="tabs-wrapper">
             <button class="tab-btn active" onclick="switchTab('dashboard', this)" data-i18n="admin.tab.dashboard">Doanh thu Shop</button>
+            <button class="tab-btn" onclick="switchTab('subscriptions', this)" data-i18n="subscription.admin.tab">Gói cước Shop</button>
             <button class="tab-btn" onclick="switchTab('logs', this)" data-i18n="admin.tab.logs">Nhật Ký Hệ Thống</button>
         </div>
 
@@ -58,6 +60,69 @@
                         <!-- Populated by JS -->
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <div id="subscriptions" class="tab-content glass-card">
+            <div class="subscription-heading">
+                <div>
+                    <h3 data-i18n="subscription.admin.title">Gói cước các Shop</h3>
+                    <p data-i18n="subscription.admin.description">Xem gói hiện tại, tặng hoặc gia hạn Pro. Gói Admin tặng không được tính là doanh thu.</p>
+                </div>
+                <button type="button" class="btn-outline" data-subscription-action="refresh-admin">
+                    <span data-i18n="common.refresh">Tải lại</span>
+                </button>
+            </div>
+
+            <div id="subscriptionAdminLoading" class="subscription-state-message">
+                <i class="subscription-spin">↻</i>
+                <span data-i18n="subscription.common.loading">Đang tải thông tin gói cước...</span>
+            </div>
+            <div id="subscriptionAdminError" class="subscription-state-message subscription-state-error" style="display:none;">
+                <span id="subscriptionAdminErrorText"></span>
+                <button type="button" class="btn-outline" data-subscription-action="refresh-admin" data-i18n="common.retry">Thử lại</button>
+            </div>
+
+            <div id="subscriptionAdminContent" style="display:none;">
+                <div class="table-responsive">
+                    <table class="db-table">
+                        <thead>
+                            <tr>
+                                <th data-i18n="subscription.admin.shop">Shop</th>
+                                <th data-i18n="subscription.admin.owner">Chủ shop</th>
+                                <th data-i18n="subscription.admin.plan">Gói hiện tại</th>
+                                <th data-i18n="subscription.admin.expires">Hết hạn</th>
+                                <th data-i18n="subscription.admin.actions">Thao tác</th>
+                            </tr>
+                        </thead>
+                        <tbody id="subscriptionAdminShopList"></tbody>
+                    </table>
+                </div>
+
+                <section class="subscription-review-section">
+                    <div class="subscription-review-heading">
+                        <div>
+                            <h4 data-i18n="subscription.admin.review_title">Thanh toán gói cần xử lý</h4>
+                            <p data-i18n="subscription.admin.review_description">Tiền vào thiếu hoặc sai mã, mã hết hạn hay chuyển thừa phải được nhìn thấy để Admin xử lý, không chỉ nằm trong nhật ký.</p>
+                        </div>
+                        <span id="subscriptionReviewCount" class="subscription-count-badge">0</span>
+                    </div>
+                    <div id="subscriptionReviewError" class="subscription-state-message subscription-state-error" style="display:none;"></div>
+                    <div class="table-responsive">
+                        <table class="db-table">
+                            <thead>
+                                <tr>
+                                    <th data-i18n="subscription.admin.payment_time">Thời gian</th>
+                                    <th data-i18n="subscription.admin.transaction">Mã giao dịch</th>
+                                    <th data-i18n="subscription.admin.transfer_content">Nội dung chuyển khoản</th>
+                                    <th data-i18n="subscription.admin.amount_received">Tiền đã nhận</th>
+                                    <th data-i18n="subscription.admin.problem">Vấn đề</th>
+                                </tr>
+                            </thead>
+                            <tbody id="subscriptionReviewPaymentList"></tbody>
+                        </table>
+                    </div>
+                </section>
             </div>
         </div>
         
@@ -132,12 +197,41 @@
         </div>
     </div>
 
+    <!-- Modal tặng/gia hạn/thu hồi Pro. Không dùng confirm()/prompt() trình duyệt. -->
+    <div id="subscriptionAdminModal" class="subscription-modal-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="subscriptionAdminModalTitle">
+        <div class="subscription-modal-card">
+            <button id="subscriptionAdminModalClose" type="button" class="subscription-modal-close" data-i18n-aria-label="common.close" aria-label="Đóng">&times;</button>
+            <h3 id="subscriptionAdminModalTitle"></h3>
+            <p id="subscriptionAdminModalDescription" class="subscription-modal-description"></p>
+            <div id="subscriptionAdminModalShop" class="subscription-modal-shop"></div>
+
+            <div id="subscriptionGrantFields">
+                <label for="subscriptionGrantExpires" data-i18n="subscription.admin.expires_on_label">Dùng Pro đến hết ngày</label>
+                <input id="subscriptionGrantExpires" type="date">
+                <small id="subscriptionGrantCurrentExpiry" class="subscription-field-help"></small>
+            </div>
+
+            <div id="subscriptionRevokeWarning" class="subscription-revoke-warning" style="display:none;" data-i18n="subscription.admin.revoke_warning">Thu hồi chỉ gỡ phần Pro được Admin tặng. Dữ liệu cũ không bị xóa và thao tác này không tạo doanh thu.</div>
+
+            <label for="subscriptionAdminReason" data-i18n="subscription.admin.reason_label">Lý do bắt buộc</label>
+            <textarea id="subscriptionAdminReason" rows="3" minlength="3" maxlength="500" data-i18n-placeholder="subscription.admin.reason_placeholder" placeholder="Ví dụ: Tặng dùng thử cho cửa hàng mới"></textarea>
+            <div id="subscriptionAdminModalError" class="subscription-modal-error" aria-live="polite"></div>
+
+            <div class="subscription-modal-actions">
+                <button id="subscriptionAdminModalCancel" type="button" class="btn-outline" data-i18n="common.cancel">Hủy</button>
+                <button id="subscriptionAdminModalSubmit" type="button"></button>
+            </div>
+        </div>
+    </div>
+
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
     <script src="/js/locales/auth-admin.js?v=20260807-admin-nhap-hang"></script>
+    <script src="/js/locales/subscriptions.js?v=20260807-goi-cuoc-f3"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260807-admin-nhap-hang"></script>
-    <script src="/js/admin.js?v=20260731-i18n4"></script>
+    <script src="/js/admin.js?v=20260807-goi-cuoc"></script>
+    <script src="/js/subscriptions.js?v=20260807-goi-cuoc-f3"></script>
     <script src="/js/pwa.js?v=20260806-pwa"></script>
 </body>
 </html>

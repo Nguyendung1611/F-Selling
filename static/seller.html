@@ -30,6 +30,7 @@
         .doi-soat-shop-field { display: none !important; }
     </style>
     <link rel="stylesheet" href="/css/seller.css?v=20260807-nha-cung-cap-ui-f9">
+    <link rel="stylesheet" href="/css/subscriptions.css?v=20260807-goi-cuoc-f3">
     <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
     <style>
         .doi-soat-badge {
@@ -306,6 +307,7 @@
             <button class="tab-btn" data-main-tab="voucher" onclick="switchTab('voucher', this)"><i class="ph ph-ticket"></i> <span data-i18n="seller.tabs.vouchers">Khuyến Mãi</span></button>
             <button class="tab-btn" data-main-tab="customers" onclick="switchTab('customers', this)"><i class="ph ph-users"></i> <span data-i18n="seller.tabs.customers">Khách Hàng</span></button>
             <button class="tab-btn" id="tabLoyalty" data-main-tab="loyalty" onclick="switchTab('loyalty', this)" style="display:none;"><i class="ph ph-star"></i> <span data-i18n="seller.tabs.loyalty">Tích Điểm</span></button>
+            <button class="tab-btn" id="tabSubscription" data-main-tab="subscription" onclick="switchTab('subscription', this)" style="display:none;"><i class="ph ph-crown"></i> <span data-i18n="subscription.seller.tab">Gói cước</span></button>
             <button class="tab-btn" data-main-tab="nhatky" onclick="switchTab('nhatky', this)"><i class="ph ph-clock-counter-clockwise"></i> <span data-i18n="seller.tabs.activity">Ai Làm Gì</span></button>
             <button class="tab-btn" data-main-tab="settings" onclick="switchTab('settings', this)"><i class="ph ph-sliders"></i> <span data-i18n="seller.tabs.settings">Cài Đặt</span></button>
         </div>
@@ -1107,6 +1109,117 @@
             </div>
         </div>
 
+        <!-- TAB: GÓI CƯỚC (chỉ chủ shop; quyền thật vẫn do server kiểm tra) -->
+        <div id="subscription" class="tab-content glass-card">
+            <div class="subscription-heading">
+                <div>
+                    <h3><i class="ph ph-crown"></i> <span data-i18n="subscription.seller.title">Gói cước cửa hàng</span></h3>
+                    <p data-i18n="subscription.seller.description">Xem gói đang dùng và thanh toán Pro cho đúng cửa hàng bạn đã chọn phía trên.</p>
+                </div>
+                <strong id="subscriptionSellerShopName" class="subscription-shop-name"></strong>
+            </div>
+
+            <div id="subscriptionSellerLoading" class="subscription-state-message">
+                <i class="ph ph-spinner-gap subscription-spin"></i>
+                <span data-i18n="subscription.common.loading">Đang tải thông tin gói cước...</span>
+            </div>
+            <div id="subscriptionSellerNoShop" class="subscription-state-message" style="display:none;">
+                <i class="ph ph-storefront"></i>
+                <span data-i18n="subscription.seller.no_shop">Hãy tạo cửa hàng trước khi chọn gói cước.</span>
+            </div>
+            <div id="subscriptionSellerError" class="subscription-state-message subscription-state-error" style="display:none;">
+                <span id="subscriptionSellerErrorText"></span>
+                <button type="button" class="btn-outline" data-subscription-action="retry-seller" data-i18n="common.retry">Thử lại</button>
+            </div>
+
+            <div id="subscriptionSellerContent" style="display:none;">
+                <section class="subscription-status-card" aria-live="polite">
+                    <div>
+                        <span id="subscriptionSellerStatusBadge" class="subscription-badge">FREE</span>
+                        <h4 id="subscriptionSellerStatusTitle"></h4>
+                        <p id="subscriptionSellerStatusDetail"></p>
+                    </div>
+                    <div id="subscriptionSellerStatusDate" class="subscription-status-date"></div>
+                </section>
+
+                <div class="subscription-plans-grid">
+                    <section id="subscriptionFreeCard" class="subscription-plan-card">
+                        <div class="subscription-plan-topline">
+                            <h4>Free</h4>
+                            <span id="subscriptionFreeCurrent" class="subscription-current-label" style="display:none;" data-i18n="subscription.common.current_plan">Gói hiện tại</span>
+                        </div>
+                        <div class="subscription-price"><strong>0đ</strong><span data-i18n="subscription.seller.forever">dùng lâu dài</span></div>
+                        <ul class="subscription-feature-list">
+                            <li data-i18n="subscription.free.sales">Bán hàng tiền mặt và VietQR</li>
+                            <li data-i18n="subscription.free.offline">Bán hàng khi mất mạng</li>
+                            <li data-i18n="subscription.free.basic">Sản phẩm, kho cơ bản và khách hàng</li>
+                            <li data-i18n="subscription.free.loyalty">Trả hàng và tích điểm</li>
+                            <li data-i18n="subscription.free.report">Báo cáo 31 ngày gần nhất</li>
+                        </ul>
+                    </section>
+
+                    <section id="subscriptionProCard" class="subscription-plan-card subscription-plan-pro">
+                        <div class="subscription-plan-topline">
+                            <h4>Pro</h4>
+                            <span id="subscriptionProCurrent" class="subscription-current-label" style="display:none;" data-i18n="subscription.common.current_plan">Gói hiện tại</span>
+                        </div>
+                        <ul class="subscription-feature-list subscription-feature-list-pro">
+                            <li data-i18n="subscription.pro.staff">Nhân viên và phân quyền</li>
+                            <li data-i18n="subscription.pro.history">Toàn bộ lịch sử, xuất Excel và Ai Làm Gì</li>
+                            <li data-i18n="subscription.pro.debt">Công nợ khách hàng và nhà cung cấp</li>
+                            <li data-i18n="subscription.pro.purchasing">Phiếu nhập, kiểm kê, lô và hạn dùng</li>
+                            <li data-i18n="subscription.pro.advanced">Voucher và báo cáo nâng cao</li>
+                        </ul>
+
+                        <div class="subscription-buy-options">
+                            <div class="subscription-buy-option">
+                                <span data-i18n="subscription.seller.monthly">Theo tháng</span>
+                                <strong id="subscriptionMonthlyPrice">99.000đ</strong>
+                                <button id="subscriptionBuyMonthly" type="button" data-subscription-action="checkout" data-cycle="MONTHLY">
+                                    <span data-i18n="subscription.seller.buy_monthly">Mua Pro tháng</span>
+                                </button>
+                            </div>
+                            <div class="subscription-buy-option subscription-buy-option-highlight">
+                                <span><span data-i18n="subscription.seller.yearly">Theo năm</span> <em data-i18n="subscription.seller.save_30">giảm 30%</em></span>
+                                <strong id="subscriptionYearlyPrice">831.600đ</strong>
+                                <button id="subscriptionBuyYearly" type="button" data-subscription-action="checkout" data-cycle="YEARLY">
+                                    <span data-i18n="subscription.seller.buy_yearly">Mua Pro năm</span>
+                                </button>
+                            </div>
+                        </div>
+                        <small class="subscription-renew-note" data-i18n="subscription.seller.renew_note">Nếu Pro còn hạn, kỳ mua thêm sẽ được nối tiếp để bạn không mất những ngày đang có.</small>
+                    </section>
+                </div>
+
+                <section id="subscriptionCheckoutPanel" class="subscription-checkout-panel" style="display:none;" aria-live="polite">
+                    <div class="subscription-checkout-heading">
+                        <div>
+                            <h4><i class="ph ph-qr-code"></i> <span data-i18n="subscription.checkout.title">Thanh toán gói Pro</span></h4>
+                            <p data-i18n="subscription.checkout.instructions">Quét đúng mã QR và giữ nguyên nội dung chuyển khoản bên dưới.</p>
+                        </div>
+                        <span id="subscriptionCheckoutStatus" class="subscription-badge"></span>
+                    </div>
+                    <div class="subscription-checkout-layout">
+                        <div id="subscriptionQrWrap" class="subscription-qr-wrap">
+                            <img id="subscriptionQrImage" alt="Mã QR thanh toán gói Pro">
+                        </div>
+                        <div class="subscription-checkout-details">
+                            <div><span data-i18n="subscription.checkout.amount">Số tiền</span><strong id="subscriptionCheckoutAmount"></strong></div>
+                            <div><span data-i18n="subscription.checkout.reference">Nội dung chuyển khoản</span><strong id="subscriptionCheckoutReference" class="subscription-reference"></strong></div>
+                            <div><span data-i18n="subscription.checkout.received">Đã nhận</span><strong id="subscriptionCheckoutReceived"></strong></div>
+                            <div id="subscriptionRemainingRow"><span data-i18n="subscription.checkout.remaining">Còn thiếu</span><strong id="subscriptionCheckoutRemaining"></strong></div>
+                            <div id="subscriptionRefundRow" style="display:none;"><span data-i18n="subscription.checkout.refund_due">Chuyển thừa cần xử lý</span><strong id="subscriptionCheckoutRefund"></strong></div>
+                            <div><span data-i18n="subscription.checkout.expires">Mã hết hạn</span><strong id="subscriptionCheckoutExpires"></strong></div>
+                            <p id="subscriptionCheckoutMessage" class="subscription-checkout-message"></p>
+                            <button type="button" class="btn-outline" data-subscription-action="refresh-seller">
+                                <i class="ph ph-arrows-clockwise"></i> <span data-i18n="subscription.checkout.refresh">Kiểm tra lại</span>
+                            </button>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+
         <!-- TAB: AI LÀM GÌ (nhật ký thao tác) -->
         <div id="nhatky" class="tab-content glass-card">
             <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem;">
@@ -1658,14 +1771,16 @@
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
     <script src="/js/locales/seller.js?v=20260807-nha-cung-cap-ui-f9"></script>
+    <script src="/js/locales/subscriptions.js?v=20260807-goi-cuoc-f3"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260807-admin-nhap-hang"></script>
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260807-nha-cung-cap-ui-f9"></script>
+    <script src="/js/seller.js?v=20260807-goi-cuoc-f2"></script>
     <script src="/js/purchasing.js?v=20260807-nha-cung-cap-ui-f9"></script>
+    <script src="/js/subscriptions.js?v=20260807-goi-cuoc-f3"></script>
     <script src="/js/pwa.js?v=20260806-pwa"></script>
 </body>
 </html>

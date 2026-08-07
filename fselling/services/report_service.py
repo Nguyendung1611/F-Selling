@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import io
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import openpyxl
 from fastapi import HTTPException
@@ -19,9 +20,16 @@ from ..dependencies import (
     require_shop_access,
     require_staff_permission,
 )
-from . import order_service, write_off_service
+from . import order_service, subscription_service, write_off_service
 
 TREND_DAYS = 7
+FREE_REPORT_DAYS = 31
+_VIETNAM_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+
+
+def _today_vietnam():
+    """Ngày nghiệp vụ theo múi giờ mà giao diện và cửa hàng đang sử dụng."""
+    return datetime.now(_VIETNAM_TZ).date()
 
 
 def _paid_revenue(db: Session, shop_id: int) -> float:
@@ -37,12 +45,12 @@ DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
 
 
-def _parse_ngay(chuoi: Optional[str], ten_truong: str) -> Optional[datetime]:
-    """Chuỗi YYYY-MM-DD -> datetime. Sai định dạng -> 400 thay vì im lặng bỏ qua."""
+def _parse_ngay(chuoi: Optional[str], ten_truong: str) -> Optional[date]:
+    """Chuỗi YYYY-MM-DD -> ngày lịch. Sai định dạng -> 400 rõ ràng."""
     if not chuoi or not chuoi.strip():
         return None
     try:
-        return datetime.strptime(chuoi.strip(), "%Y-%m-%d")
+        return datetime.strptime(chuoi.strip(), "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(
             status_code=400,
@@ -51,6 +59,12 @@ def _parse_ngay(chuoi: Optional[str], ten_truong: str) -> Optional[datetime]:
                 field=ten_truong,
             ),
         )
+
+
+def _dau_ngay_viet_nam_sang_utc(ngay: date) -> datetime:
+    """00:00 ngày Việt Nam -> UTC-naive, cùng chuẩn lưu ``created_at``."""
+    local = datetime.combine(ngay, datetime.min.time(), tzinfo=_VIETNAM_TZ)
+    return local.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _loc_khoang_ngay(
@@ -72,10 +86,42 @@ def _loc_khoang_ngay(
             detail=tr("tu_ngay không được lớn hơn den_ngay"),
         )
     if bat_dau:
-        query = query.filter(cot >= bat_dau)
+        query = query.filter(cot >= _dau_ngay_viet_nam_sang_utc(bat_dau))
     if ket_thuc:
-        query = query.filter(cot < ket_thuc + timedelta(days=1))
+        query = query.filter(
+            cot < _dau_ngay_viet_nam_sang_utc(ket_thuc + timedelta(days=1))
+        )
     return query
+
+
+def _limit_free_report_range(
+    db: Session,
+    shop_id: int,
+    tu_ngay: Optional[str],
+    den_ngay: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Free xem 31 ngày gần nhất; Pro giữ nguyên khoảng người dùng chọn.
+
+    Nếu người dùng bấm chọn một kỳ cũ thì nói rõ cần Pro, không âm thầm đổi kỳ
+    rồi đưa ra con số khác với thứ họ vừa yêu cầu. Khi không chọn ngày, tự đặt
+    mốc đầu 31 ngày để dashboard Free không vô tình đọc toàn bộ lịch sử.
+    """
+    if subscription_service.get_subscription_state(db, shop_id)["can_use_pro"]:
+        return tu_ngay, den_ngay
+
+    cutoff = _today_vietnam() - timedelta(days=FREE_REPORT_DAYS - 1)
+    parsed_start = _parse_ngay(tu_ngay, "tu_ngay")
+    parsed_end = _parse_ngay(den_ngay, "den_ngay")
+    if (parsed_start is not None and parsed_start < cutoff) or (
+        parsed_end is not None and parsed_end < cutoff
+    ):
+        raise HTTPException(
+            status_code=402,
+            detail=tr(
+                "Gói Free xem báo cáo trong 31 ngày gần nhất. Hãy mở tab Gói cước để xem kỳ cũ hơn."
+            ),
+        )
+    return tu_ngay or cutoff.isoformat(), den_ngay
 
 
 def _cong_no_phai_thu(db: Session, shop_id: int) -> float:
@@ -368,6 +414,13 @@ def seller_dashboard(
     require_shop_access(db, shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_REPORT)
 
+    # Đối soát là việc giải quyết tiền đã phát sinh nên luôn được nhìn toàn bộ,
+    # kể cả sau khi Pro hết hạn. Dashboard bình thường của Free chỉ xem 31 ngày.
+    if not reconciliation_only:
+        tu_ngay, den_ngay = _limit_free_report_range(
+            db, shop_id, tu_ngay, den_ngay
+        )
+
     if page < 1:
         raise HTTPException(status_code=400, detail=tr("page phải >= 1"))
     if per_page < 1 or per_page > MAX_PAGE_SIZE:
@@ -407,16 +460,27 @@ def seller_dashboard(
         .all()
     )
 
-    doanh_thu = (
-        _loc_khoang_ngay(
-            db.query(func.sum(models.Order.total_amount)).filter(
-                models.Order.shop_id == shop_id, models.Order.status == "PAID"
-            ),
-            tu_ngay,
-            den_ngay,
-        ).scalar()
-        or 0
-    )
+    if reconciliation_only:
+        # Chế độ Đối Soát được phép nhìn các giao dịch cũ đang cần xử lý, nhưng
+        # không vì thế mà biến thành cửa hậu đọc tổng doanh thu toàn lịch sử của
+        # gói Pro. Chỉ cộng đúng các dòng PAID đang nằm trong tập đối soát mở.
+        doanh_thu = (
+            base.with_entities(func.sum(models.Order.total_amount))
+            .filter(models.Order.status == "PAID")
+            .scalar()
+            or 0
+        )
+    else:
+        doanh_thu = (
+            _loc_khoang_ngay(
+                db.query(func.sum(models.Order.total_amount)).filter(
+                    models.Order.shop_id == shop_id, models.Order.status == "PAID"
+                ),
+                tu_ngay,
+                den_ngay,
+            ).scalar()
+            or 0
+        )
 
     # Chỉ hỏi tiền-về-chưa-ghi-nhận cho ĐÚNG các đơn của trang này, không quét
     # cả shop: màn Đối Soát phân trang, mà số đơn thì lớn dần theo thời gian.
@@ -493,6 +557,9 @@ def shop_stats(
     (đúng như trước). Truyền ngày -> mọi con số và biểu đồ đều theo khoảng đó."""
     shop = require_shop_access(db, shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_REPORT)
+    tu_ngay, den_ngay = _limit_free_report_range(
+        db, shop_id, tu_ngay, den_ngay
+    )
     co_loc_ngay = bool((tu_ngay or "").strip() or (den_ngay or "").strip())
 
     total_rev = (
@@ -677,6 +744,7 @@ def _gia_von_don(order: models.Order) -> Optional[float]:
 def seller_excel(db: Session, current_user: models.User, shop_id: int) -> io.BytesIO:
     shop = require_shop_access(db, shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_REPORT)
+    subscription_service.require_pro(db, shop_id)
     xem_duoc_gia_von = has_cost_visibility(shop, current_user)
     wb = openpyxl.Workbook()
     ws = wb.active

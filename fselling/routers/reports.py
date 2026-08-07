@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..dependencies import get_current_user, get_db, require_shop_access
-from ..services import log_service, report_service
+from ..services import log_service, report_service, subscription_service
 
 router = APIRouter(tags=["reports"])
 
@@ -48,6 +48,7 @@ def nhat_ky_shop(
     đã lọc bỏ những hành động không đụng tới tiền hay kho.
     """
     require_shop_access(db, shop_id, current_user)
+    subscription_service.require_pro(db, shop_id)
     return log_service.nhat_ky_cua_shop(db, shop_id, page=page, per_page=per_page)
 
 
