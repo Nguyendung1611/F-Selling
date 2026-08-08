@@ -304,6 +304,38 @@ xem được nên gọi món gì, số lượng bao nhiêu, nhưng không thấy
 > Cột "Gọi cho ai" lấy từ **phiếu nhập gần nhất** của món đó. Chưa từng tạo
 > phiếu nhập ở tab Nhập Hàng thì ô này còn trống.
 
+### Xả hàng tồn (hàng nào đang chôn vốn)
+
+Kho hàng → tab **Xả Hàng Tồn**. Chỉ chủ cửa hàng thấy tab này.
+
+Màn này trả lời câu ngược với Dự Báo Nhập Hàng: không phải "sắp hết cái gì" mà
+là **"cái gì nằm mãi không đi"**. Hai loại bị gọi ra:
+
+- **Nằm ế** — quá 45 ngày (chỉnh được) không bán được cái nào.
+- **Sắp hết hạn** — lô còn dưới 30 ngày, bị gọi ra kể cả khi đang bán chạy.
+
+Ô **Vốn đang nằm chết** là số tiền bạn đã bỏ ra mua số hàng đó và chưa thu lại
+được đồng nào. Đây thường là con số làm chủ shop giật mình nhất.
+
+Cột **Nên hạ còn** là giá đề xuất. Hai luật của nó:
+
+1. **Không bao giờ thấp hơn giá vốn.** Máy dừng ở mức hòa vốn. Muốn bán lỗ để
+   cắt lỗ thì đó là quyết định của bạn, máy không tự quyết thay.
+2. **Càng sát ngày hết hạn càng giảm sâu.** Hàng còn 24 ngày giảm nhẹ; hàng còn
+   3 ngày giảm mạnh — vì quá hạn là mất trắng cả tiền vốn.
+
+Cột **Vẫn lãi** cho biết bán ở giá mới thì mỗi cái còn lời bao nhiêu.
+
+Bấm **Hạ giá** → hệ thống mở sẵn form sửa sản phẩm với giá mới đã điền vào ô.
+**Nó KHÔNG tự lưu.** Bạn xem lại rồi bấm Cập nhật thì giá mới có hiệu lực.
+
+> **Ô đỏ "Đã hỏng, phải hủy"** chỉ hiện khi thật sự có hàng quá hạn. Số hàng đó
+> **không được đem bán, kể cả hạ giá** — nó phải đi qua Kho hàng → Hạn sử dụng →
+> Hủy hàng hết hạn để số lỗ vào đúng sổ.
+>
+> **Món chưa khai giá vốn** vẫn bị gọi ra là đang nằm ế, nhưng không có giá đề
+> xuất — không biết mua vào bao nhiêu thì không biết hạ tới đâu là còn lãi.
+
 ### Dòng tiền và lợi nhuận ròng
 
 Tab **Dòng Tiền** (chỉ chủ cửa hàng thấy) trả lời câu "cuối tháng túi tôi còn

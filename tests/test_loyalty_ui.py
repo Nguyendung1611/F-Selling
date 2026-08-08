@@ -187,10 +187,9 @@ def test_don_giam_con_0_dong_khong_hien_qr_va_file_tinh_da_bump_cache():
     assert "qrSection" not in zero_total
     assert "/js/pos.js?v=20260806-tich-diem-offline" in pos_html
     assert "/js/locales/pos.js?v=20260806-tich-diem-offline" in pos_html
-    # Mỗi file mang mốc của lần cuối NÓ bị sửa: locales/seller.js dừng ở L1
-    # (Dự Báo Nhập Hàng), seller.js đi tiếp một mốc vì lần sửa múi giờ.
-    assert "/js/seller.js?v=20260809-sua-mui-gio" in seller_html
-    assert "/js/locales/seller.js?v=20260809-du-bao-nhap-hang" in seller_html
+    # L2 (Xả Hàng Tồn) sửa cả hai file này nên chúng cùng sang mốc mới.
+    assert "/js/seller.js?v=20260809-xa-hang-ton" in seller_html
+    assert "/js/locales/seller.js?v=20260809-xa-hang-ton" in seller_html
 
 
 def test_khoa_i18n_quan_trong_co_du_tieng_viet_va_tieng_anh():

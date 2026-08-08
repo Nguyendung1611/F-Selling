@@ -1373,6 +1373,42 @@ lộ ra trong khung 0h–7h sáng, tức là không bao giờ có ai ngồi xem.
 Viết service mới cần ngày hôm nay thì **gọi vào `core.thoi_gian`**, đừng viết
 lại `datetime.now(...)` — đó đúng là cách bốn bản sao lệch nhau đã ra đời.
 
+### 37. Xả hàng tồn đề xuất GIÁ BÁN MỚI, không sinh voucher — và vì sao
+
+Bản thiết kế ban đầu định cho máy tự tạo voucher với mức giảm tính từ biên lợi
+nhuận của món đang ế. **Không làm được**, vì voucher của F-Selling giảm trên
+TỔNG ĐƠN: `voucher_service.compute_discount(voucher, subtotal)` không hề biết
+món nào trong giỏ. Sinh voucher 40% từ biên lãi của một cái áo 2.000đ thì khách
+mua món lãi 12% cũng được giảm 40% — cái voucher đẻ ra để cứu một món hàng ế sẽ
+làm mất tiền triệu ở món khác. Hạ giá đúng món đang ế mới là việc tiệm tạp hóa
+làm ngoài đời, và nó không đụng vào đường tính tiền của đơn.
+
+Muốn có voucher theo sản phẩm thì phải gắn `product_id` vào `Voucher` và sửa
+đường tính tiền của đơn — việc lớn, làm riêng một đợt, đừng lắp tạm vào đây.
+
+**Ba luật của con số đề xuất:**
+
+**Giá sàn LUÔN là giá vốn.** Bán dưới giá vốn có khi vẫn đúng (hàng sắp hết hạn
+thì thu được đồng nào hay đồng đó), nhưng đó là quyết định của chủ shop chứ
+không phải của một công thức. Làm tròn có thể kéo giá chui xuống dưới sàn với
+món biên lãi mỏng — `test_gia_de_xuat_khong_bao_gio_duoi_gia_von` canh đúng ca đó.
+
+**Hàng theo lô lấy giá vốn từ LÔ, không từ `Product.cost_price`** (mục 21). Cột
+đó NULL với mọi sản phẩm bật `track_batches`, nên đọc nhầm chỗ là cả màn hình
+báo "chưa khai giá vốn" trong khi phiếu nhập ghi giá đầy đủ. Lấy bình quân gia
+quyền các lô còn bán được; chỉ cần MỘT lô chưa khai giá là trả `None` — trộn lô
+chưa khai với lô đã khai là kéo bình quân xuống thấp hơn sự thật rồi đề xuất
+một mức giá đang lỗ mà nhìn vẫn có lãi (mục 13).
+
+**Máy không tự đổi giá.** Nút "Hạ giá" chỉ mở form sửa sản phẩm với ô giá đã
+điền sẵn; người bấm Lưu vẫn là chủ shop. Một cú bấm nhầm ở đây là hạ giá cả lô
+hàng mà không ai hay.
+
+Quyền: chỉ chủ shop/ADMIN (`require_cost_visibility`), kể cả MANAGER cũng bị
+chặn. Khác `forecast_service` (nhân viên kho xem được phần số lượng): ở đây mọi
+con số — giá sàn, mức giảm, vốn đang đọng — đều dựng từ giá vốn, nên không có
+phần nào che đi mà màn hình còn nghĩa. Cho xem mức giảm là cho suy ngược ra giá vốn.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

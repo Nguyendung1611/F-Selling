@@ -168,6 +168,10 @@ ROUTES_BO_SUNG = {
     # không gọi dịch vụ ngoài. Tách khỏi /api/stats vì trả lời câu hỏi khác:
     # stats nói chuyện đã xảy ra, còn màn này nói ngày mai phải nhập bao nhiêu.
     ("GET", "/api/forecast/{shop_id}"),
+    # L2: xả hàng tồn. CHỈ ĐỌC - không tự đổi giá, không tự tạo voucher. Tách
+    # khỏi /api/forecast vì hỏi ngược lại: forecast lo hàng sắp HẾT, màn này lo
+    # hàng KHÔNG ĐI. Chỉ chủ shop/ADMIN vì mọi con số đều dựng từ giá vốn.
+    ("GET", "/api/clearance/{shop_id}"),
 }
 
 

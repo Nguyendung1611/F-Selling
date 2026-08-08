@@ -1637,6 +1637,7 @@ function switchWarehouseSubTab(subTab) {
         categories: 'whSubTabCats',
         expiry: 'whSubTabExpiry',
         forecast: 'whSubTabForecast',
+        clearance: 'whSubTabClearance',
         writeoff: 'whSubTabWriteOff'
     };
     const khoi = {
@@ -1644,12 +1645,17 @@ function switchWarehouseSubTab(subTab) {
         categories: ['warehouseCategoriesSection', 'grid'],
         expiry: ['warehouseExpirySection', 'block'],
         forecast: ['warehouseForecastSection', 'block'],
+        clearance: ['warehouseClearanceSection', 'block'],
         writeoff: ['warehouseWriteOffSection', 'block']
     };
     // Nhân viên gọi thẳng switchWarehouseSubTab('writeoff') từ console vẫn không
     // xem được gì: endpoint phía sau đòi require_cost_visibility. Nhánh này chỉ
     // để họ không rơi vào một tab trống không hiểu vì sao.
     if (subTab === 'writeoff' && !XEM_DUOC_GIA_VON) subTab = 'products';
+    // Xả hàng cũng vậy: mọi con số dựng từ giá vốn, endpoint đòi
+    // require_cost_visibility. Nhánh này chỉ để nhân viên không rơi vào một tab
+    // trống không hiểu vì sao.
+    if (subTab === 'clearance' && !XEM_DUOC_GIA_VON) subTab = 'products';
     if (!khoi[subTab]) subTab = 'products';
 
     Object.entries(nut).forEach(([ten, id]) => {
@@ -1662,7 +1668,145 @@ function switchWarehouseSubTab(subTab) {
 
     if (subTab === 'expiry') loadHanSuDung();
     if (subTab === 'forecast') loadDuBaoNhapHang();
+    if (subTab === 'clearance') loadXaHangTon();
     if (subTab === 'writeoff') loadPhieuHuy();
+}
+
+// ===== L2: xả hàng tồn =====
+
+let xaHangRequestId = 0;
+let xaHangCache = null;
+
+const NHAN_LY_DO_XA_HANG = {
+    CA_HAI:       { mau: '#B91C1C', khoa: 'seller.clearance.reason_both' },
+    SAP_HET_HAN:  { mau: '#B45309', khoa: 'seller.clearance.reason_expiring' },
+    NAM_E:        { mau: '#7C3AED', khoa: 'seller.clearance.reason_idle' }
+};
+
+async function loadXaHangTon() {
+    const shopId = currentShopId;
+    if (!shopId || !XEM_DUOC_GIA_VON) return;
+    const soNgay = Number(document.getElementById('clearanceIdleDays')?.value) || 45;
+    const requestId = ++xaHangRequestId;
+    const generation = currentShopGeneration;
+    try {
+        const d = await apiCall(`/clearance/${shopId}?so_ngay_coi_la_e=${soNgay}`);
+        if (requestId !== xaHangRequestId
+            || generation !== currentShopGeneration
+            || currentShopId !== shopId) return;
+        xaHangCache = { shopId, data: d };
+        veXaHangTon(d);
+    } catch (e) {
+        if (requestId === xaHangRequestId && currentShopId === shopId) {
+            showToast(e.message);
+        }
+    }
+}
+
+function veXaHangTon(d) {
+    const danhSach = d.danh_sach || [];
+
+    document.getElementById('clearanceCapital').innerText =
+        dinhDangTienDoiSoat(Number(d.tong_von_dang_dong || 0));
+    const soThieu = Number(d.so_mat_hang_chua_khai_gia_von || 0);
+    document.getElementById('clearanceItemCount').innerText = soThieu
+        ? t('seller.clearance.count_with_missing', {
+            count: dinhDangSoSeller(d.so_mat_hang), missing: dinhDangSoSeller(soThieu) })
+        : t('seller.clearance.count', { count: dinhDangSoSeller(d.so_mat_hang) });
+
+    // Hàng đã hỏng chỉ hiện khi thực sự có: một ô báo "0 phải hủy" lúc nào cũng
+    // nằm đó là thứ người ta thôi không đọc nữa.
+    const canHuy = Number(d.so_luong_can_huy || 0);
+    const oHuy = document.getElementById('clearanceWriteOffCard');
+    if (oHuy) {
+        oHuy.style.display = canHuy > 0 ? '' : 'none';
+        document.getElementById('clearanceToDestroy').innerText = dinhDangSoSeller(canHuy);
+    }
+
+    const badge = document.getElementById('clearanceBadge');
+    if (badge) {
+        badge.innerText = danhSach.length > 99 ? '99+' : String(danhSach.length);
+        badge.style.display = danhSach.length > 0 ? 'inline-block' : 'none';
+    }
+
+    const tbody = document.getElementById('clearanceList');
+    tbody.innerHTML = '';
+    if (!danhSach.length) {
+        tbody.innerHTML = `<tr><td colspan="8" style="color: var(--text-muted);">`
+            + `${escapeHtml(t('seller.clearance.empty'))}</td></tr>`;
+        return;
+    }
+
+    danhSach.forEach(r => {
+        const kieu = NHAN_LY_DO_XA_HANG[r.ly_do];
+        let viSao = kieu
+            ? `<span style="color:${kieu.mau}; font-weight:700; white-space:nowrap;">`
+              + `${escapeHtml(t(kieu.khoa))}</span>`
+            : escapeHtml(r.ly_do || '');
+        if (r.so_ngay_con_han !== null && r.so_ngay_con_han !== undefined) {
+            viSao += `<br><small style="color:#64748B;">`
+                + `${escapeHtml(t('seller.clearance.days_left', { days: r.so_ngay_con_han }))}</small>`;
+        } else if (r.so_ngay_khong_ban !== null && r.so_ngay_khong_ban !== undefined) {
+            viSao += `<br><small style="color:#64748B;">`
+                + `${escapeHtml(t('seller.clearance.idle_for', { days: r.so_ngay_khong_ban }))}</small>`;
+        } else {
+            viSao += `<br><small style="color:#64748B;">`
+                + `${escapeHtml(t('seller.clearance.never_sold'))}</small>`;
+        }
+
+        // Không tính được giá thì nói RÕ vì sao, và tuyệt đối không hiện một
+        // con số nào ở cột giá - số ở đó sẽ bị đọc là lời khuyên.
+        let deXuat, conLai, nut;
+        if (r.gia_de_xuat === null || r.gia_de_xuat === undefined) {
+            const khoa = r.khong_tinh_duoc === 'DANG_BAN_KHONG_LAI'
+                ? 'seller.clearance.no_margin'
+                : 'seller.clearance.no_cost';
+            deXuat = `<small style="color:#B45309;">${escapeHtml(t(khoa))}</small>`;
+            conLai = '--';
+            nut = '';
+        } else {
+            deXuat = `<strong style="color:#15803D;">${escapeHtml(dinhDangTienDoiSoat(r.gia_de_xuat))}</strong>`
+                + `<br><small style="color:#64748B;">`
+                + `${escapeHtml(t('seller.clearance.down_by', { percent: r.giam_phan_tram }))}</small>`;
+            conLai = escapeHtml(dinhDangTienDoiSoat(r.lai_moi_cai_sau_giam));
+            nut = `<button class="btn-outline" style="padding:0.3rem 0.7rem; white-space:nowrap;"`
+                + ` onclick="apDungGiaDeXuat(${Number(r.product_id)}, ${Number(r.gia_de_xuat)})">`
+                + `<i class="ph ph-tag"></i> ${escapeHtml(t('seller.clearance.apply'))}</button>`;
+        }
+
+        const ghiChuHuy = r.so_luong_da_het_han > 0
+            ? `<br><small style="color:#B91C1C;">`
+              + `${escapeHtml(t('seller.clearance.expired_qty', { qty: dinhDangSoSeller(r.so_luong_da_het_han) }))}</small>`
+            : '';
+
+        tbody.innerHTML += `<tr>
+            <td>${escapeHtml(r.ten || '')}</td>
+            <td>${viSao}</td>
+            <td>${escapeHtml(dinhDangSoSeller(r.ton_kho))}${ghiChuHuy}</td>
+            <td>${r.von_dang_dong === null || r.von_dang_dong === undefined
+                    ? '--' : escapeHtml(dinhDangTienDoiSoat(r.von_dang_dong))}</td>
+            <td>${escapeHtml(dinhDangTienDoiSoat(r.gia_hien_tai))}</td>
+            <td>${deXuat}</td>
+            <td>${conLai}</td>
+            <td>${nut}</td>
+        </tr>`;
+    });
+}
+
+/** Mở form sửa sản phẩm với giá ĐÃ ĐIỀN SẴN mức đề xuất.
+ *
+ *  CỐ Ý không tự lưu. Đổi giá bán là quyết định của chủ shop, và một cú bấm
+ *  nhầm ở đây là hạ giá cả lô hàng mà không ai hay. Máy chỉ điền hộ con số.
+ */
+function apDungGiaDeXuat(productId, giaMoi) {
+    switchWarehouseSubTab('products');
+    editProduct(productId);
+    const oGia = document.getElementById('prodPrice');
+    if (!oGia) return;
+    oGia.value = giaMoi;
+    oGia.focus();
+    oGia.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    showToast(t('seller.clearance.filled', { price: dinhDangTienDoiSoat(giaMoi) }));
 }
 
 // ===== L1: dự báo nhập hàng =====
@@ -4039,6 +4183,9 @@ function applyRoleUI() {
         // Số lỗ chính là giá vốn nhân số lượng nên nó thuộc cùng vòng bí mật.
         const tabHuy = document.getElementById('whSubTabWriteOff');
         if (tabHuy) tabHuy.style.display = '';
+        // Xả Hàng Tồn cùng vòng bí mật: giá sàn và vốn đọng đều là giá vốn.
+        const tabXaHang = document.getElementById('whSubTabClearance');
+        if (tabXaHang) tabXaHang.style.display = '';
         // Dòng Tiền cũng vậy: lãi ròng nói ra giá vốn.
         const tabDongTien = document.getElementById('tabCashflow');
         if (tabDongTien) tabDongTien.style.display = '';
@@ -4866,6 +5013,9 @@ function capNhatSellerTheoNgonNgu() {
     }
     if (duBaoCache && Number(duBaoCache.shopId) === Number(currentShopId)) {
         veDuBaoNhapHang(duBaoCache.data);
+    }
+    if (xaHangCache && Number(xaHangCache.shopId) === Number(currentShopId)) {
+        veXaHangTon(xaHangCache.data);
     }
     window.FSellingPurchasing?.rerender?.();
 }
