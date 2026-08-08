@@ -75,6 +75,15 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   **server ghép** thành `"<nhóm> - <biến thể>"`. Form sửa phải điền
   `variant_group` vào ô tên, KHÔNG điền `name` — điền `name` là ghép chồng lên
   nhau. Ô biến thể có ba trạng thái như `barcode`: không gửi = giữ, rỗng = gỡ.
+- **Lãi ròng và dòng tiền là HAI con số, đừng gộp.** Lãi ròng = lãi gộp − chi
+  phí vận hành; dòng tiền = mọi đồng vào trừ mọi đồng ra. Nhập hàng trả tiền
+  ngay là tiền ra mà chưa phải chi phí (hàng còn trong kho). Chi phí trả trước
+  phân bổ **theo NGÀY bằng công thức lũy kế**, không chia cho số tháng — chia
+  thẳng là lệch vài đồng và không bao giờ tìm lại được. Chi tiền mặt sinh **đúng
+  một** `CashMovement`; dòng tiền đếm chứng từ chứ không đếm chuyển động két,
+  kẻo mỗi lần chi bị đếm hai lần. Khoản đã rút tiền từ ca **không gỡ được**.
+  **Không bao giờ** tạo danh mục chi phí cho hàng hỏng/hết hạn — số đó đã bị trừ
+  ở phiếu hủy, ghi lại là trừ hai lần. Xem bẫy 34 trong `KIEN_TRUC.md`.
 - **Giá vốn `NULL` không phải `0`.** `NULL` = chưa ai khai; `0` = hàng tặng,
   lãi bằng cả giá bán. Gộp lại là mọi sản phẩm cũ bỗng có lãi bằng giá bán và
   chủ shop tin là thật. Giá vốn phải **chốt vào `order_items` lúc bán**, và báo
@@ -196,7 +205,7 @@ lỗi giúp. Bộ test chạy ở máy là lưới an toàn duy nhất — càng
 
 | File | Nội dung |
 |---|---|
-| `KIEN_TRUC.md` | Kiến trúc + 33 bẫy khi viết service. **Đọc trước khi sửa backend** |
+| `KIEN_TRUC.md` | Kiến trúc + 34 bẫy khi viết service. **Đọc trước khi sửa backend** |
 | `QUY_TRINH_LAM_VIEC.md` | Quy trình sửa → test → nhìn thử → commit → push |
 | `HUONG_DAN_SU_DUNG.md` | Hướng dẫn cho người dùng cuối |
 | `DEPLOY_FLY.md` | Deploy lên Fly.io (xem cảnh báo secret ở trên) |

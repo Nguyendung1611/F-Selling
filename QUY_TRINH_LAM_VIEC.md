@@ -228,6 +228,7 @@ Dừng web: bấm `Ctrl + C` trong cửa sổ đó.
 |---|---|
 | Báo `index.lock ... File exists` | `Remove-Item .git\index.lock -Force` rồi làm lại |
 | Sửa giao diện mà không thấy đổi | Bấm `Ctrl + Shift + R`. Vẫn y nguyên → quên bump `?v=`, hoặc bump thiếu trang (xem Bước 2a) |
+| Đã bump `?v=` rồi mà **vẫn** thấy code cũ | **Service worker đang trả bản đã lưu.** `Ctrl + Shift + R` không gỡ được nó, và `fetch()` cũng không. Mở DevTools → Application → Service Workers → **Unregister**, rồi Storage → **Clear site data**. Chỉ xảy ra khi sửa file trong một phiên đã mở trang từ trước mà chưa đổi `?v=`; người dùng thật không dính vì mỗi bản phát hành là một số `?v=` mới |
 | Báo `database is locked` | Đang mở web → bấm `Ctrl+C` tắt web, chạy lại, mở lại |
 | Test chạy rất lâu | Bình thường. Muốn nhanh dùng `pytest -x` (dừng ở lỗi đầu) |
 | Báo `nothing to commit` | Đã lưu rồi hoặc file chưa đổi — **không phải lỗi** |

@@ -92,21 +92,33 @@ def test_tab_chi_hien_cho_chu_shop_admin_va_nap_lai_khi_mo_tab():
 
 
 def test_module_nap_sau_seller_va_moi_file_dung_dung_phien_ban():
+    """Bẫy 16: sửa file trong static/ mà quên bump ?v= là người dùng chạy code
+    cũ trong im lặng, không lỗi gì cả.
+
+    Phiên bản được ghim CỨNG ở đây có chủ ý: sửa file thì phải sửa cả dòng này,
+    tức là phải nghĩ về chuyện cache một lần nữa. K1 (Dòng Tiền) đụng vào
+    seller.css, locales/seller.js và seller.js nên cả ba sang mốc mới;
+    purchasing.js không đổi nên giữ nguyên mốc cũ.
+    """
     html = _read("static/seller.html")
     purchasing_version = "20260807-nha-cung-cap-ui-f9"
-    seller_version = "20260807-goi-cuoc"
+    cashflow_version = "20260808-dong-tien-k1"
 
     expected = (
-        f"/css/seller.css?v={purchasing_version}",
-        f"/js/locales/seller.js?v={purchasing_version}",
-        f"/js/seller.js?v={seller_version}",
+        f"/css/seller.css?v={cashflow_version}",
+        f"/js/locales/seller.js?v={cashflow_version}",
+        f"/js/seller.js?v={cashflow_version}",
         f"/js/purchasing.js?v={purchasing_version}",
+        f"/js/expenses.js?v={cashflow_version}",
     )
     for path in expected:
         assert path in html, path
-    assert html.index(f"/js/seller.js?v={seller_version}") < html.index(
-        f"/js/purchasing.js?v={purchasing_version}"
-    )
+
+    # Hai module đều dùng apiCall/showToast/định dạng tiền của seller.js nên
+    # phải nạp SAU nó, nếu không sẽ gọi hàm chưa tồn tại.
+    vi_tri_seller = html.index(f"/js/seller.js?v={cashflow_version}")
+    assert vi_tri_seller < html.index(f"/js/purchasing.js?v={purchasing_version}")
+    assert vi_tri_seller < html.index(f"/js/expenses.js?v={cashflow_version}")
 
 
 def test_moi_helper_dinh_dang_cua_module_deu_co_that_trong_trang_seller():
@@ -393,13 +405,31 @@ def test_admin_khong_thay_tien_mat_trong_ket_nhung_chu_shop_van_thay():
         "const state =",
     )
 
-    assert html.count("data-owner-cash") == 2
+    # Ba chỗ cho chọn "tiền mặt trong két": trả nợ NCC, chốt phiếu nhập, và
+    # (K1) ghi chi phí vận hành. Mỗi chỗ mới phải MANG dấu này VÀ tự thực thi
+    # luật ẩn, chứ không dựa vào module khác đã chạy hay chưa - phần dưới kiểm
+    # đúng điều đó cho expenses.js.
+    assert html.count("data-owner-cash") == 3
     assert "MY_ROLE === 'ADMIN'" in available
     assert "ADMIN_PURCHASE_PAYMENT_METHODS" in available
     assert "ALL_PURCHASE_PAYMENT_METHODS" in available
     assert "option.hidden = hideCash" in visibility
     assert "option.disabled = hideCash" in visibility
     assert js.count("applyPaymentMethodRoleVisibility()") >= 3
+
+    # K1: màn chi phí vận hành cũng lấy được tiền từ két nên phải theo cùng luật.
+    expenses = _read("static/js/expenses.js")
+    expense_visibility = _function(
+        expenses,
+        "function applyPaymentMethodRoleVisibility()",
+        "function selectedShopId()",
+    )
+    assert "MY_ROLE === 'ADMIN'" in expense_visibility
+    assert "option.hidden = hideCash" in expense_visibility
+    assert "option.disabled = hideCash" in expense_visibility
+    # Ẩn ở giao diện chưa đủ: người dùng vẫn sửa được DOM, nên lúc gửi phải
+    # kiểm lại phương thức có nằm trong danh sách được phép không.
+    assert "availableMethods().includes(method)" in expenses
 
 
 def test_giao_dien_chan_tran_so_luong_tien_va_tong_nhieu_dong():

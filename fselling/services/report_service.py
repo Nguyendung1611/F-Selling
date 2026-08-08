@@ -17,10 +17,18 @@ from ..core.i18n import tr
 from ..dependencies import (
     PERMISSION_REPORT,
     has_cost_visibility,
+    require_cost_visibility,
     require_shop_access,
     require_staff_permission,
 )
-from . import order_service, subscription_service, write_off_service
+from . import (
+    expense_service,
+    order_service,
+    return_service,
+    shift_service,
+    subscription_service,
+    write_off_service,
+)
 
 TREND_DAYS = 7
 FREE_REPORT_DAYS = 31
@@ -690,21 +698,414 @@ def shop_stats(
     if has_cost_visibility(shop, current_user):
         # Hủy hàng chỉ hiện cho người xem được giá vốn: số lỗ chính là giá vốn
         # nhân số lượng, nên nói ra nó là nói ra giá vốn.
-        huy_hang = _huy_hang_anh_huong_lai(db, shop_id, tu_ngay, den_ngay)
-        lai = _lai_gop(db, paid_orders_subquery)
-        lai["gross_profit"] -= tra_hang["profit_reduction"]
-        lai["gross_profit"] -= huy_hang["write_off_loss"]
-        lai["returns_missing_cost"] = tra_hang["returns_missing_cost"]
-        lai.update(huy_hang)
-        # Tỷ suất tính lại trên doanh thu ĐÃ TRỪ hàng trả: giữ tử số mới mà mẫu
-        # số cũ sẽ ra một con số không nói lên điều gì.
-        mau_so = lai["revenue_with_cost"] - tra_hang["returned_amount"]
-        lai["gross_margin"] = (
-            (lai["gross_profit"] / mau_so * 100)
-            if mau_so > order_service.MONEY_EPSILON
-            else None
+        ket_qua.update(
+            _lai_gop_da_dieu_chinh(
+                db, shop_id, paid_orders_subquery, tu_ngay, den_ngay, tra_hang
+            )
         )
-        ket_qua.update(lai)
+    return ket_qua
+
+
+def _lai_gop_da_dieu_chinh(
+    db: Session,
+    shop_id: int,
+    paid_orders_subquery,
+    tu_ngay: Optional[str],
+    den_ngay: Optional[str],
+    tra_hang: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Lãi gộp đã trừ hàng trả lại và hàng hủy.
+
+    Dùng chung cho Thống Kê và Dòng Tiền. Hai màn nói hai con số khác nhau về
+    cùng một tháng là lúc người ta thôi tin cả hai, nên phép tính chỉ được viết
+    ở đúng một chỗ.
+    """
+    huy_hang = _huy_hang_anh_huong_lai(db, shop_id, tu_ngay, den_ngay)
+    lai = _lai_gop(db, paid_orders_subquery)
+    lai["gross_profit"] -= tra_hang["profit_reduction"]
+    lai["gross_profit"] -= huy_hang["write_off_loss"]
+    lai["returns_missing_cost"] = tra_hang["returns_missing_cost"]
+    lai.update(huy_hang)
+    # Tỷ suất tính lại trên doanh thu ĐÃ TRỪ hàng trả: giữ tử số mới mà mẫu
+    # số cũ sẽ ra một con số không nói lên điều gì.
+    mau_so = lai["revenue_with_cost"] - tra_hang["returned_amount"]
+    lai["gross_margin"] = (
+        (lai["gross_profit"] / mau_so * 100)
+        if mau_so > order_service.MONEY_EPSILON
+        else None
+    )
+    return lai
+
+
+# ---------------------------------------------------------------------------
+# K1: Lợi nhuận ròng và dòng tiền thực
+# ---------------------------------------------------------------------------
+#
+# HAI CON SỐ KHÁC NHAU, tuyệt đối không gộp:
+#
+#   Lợi nhuận ròng = lãi gộp (đã trừ hàng trả, hàng hủy) - chi phí vận hành
+#   Dòng tiền thực = mọi đồng vào - mọi đồng ra, trong kỳ
+#
+# Nhập hàng 10 triệu trả tiền ngay mà chưa bán món nào: dòng tiền -10 triệu,
+# lãi ròng không đổi (hàng còn trong kho, chỉ thành giá vốn lúc bán). Bán 5
+# triệu ghi nợ: lãi tăng, dòng tiền đứng yên. Gộp hai con số này là nói dối
+# theo cả hai hướng tùy tháng.
+
+# Tiền VÀO. `BANK_UNAPPLIED` CỐ Ý không có mặt: đó là tiền về tài khoản cho một
+# đơn ghi nợ mà webhook không áp vào đơn - nó không phải khoản thu (xem
+# order_service), và khi người bán ghi nhận thu nợ thì `DEBT_*` mới là bút toán
+# thật. Cộng cả hai là đếm một lần chuyển khoản thành hai lần tiền vào.
+_CASHFLOW_IN_GROUPS = (
+    ("sale_cash", "Bán hàng thu tiền mặt", (order_service.ENTRY_CASH,)),
+    ("sale_bank", "Bán hàng chuyển khoản", (order_service.ENTRY_BANK,)),
+    (
+        "debt_collected",
+        "Khách trả nợ",
+        (order_service.ENTRY_DEBT_CASH, order_service.ENTRY_DEBT_TRANSFER),
+    ),
+)
+
+# Tiền RA từ sổ đơn hàng: hoàn khoản chuyển thừa và hoàn tiền hàng khách trả.
+_CASHFLOW_OUT_ORDER_ENTRIES = (
+    order_service.ENTRY_REFUND_CASH,
+    order_service.ENTRY_REFUND_TRANSFER,
+    return_service.ENTRY_RETURN_CASH,
+    return_service.ENTRY_RETURN_TRANSFER,
+)
+
+
+def _ngay_vn(cot):
+    """Cột datetime UTC -> ngày lịch Việt Nam, để gom nhóm biểu đồ theo ngày.
+
+    Việt Nam là UTC+7 quanh năm, không có giờ mùa hè, nên phép cộng cố định này
+    đúng cho mọi ngày mà dữ liệu của app có thể có.
+    """
+    return func.date(cot, "+7 hours")
+
+
+def _cong_don_theo_ngay(dich: Dict[str, float], hang) -> float:
+    """Cộng kết quả (ngày, số tiền) vào một dict, trả về tổng vừa cộng."""
+    tong = 0.0
+    for ngay, tien in hang:
+        if not ngay:
+            continue
+        so = float(tien or 0)
+        dich[ngay] = dich.get(ngay, 0.0) + so
+        tong += so
+    return tong
+
+
+def _cash_movement_da_thuoc_chung_tu(db: Session, shop_id: int):
+    """Các chuyển động két đã được đại diện bởi một chứng từ khác.
+
+    Trả nhà cung cấp và chi phí vận hành bằng tiền mặt đều sinh đúng một
+    `CashMovement` hướng OUT. Nếu dòng tiền cộng cả chứng từ lẫn chuyển động
+    thì mỗi lần chi bị đếm hai lần. Đây là danh sách để loại ra, giữ lại đúng
+    các khoản thu/chi tay không thuộc chứng từ nào.
+
+    Trả về hai `Query` để caller đưa thẳng vào `in_()`; KHÔNG gọi `.subquery()`
+    (bẫy 12).
+    """
+    tu_ncc = db.query(models.SupplierPayment.cash_movement_id).filter(
+        models.SupplierPayment.shop_id == shop_id,
+        models.SupplierPayment.cash_movement_id.isnot(None),
+    )
+    tu_chi_phi = db.query(models.OperatingExpense.cash_movement_id).filter(
+        models.OperatingExpense.shop_id == shop_id,
+        models.OperatingExpense.cash_movement_id.isnot(None),
+    )
+    return tu_ncc, tu_chi_phi
+
+
+def _nhan_bieu_do(
+    co_du_lieu: List[str],
+    tu_ngay: Optional[str],
+    den_ngay: Optional[str],
+) -> List[str]:
+    """Trục ngày của biểu đồ: liền mạch, không nhảy cóc qua ngày không bán.
+
+    Ngày nghỉ mà biến mất khỏi trục thì đường cộng dồn trông như đi ngang trong
+    khi thực tế là không có gì xảy ra - hai chuyện khác nhau. Kỳ quá dài thì
+    quay về chỉ vẽ ngày có phát sinh, vì vài trăm cột đứng cạnh nhau cũng không
+    đọc được gì.
+    """
+    moc_dau = _parse_ngay(tu_ngay, "tu_ngay")
+    moc_cuoi = _parse_ngay(den_ngay, "den_ngay")
+    if co_du_lieu:
+        thap_nhat = datetime.strptime(min(co_du_lieu), "%Y-%m-%d").date()
+        cao_nhat = datetime.strptime(max(co_du_lieu), "%Y-%m-%d").date()
+        moc_dau = min(moc_dau, thap_nhat) if moc_dau else thap_nhat
+        moc_cuoi = max(moc_cuoi, cao_nhat) if moc_cuoi else cao_nhat
+    if moc_dau is None or moc_cuoi is None or moc_dau > moc_cuoi:
+        return sorted(co_du_lieu)
+    so_ngay = (moc_cuoi - moc_dau).days + 1
+    if so_ngay > 400:
+        return sorted(co_du_lieu)
+    return [
+        (moc_dau + timedelta(days=i)).isoformat() for i in range(so_ngay)
+    ]
+
+
+def _dong_tien(
+    db: Session,
+    shop_id: int,
+    tu_ngay: Optional[str],
+    den_ngay: Optional[str],
+) -> Dict[str, Any]:
+    """Mọi đồng vào và ra của shop trong kỳ, kèm chuỗi số liệu theo ngày.
+
+    CỐ Ý không có tiền gói Pro ở đây (bẫy 33): đó là tiền nền tảng, đi qua
+    `SubscriptionPayment` và tài khoản riêng, không phải tiền của cửa hàng.
+    """
+    vao: Dict[str, Dict[str, float]] = {}
+    ra: Dict[str, Dict[str, float]] = {}
+    tong_vao: Dict[str, float] = {}
+    tong_ra: Dict[str, float] = {}
+
+    don_cua_shop = db.query(models.Order.id).filter(
+        models.Order.shop_id == shop_id
+    )
+
+    for khoa, _nhan, entries in _CASHFLOW_IN_GROUPS:
+        theo_ngay: Dict[str, float] = {}
+        hang = _loc_khoang_ngay(
+            db.query(
+                _ngay_vn(models.OrderPayment.created_at),
+                func.sum(models.OrderPayment.amount),
+            ).filter(
+                models.OrderPayment.order_id.in_(don_cua_shop),
+                models.OrderPayment.entry_type.in_(entries),
+            ),
+            tu_ngay,
+            den_ngay,
+            cot=models.OrderPayment.created_at,
+        ).group_by(_ngay_vn(models.OrderPayment.created_at)).all()
+        tong_vao[khoa] = _cong_don_theo_ngay(theo_ngay, hang)
+        vao[khoa] = theo_ngay
+
+    # Hoàn tiền khách (chuyển thừa + trả hàng).
+    hoan: Dict[str, float] = {}
+    tong_ra["refund"] = _cong_don_theo_ngay(
+        hoan,
+        _loc_khoang_ngay(
+            db.query(
+                _ngay_vn(models.OrderPayment.created_at),
+                func.sum(models.OrderPayment.amount),
+            ).filter(
+                models.OrderPayment.order_id.in_(don_cua_shop),
+                models.OrderPayment.entry_type.in_(_CASHFLOW_OUT_ORDER_ENTRIES),
+            ),
+            tu_ngay,
+            den_ngay,
+            cot=models.OrderPayment.created_at,
+        ).group_by(_ngay_vn(models.OrderPayment.created_at)).all(),
+    )
+    ra["refund"] = hoan
+
+    # Trả nhà cung cấp. Đếm CHỨNG TỪ chứ không đếm chuyển động két, và mọi
+    # phương thức đều là tiền ra khỏi túi chủ shop (kể cả `OUTSIDE`).
+    ncc: Dict[str, float] = {}
+    tong_ra["supplier"] = _cong_don_theo_ngay(
+        ncc,
+        _loc_khoang_ngay(
+            db.query(
+                _ngay_vn(models.SupplierPayment.created_at),
+                func.sum(models.SupplierPayment.amount),
+            ).filter(models.SupplierPayment.shop_id == shop_id),
+            tu_ngay,
+            den_ngay,
+            cot=models.SupplierPayment.created_at,
+        ).group_by(_ngay_vn(models.SupplierPayment.created_at)).all(),
+    )
+    ra["supplier"] = ncc
+
+    # Chi phí vận hành: lấy nguyên số đã trả vào đúng NGÀY CHI, không phân bổ.
+    # Trả trước 30 triệu tiền nhà thì dòng tiền phải thấy đủ 30 triệu ra hôm đó.
+    chi_phi = expense_service.tien_chi_theo_ngay(db, shop_id, tu_ngay, den_ngay)
+    ra["expense"] = {k: float(v) for k, v in chi_phi["by_date"].items()}
+    tong_ra["expense"] = float(chi_phi["total"])
+
+    # Thu/chi tay trong ca, sau khi loại các dòng đã thuộc chứng từ ở trên.
+    tu_ncc, tu_chi_phi = _cash_movement_da_thuoc_chung_tu(db, shop_id)
+    ca_cua_shop = db.query(models.CashShift.id).filter(
+        models.CashShift.shop_id == shop_id
+    )
+    for khoa, huong in (
+        ("cash_topup", shift_service.DIRECTION_IN),
+        ("cash_withdraw", shift_service.DIRECTION_OUT),
+    ):
+        theo_ngay: Dict[str, float] = {}
+        tong = _cong_don_theo_ngay(
+            theo_ngay,
+            _loc_khoang_ngay(
+                db.query(
+                    _ngay_vn(models.CashMovement.created_at),
+                    func.sum(models.CashMovement.amount),
+                ).filter(
+                    models.CashMovement.shift_id.in_(ca_cua_shop),
+                    models.CashMovement.direction == huong,
+                    ~models.CashMovement.id.in_(tu_ncc),
+                    ~models.CashMovement.id.in_(tu_chi_phi),
+                ),
+                tu_ngay,
+                den_ngay,
+                cot=models.CashMovement.created_at,
+            ).group_by(_ngay_vn(models.CashMovement.created_at)).all(),
+        )
+        if huong == shift_service.DIRECTION_IN:
+            vao[khoa] = theo_ngay
+            tong_vao[khoa] = tong
+        else:
+            ra[khoa] = theo_ngay
+            tong_ra[khoa] = tong
+
+    nhan_vao = {
+        "sale_cash": "Bán hàng thu tiền mặt",
+        "sale_bank": "Bán hàng chuyển khoản",
+        "debt_collected": "Khách trả nợ",
+        "cash_topup": "Bỏ thêm tiền vào két",
+    }
+    nhan_ra = {
+        "supplier": "Trả tiền nhập hàng",
+        "expense": "Chi phí vận hành",
+        "refund": "Hoàn tiền cho khách",
+        "cash_withdraw": "Rút tiền khỏi két",
+    }
+
+    moi_ngay = sorted(
+        {ngay for nhom in list(vao.values()) + list(ra.values()) for ngay in nhom}
+    )
+    nhan = _nhan_bieu_do(moi_ngay, tu_ngay, den_ngay)
+
+    chuoi_vao = [
+        round(sum(nhom.get(ngay, 0.0) for nhom in vao.values()), 2)
+        for ngay in nhan
+    ]
+    chuoi_ra = [
+        round(sum(nhom.get(ngay, 0.0) for nhom in ra.values()), 2)
+        for ngay in nhan
+    ]
+    cong_don: List[float] = []
+    chay = 0.0
+    for i in range(len(nhan)):
+        chay += chuoi_vao[i] - chuoi_ra[i]
+        cong_don.append(round(chay, 2))
+
+    return {
+        "cash_in_total": sum(tong_vao.values()),
+        "cash_out_total": sum(tong_ra.values()),
+        "net_cashflow": sum(tong_vao.values()) - sum(tong_ra.values()),
+        "cash_in_breakdown": [
+            {"key": k, "label": tr(nhan_vao[k]), "amount": v}
+            for k, v in sorted(tong_vao.items(), key=lambda r: -r[1])
+            if v > order_service.MONEY_EPSILON
+        ],
+        "cash_out_breakdown": [
+            {"key": k, "label": tr(nhan_ra[k]), "amount": v}
+            for k, v in sorted(tong_ra.items(), key=lambda r: -r[1])
+            if v > order_service.MONEY_EPSILON
+        ],
+        "chart": {
+            "labels": nhan,
+            "cash_in": chuoi_vao,
+            "cash_out": chuoi_ra,
+            # Cộng dồn TRONG KỲ, bắt đầu từ 0 - không phải số dư tuyệt đối của
+            # két. Giao diện phải ghi rõ điều đó, nếu không người xem sẽ đọc
+            # đường này thành "tiền tôi đang có".
+            "cumulative": cong_don,
+        },
+        "supplier_payment_total": tong_ra.get("supplier", 0.0),
+    }
+
+
+def net_cashflow_report(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    tu_ngay: Optional[str] = None,
+    den_ngay: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Màn Dòng Tiền: lợi nhuận ròng, dòng tiền thực và lý do chúng khác nhau.
+
+    CHỈ chủ shop và ADMIN. Biết chi phí và lãi ròng là suy ngược ra được giá
+    vốn, nên ranh giới quyền ở đây phải trùng với `require_cost_visibility` chứ
+    không nới theo PERMISSION_REPORT như Thống Kê.
+    """
+    shop = require_shop_access(db, shop_id, current_user)
+    require_cost_visibility(shop, current_user)
+    # Gói Free vẫn nhập chi phí và xem 31 ngày gần nhất bình thường; chỉ kỳ cũ
+    # hơn mới cần Pro, đúng cùng chính sách với báo cáo hiện có.
+    tu_ngay, den_ngay = _limit_free_report_range(db, shop_id, tu_ngay, den_ngay)
+
+    doanh_thu = (
+        _loc_khoang_ngay(
+            db.query(func.sum(models.Order.total_amount)).filter(
+                models.Order.shop_id == shop_id, models.Order.status == "PAID"
+            ),
+            tu_ngay,
+            den_ngay,
+        ).scalar()
+        or 0
+    )
+    paid_orders_subquery = _loc_khoang_ngay(
+        db.query(models.Order.id).filter(
+            models.Order.shop_id == shop_id, models.Order.status == "PAID"
+        ),
+        tu_ngay,
+        den_ngay,
+    )
+    tra_hang = _tra_hang_anh_huong_lai(db, shop_id, tu_ngay, den_ngay)
+    lai = _lai_gop_da_dieu_chinh(
+        db, shop_id, paid_orders_subquery, tu_ngay, den_ngay, tra_hang
+    )
+    chi_phi = expense_service.tong_hop_chi_phi(db, shop_id, tu_ngay, den_ngay)
+    lai_rong = lai["gross_profit"] - chi_phi["operating_expense_total"]
+
+    tien = _dong_tien(db, shop_id, tu_ngay, den_ngay)
+    cong_no = _cong_no_phai_thu(db, shop_id)
+
+    # Vì sao lãi ròng khác dòng tiền. CỐ Ý không phải một phép cân đối khép kín
+    # (số dư đầu kỳ, hàng tồn, công nợ nhiều kỳ đan vào nhau, cân cho khớp tuyệt
+    # đối sẽ ra một con số "chênh lệch khác" mà không ai giải thích nổi). Đây là
+    # danh sách các NGUYÊN NHÂN LỚN, mỗi con số đều tra ngược về chứng từ được,
+    # và giao diện chỉ đọc ra những dòng khác 0.
+    ly_do = [
+        {
+            "key": "purchase_paid",
+            "amount": tien["supplier_payment_total"],
+            "label": tr(
+                "tiền nhập hàng đã trả, hàng còn trong kho nên chưa tính lời lỗ"
+            ),
+        },
+        {
+            "key": "prepaid",
+            "amount": float(chi_phi["prepaid_remaining"]),
+            "label": tr(
+                "tiền đã trả trước cho các tháng sau, chưa tính vào lãi tháng này"
+            ),
+        },
+        {
+            "key": "receivable",
+            "amount": float(cong_no),
+            "label": tr("khách còn nợ, đã bán nhưng chưa cầm được tiền"),
+        },
+    ]
+
+    ket_qua = {
+        "from_date": tu_ngay,
+        "to_date": den_ngay,
+        "total_revenue": doanh_thu,
+        "returned_amount": tra_hang["returned_amount"],
+        "net_revenue": doanh_thu - tra_hang["returned_amount"],
+        "receivable_amount": cong_no,
+        "net_profit": lai_rong,
+        "difference_notes": [
+            r for r in ly_do if r["amount"] > order_service.MONEY_EPSILON
+        ],
+    }
+    ket_qua.update(lai)
+    ket_qua.update(chi_phi)
+    ket_qua.update(tien)
     return ket_qua
 
 

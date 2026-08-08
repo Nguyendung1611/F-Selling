@@ -163,6 +163,7 @@ function xoaDuLieuShopCuKhoiGiaoDien() {
     // Module Nhập hàng nằm ở file riêng để seller.js không phình thêm hàng
     // nghìn dòng. Nó vẫn dùng cùng generation/shop hiện tại của trang này.
     window.FSellingPurchasing?.resetForShopChange?.();
+    window.FSellingExpenses?.resetForShopChange?.();
 
     cancelEditCategory();
     cancelEditProduct();
@@ -212,6 +213,13 @@ function switchTab(tabId, buttonEl = null) {
         showToast(t('seller.purchasing.owner_only'));
         return;
     }
+    // Chi phí và lãi ròng cùng vòng bí mật với giá vốn: biết lãi ròng là suy
+    // ngược ra được giá vốn, và lương nhân viên thì càng không phải thứ để
+    // nhân viên khác đọc. Đây chỉ là lớp giao diện — server mới chặn thật.
+    if (tabId === 'cashflow' && !XEM_DUOC_GIA_VON) {
+        showToast(t('seller.cashflow.owner_only'));
+        return;
+    }
     if (tabId === 'subscription' && MY_ROLE !== 'SELLER') {
         showToast(t('subscription.seller.owner_only'));
         return;
@@ -230,6 +238,7 @@ function switchTab(tabId, buttonEl = null) {
     if (tabId === 'kiemke') kkNapLo();
     if (tabId === 'loyalty') loadLoyaltyProgram();
     if (tabId === 'purchasing') window.FSellingPurchasing?.load?.();
+    if (tabId === 'cashflow') window.FSellingExpenses?.load?.();
     if (tabId === 'subscription') {
         window.FSellingSubscriptions?.loadSeller?.(currentShopId, currentShopGeneration);
     }
@@ -404,6 +413,7 @@ function doiCuaHangChung(giaTri) {
     else if (tab === 'customers') loadCustomers();
     else if (tab === 'loyalty') loadLoyaltyProgram();
     else if (tab === 'purchasing') window.FSellingPurchasing?.load?.();
+    else if (tab === 'cashflow') window.FSellingExpenses?.load?.();
     else if (tab === 'subscription') {
         window.FSellingSubscriptions?.loadSeller?.(id, currentShopGeneration);
     }
@@ -3894,6 +3904,9 @@ function applyRoleUI() {
         // Số lỗ chính là giá vốn nhân số lượng nên nó thuộc cùng vòng bí mật.
         const tabHuy = document.getElementById('whSubTabWriteOff');
         if (tabHuy) tabHuy.style.display = '';
+        // Dòng Tiền cũng vậy: lãi ròng nói ra giá vốn.
+        const tabDongTien = document.getElementById('tabCashflow');
+        if (tabDongTien) tabDongTien.style.display = '';
     }
     const btnBackAdmin = document.getElementById('btnBackAdmin');
     if (btnBackAdmin && MY_ROLE === 'ADMIN') btnBackAdmin.style.display = 'flex';

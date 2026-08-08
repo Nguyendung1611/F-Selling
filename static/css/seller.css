@@ -782,3 +782,282 @@
     }
 }
     
+
+/* ===== K1: Dòng Tiền & Lợi nhuận ròng ===== */
+
+.cf-filter {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    margin-bottom: 1.5rem;
+}
+
+.cf-filter .form-group {
+    margin-bottom: 0;
+    min-width: 150px;
+}
+
+/* Hai ô số lớn đứng CẠNH NHAU chứ không chồng lên nhau: chúng là hai con số
+   khác nhau về cùng một tháng, và người xem phải thấy ngay điều đó. */
+.cf-headline {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.cf-card {
+    background: #F8FAFC;
+    border: 1px solid var(--border-color);
+    border-left: 4px solid #3B82F6;
+    border-radius: 12px;
+    padding: 1.25rem;
+}
+
+.cf-card-profit { border-left-color: #6366F1; }
+.cf-card-cash { border-left-color: #22C55E; }
+
+.cf-card h4 {
+    margin: 0;
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+}
+
+.cf-card > small {
+    display: block;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    margin-bottom: 0.5rem;
+}
+
+.cf-card .stat-value {
+    display: block;
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+}
+
+.cf-card .stat-value.cf-negative { color: #DC2626; }
+
+.cf-lines {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-size: 0.85rem;
+}
+
+.cf-lines li {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.25rem 0;
+    border-bottom: 1px dashed var(--border-color);
+}
+
+.cf-lines li:last-child { border-bottom: none; }
+.cf-lines .cf-line-out strong { color: #DC2626; }
+.cf-lines .cf-empty-line { color: var(--text-muted); justify-content: flex-start; }
+
+.cf-flow-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+
+.cf-flow-grid h5 {
+    margin: 0 0 0.25rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.cf-prepaid {
+    margin: 0.75rem 0 0;
+    padding: 0.6rem 0.75rem;
+    background: #EEF2FF;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    color: #3730A3;
+}
+
+/* Câu giải thích vì sao hai con số khác nhau. Nó là phần QUAN TRỌNG NHẤT của
+   màn này với người không rành sổ sách, nên đừng thu nhỏ thành chú thích mờ. */
+.cf-why {
+    background: #FFFBEB;
+    border: 1px solid #FDE68A;
+    border-radius: 10px;
+    padding: 0.9rem 1rem;
+    font-size: 0.9rem;
+    line-height: 1.55;
+    color: #92400E;
+    margin-bottom: 1.5rem;
+}
+
+.cf-chart { margin-bottom: 1.5rem; }
+
+.cf-chart small {
+    display: block;
+    margin-top: 0.5rem;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+
+.cf-reminder {
+    background: #FFFBEB;
+    border: 1px solid #FCD34D;
+    border-radius: 10px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 1.25rem;
+}
+
+.cf-reminder h4 {
+    margin: 0 0 0.5rem;
+    font-size: 0.95rem;
+    color: #92400E;
+}
+
+.cf-reminder ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.5rem;
+}
+
+.cf-reminder li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    font-size: 0.88rem;
+    color: #78350F;
+}
+
+.cf-reminder button {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.82rem;
+    border-radius: 8px;
+}
+
+/* Cảnh báo chống trừ hai lần với phiếu hủy hàng. Đỏ có chủ ý. */
+.cf-warn {
+    background: #FEF2F2;
+    border: 1px solid #FECACA;
+    border-radius: 8px;
+    padding: 0.65rem 0.85rem;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    color: #B91C1C;
+    margin-bottom: 1rem;
+}
+
+.cf-prepaid-toggle label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.cf-prepaid-toggle input { width: auto; margin: 0; }
+
+.cf-prepaid-box {
+    border: 1px dashed var(--border-color);
+    border-radius: 10px;
+    padding: 0.9rem;
+    margin-bottom: 1rem;
+    background: #F8FAFC;
+}
+
+.cf-month-buttons {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+}
+
+.cf-month-buttons button {
+    padding: 0.4rem 0.85rem;
+    font-size: 0.85rem;
+    border-radius: 8px;
+}
+
+.cf-month-buttons button.cf-month-active {
+    background: var(--primary-color, #3B82F6);
+    color: #fff;
+    border-color: transparent;
+}
+
+/* Xem trước bằng CHỮ để người dùng nhìn thấy mà bắt lỗi ngày tháng. */
+.cf-preview {
+    margin: 0;
+    font-size: 0.88rem;
+    color: #1D4ED8;
+    font-weight: 500;
+}
+
+.cf-inline-form {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    margin: 0.75rem 0 1.5rem;
+}
+
+.cf-inline-form .form-group {
+    margin-bottom: 0;
+    min-width: 150px;
+    flex: 1 1 150px;
+}
+
+.cf-chips {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.5rem;
+}
+
+.cf-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: #EEF2FF;
+    border: 1px solid #C7D2FE;
+    border-radius: 999px;
+    padding: 0.3rem 0.5rem 0.3rem 0.8rem;
+    font-size: 0.84rem;
+}
+
+.cf-chip button {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    padding: 0 0.15rem;
+    font-size: 0.9rem;
+    line-height: 1;
+}
+
+.cf-chip-off {
+    background: #F1F5F9;
+    border-color: var(--border-color);
+    color: var(--text-muted);
+    text-decoration: line-through;
+}
+
+.cf-row-off { opacity: 0.55; }
+
+.cf-muted {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+}
+
+@media (max-width: 700px) {
+    .cf-flow-grid { grid-template-columns: 1fr; }
+    .cf-filter button,
+    .cf-inline-form button { flex: 1 1 130px; }
+}

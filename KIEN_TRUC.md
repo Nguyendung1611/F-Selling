@@ -1236,6 +1236,75 @@ phải chạy dù màn quản lý lô nâng cao đang bị khóa. “Không xóa
 nghĩa mọi màn đọc đều là Free: báo cáo quá 31 ngày, xuất file và **Ai Làm Gì**
 thuộc Pro theo chính sách gói; dữ liệu gốc vẫn được giữ để hiện lại khi gia hạn.
 
+### 34. Lãi ròng và dòng tiền là HAI con số, và phân bổ phải tính theo NGÀY
+
+Trước K1 báo cáo dừng ở **lãi gộp**: doanh thu trừ giá vốn, đã trừ hàng trả và
+hàng hủy. Tiền thuê mặt bằng, điện nước, lương không có chỗ khai nên con số lãi
+luôn cao hơn tiền thật vào túi — lại sai theo hướng làm người ta yên tâm.
+
+**Đừng gộp hai con số.** Nhập hàng 10 triệu trả ngay mà chưa bán món nào: dòng
+tiền −10 triệu, lãi ròng không đổi (hàng còn trong kho, chỉ thành giá vốn lúc
+bán). Bán 5 triệu ghi nợ: lãi tăng, dòng tiền đứng yên. Giao diện phải hiện cả
+hai cạnh nhau kèm một câu nói rõ vì sao chúng khác nhau.
+
+**Phân bổ trả trước tính theo NGÀY bằng công thức lũy kế**, không chia cho số
+tháng: `phần trong kỳ = lũy kế đến cuối kỳ − lũy kế đến trước đầu kỳ`. Chia
+thẳng thì 10 triệu / 3 làm tròn ba lần ra 9.999.999đ, và một đồng lệch trong sổ
+tiền không bao giờ tìm lại được. Cách lũy kế khử sai số vì các phép trừ triệt
+tiêu nhau, và chạy đúng với mọi khoảng ngày người dùng lọc — kể cả kỳ lẻ như
+15/8→20/8 hay hợp đồng thuê bắt đầu giữa tháng. Hai mốc `amortize_start_date`
+và `amortize_end_date` LUÔN có giá trị (không phân bổ thì bằng `expense_date`)
+để báo cáo chỉ có một đường tính, không có nhánh `if` nào để quên.
+
+**Mốc cuối bị chặn ở HÔM NAY.** Xem "tháng 8" vào ngày 8/8 mà tính đủ tiền nhà
+cả tháng trong khi doanh thu mới có 8 ngày là ra một con số lỗ không có thật —
+và chủ shop nhìn con số đó thường quyết định sai. Hai vế phải cùng dừng ở một
+mốc thì so sánh mới có nghĩa.
+
+**Trả trước còn lại phải hiện cạnh lãi ròng.** Không có nó thì tháng đóng tiền
+nhà 3 tháng một lần, chủ shop thấy lãi đẹp và quên mất két đã bay 30 triệu —
+đúng cái sai mà việc phân bổ đang cố tránh, chỉ đổi hướng.
+
+**Tuyệt đối không có danh mục chi phí cho hàng hỏng/hết hạn.** Hàng đó đã đi qua
+phiếu hủy (bẫy 24) và ĐÃ bị trừ vào lãi gộp theo giá vốn của lô. Thêm một ô để
+gõ lại số đó là mời người dùng trừ hai lần. Danh mục mặc định ghi rõ "Tổn thất
+khác (không phải hàng hóa)" và form có cảnh báo đỏ vì lý do đó.
+
+**Dòng tiền đếm CHỨNG TỪ, không đếm chuyển động két.** Chi phí tiền mặt và trả
+NCC đều sinh đúng một `CashMovement` OUT; cộng cả hai là mỗi lần chi bị đếm hai
+lần. Các khoản thu/chi tay còn lại được lấy sau khi loại những dòng đã thuộc
+`SupplierPayment.cash_movement_id` / `OperatingExpense.cash_movement_id`.
+`BANK_UNAPPLIED` cố ý không nằm trong tiền vào (bẫy 25): nó không phải khoản
+thu, và khi người bán ghi nhận thu nợ thì `DEBT_*` mới là bút toán thật.
+
+**Khoản đã rút tiền từ ca thì KHÔNG gỡ được.** Két là sổ chỉ-ghi-thêm và ca có
+thể đã đóng với số đếm tay khớp đúng; gỡ ngược làm số đã chốt sai vĩnh viễn.
+Ghi nhầm thì bù bằng Thu tiền vào ca, kèm ghi chú. Khoản chuyển khoản / tiền
+ngoài không đụng két nên gỡ được, và vẫn giữ dòng lại (`voided_at`) để truy
+được ai gỡ.
+
+**Nhắc chi phí cố định so theo TỔNG ĐÃ GHI trong tháng, không theo cờ đã/chưa.**
+Lương hay trả làm hai đợt (tạm ứng rồi trả nốt); dùng cờ thì lời nhắc tắt ngay
+sau lần tạm ứng và phần còn lại bị quên luôn. Mẫu định kỳ chỉ để NHẮC, không tự
+sinh khoản chi: máy Fly.io tự tắt khi vắng khách nên job "ngày 5 hàng tháng" gần
+như không bao giờ nổ, và một bút toán tiền tự mọc ra mà chủ shop chưa nhìn qua
+là thứ không ai đối chiếu nổi về sau.
+
+**Quy tắc cộng tháng chỉ được viết ở MỘT chỗ.** Client gửi `amortize_months`,
+server tính ngày kết thúc bằng `expense_service.cong_thang` (cùng ngày N tháng
+sau, tháng thiếu ngày lùi về cuối tháng, rồi trừ một ngày). Bản JS chỉ hiện xem
+trước cho người dùng bắt lỗi. Cho client gửi thẳng ngày kết thúc là mở đường cho
+hai bên nói hai điều khác nhau.
+
+**Chữ trên màn này không được có từ kế toán.** Chủ shop bán lẻ bỏ qua cả câu khi
+gặp "dồn tích", "phân bổ", "ghi nhận theo kỳ". Và số âm phải đổi thành TỪ: "bạn
+lỗ 3.881.347đ", không phải "bạn lãi −3.881.347đ".
+
+Quyền: chỉ chủ shop và ADMIN (`require_cost_visibility`), hẹp hơn
+PERMISSION_REPORT — biết lãi ròng là suy ngược ra được giá vốn, và lương nhân
+viên không phải thứ để nhân viên khác đọc. Nhập chi phí là Free; chỉ xem báo cáo
+quá 31 ngày mới cần Pro, đúng cùng chính sách với báo cáo hiện có.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

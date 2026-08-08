@@ -10,6 +10,13 @@ from .auth import (
     UserCreate,
 )
 from .catalog import CategoryUpdate, ProductCreate, VoucherCreate
+from .expense import (
+    ExpenseCategoryCreate,
+    ExpenseCategoryUpdate,
+    ExpenseCreate,
+    ExpenseTemplateCreate,
+    ExpenseTemplateUpdate,
+)
 from .order import CashTopup, OrderCreate, OrderItemCreate, PaymentWebhook, RefundComplete
 from .shop import ShopCreate
 from .supplier import (
@@ -49,4 +56,9 @@ __all__ = [
     "PurchaseReceiptCreate",
     "PurchaseReceiptUpdate",
     "PurchaseReceiptConfirm",
+    "ExpenseCategoryCreate",
+    "ExpenseCategoryUpdate",
+    "ExpenseTemplateCreate",
+    "ExpenseTemplateUpdate",
+    "ExpenseCreate",
 ]

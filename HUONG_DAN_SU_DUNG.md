@@ -268,6 +268,58 @@ Xuất kho: xuất kho làm tồn giảm mà lãi vẫn báo như cũ, tức là
 > Thao tác này **không hoàn tác được**, và lô nào chưa khai giá vốn thì phần lỗ
 > của nó không tính được — hệ thống sẽ nói rõ thay vì coi như bằng 0.
 
+### Dòng tiền và lợi nhuận ròng
+
+Tab **Dòng Tiền** (chỉ chủ cửa hàng thấy) trả lời câu "cuối tháng túi tôi còn
+bao nhiêu". Nó cho **hai con số, và hai con số này khác nhau là chuyện bình
+thường**:
+
+| | Nghĩa là gì |
+|---|---|
+| **Lợi nhuận ròng** | Tiền lời thật: lãi bán hàng trừ hết chi phí vận hành |
+| **Dòng tiền thực** | Túi tiền kỳ này dày lên hay mỏng đi |
+
+Vì sao khác nhau? Nhập hàng 10 triệu trả tiền ngay mà chưa bán món nào thì tiền
+đã ra 10 triệu, nhưng hàng còn nằm trong kho nên chưa tính lời lỗ. Ngược lại,
+bán chịu cho khách thì có lãi mà chưa cầm được đồng nào. Màn hình có sẵn một câu
+đọc thẳng ra lý do, bạn không phải tự đoán.
+
+**Khai chi phí cố định một lần.** Bấm **Chi phí cố định** rồi khai tiền thuê,
+lương, internet kèm ngày trong tháng. Mỗi tháng ô vàng ở đầu màn sẽ nhắc:
+
+> Lương chị Lan: đã ghi 2.000.000đ trên 6.000.000đ. **Còn thiếu 4.000.000đ.**
+
+Bấm **Ghi nhận** là hộp thoại mở sẵn đúng số còn thiếu — sửa lại được nếu tháng
+này có thưởng hoặc phạt. Hệ thống **không bao giờ tự trừ tiền**, luôn phải bạn
+bấm xác nhận.
+
+**Trả trước nhiều tháng.** Đóng tiền nhà 3 tháng một lần thì tick ô *"Khoản này
+trả trước cho nhiều tháng"* rồi bấm nút **3 tháng**. Màn hình hiện ngay:
+
+> Tính từ 15/08/2026 đến 14/11/2026. Mỗi tháng khoảng 10.000.000đ.
+
+Tiền vẫn ra đủ 30 triệu trong dòng tiền hôm đó, nhưng lợi nhuận chỉ chịu phần
+của tháng này — nên tháng đóng tiền không bị báo lỗ oan. Phần chưa tính hiện
+ngay cạnh ô lợi nhuận: *"Bạn còn 20.000.000đ tiền thuê mặt bằng đã trả trước"*.
+
+**Nguồn tiền có ba lựa chọn**, chọn đúng thì cuối ca đếm tiền mới khớp:
+
+- **Tiền mặt lấy từ két** — trừ thẳng vào ca đang mở của bạn
+- **Chuyển khoản** — không đụng tới két
+- **Tiền túi riêng** — không đụng két, bắt buộc ghi rõ lý do
+
+> ⚠️ **Hàng hỏng, hết hạn thì KHÔNG ghi ở đây.** Số đó đã được tính lỗ ở
+> Kho hàng → Hủy hàng rồi. Ghi lại lần nữa là cùng một thùng hàng bị trừ hai
+> lần và lợi nhuận thấp hơn sự thật.
+
+Khoản ghi nhầm **chuyển khoản hoặc tiền túi riêng** thì gỡ được. Khoản đã lấy
+tiền từ két thì không — két là sổ chỉ ghi thêm, và ca có thể đã đóng với số tiền
+đếm tay khớp rồi. Ghi nhầm loại đó thì dùng **Thu tiền vào ca** để bù lại, nhớ
+ghi chú lý do.
+
+Đường màu xanh trên biểu đồ là **cộng dồn trong kỳ**, bắt đầu từ 0 — nó cho biết
+kỳ này bạn dư ra hay hụt đi bao nhiêu, **không phải** số tiền đang có trong két.
+
 ### Gói Free và Pro
 
 Gói tính **riêng cho từng cửa hàng**. Mỗi cửa hàng được dùng thử Pro đúng 30

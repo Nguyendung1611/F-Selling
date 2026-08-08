@@ -29,7 +29,7 @@
         #nhatKyShopSelector,
         .doi-soat-shop-field { display: none !important; }
     </style>
-    <link rel="stylesheet" href="/css/seller.css?v=20260807-nha-cung-cap-ui-f9">
+    <link rel="stylesheet" href="/css/seller.css?v=20260808-dong-tien-k1">
     <link rel="stylesheet" href="/css/subscriptions.css?v=20260807-goi-cuoc-f3">
     <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
     <style>
@@ -303,6 +303,10 @@
             <!-- Phiếu nhập chứa giá nhập và công nợ nên mặc định ẩn. applyRoleUI
                  chỉ mở cho chủ shop; server vẫn là lớp chặn quyền thật. -->
             <button class="tab-btn" id="tabPurchasing" data-main-tab="purchasing" onclick="switchTab('purchasing', this)" style="display:none;"><i class="ph ph-truck"></i> <span data-i18n="seller.tabs.purchasing">Nhập Hàng</span></button>
+            <!-- Chi phí và lãi ròng cùng vòng bí mật với giá vốn (biết lãi ròng
+                 là suy ngược ra được giá vốn) nên mặc định ẩn; applyRoleUI chỉ
+                 mở cho chủ shop. Server vẫn là lớp chặn quyền thật. -->
+            <button class="tab-btn" id="tabCashflow" data-main-tab="cashflow" onclick="switchTab('cashflow', this)" style="display:none;"><i class="ph ph-wallet"></i> <span data-i18n="seller.tabs.cashflow">Dòng Tiền</span></button>
             <button class="tab-btn" data-main-tab="kiemke" onclick="switchTab('kiemke', this)"><i class="ph ph-clipboard-text"></i> <span data-i18n="seller.tabs.stocktake">Kiểm Kê</span></button>
             <button class="tab-btn" data-main-tab="voucher" onclick="switchTab('voucher', this)"><i class="ph ph-ticket"></i> <span data-i18n="seller.tabs.vouchers">Khuyến Mãi</span></button>
             <button class="tab-btn" data-main-tab="customers" onclick="switchTab('customers', this)"><i class="ph ph-users"></i> <span data-i18n="seller.tabs.customers">Khách Hàng</span></button>
@@ -911,6 +915,98 @@
                 </div>
                 <div id="purchaseSuppliersEmpty" class="purchase-empty" style="display:none;" data-i18n="seller.purchasing.no_suppliers">Chưa có nhà cung cấp nào.</div>
             </section>
+        </div>
+
+        <!-- TAB: DÒNG TIỀN (K1) — lợi nhuận ròng + dòng tiền thực + sổ chi phí.
+             HAI con số ở đầu màn CỐ Ý đứng riêng và có một câu giải thích vì sao
+             chúng khác nhau: gộp chúng lại là nói dối theo cả hai hướng tùy tháng. -->
+        <div id="cashflow" class="tab-content glass-card">
+            <div class="purchase-heading">
+                <div>
+                    <h3><i class="ph ph-wallet"></i> <span data-i18n="seller.cashflow.title">Dòng tiền và lợi nhuận ròng</span></h3>
+                    <p data-i18n="seller.cashflow.description">Khai chi phí vận hành để biết tiền lời thật, và xem túi tiền kỳ này dày lên hay mỏng đi.</p>
+                </div>
+            </div>
+
+            <div class="cf-filter">
+                <div class="form-group">
+                    <label for="cfFrom" data-i18n="seller.cashflow.from_date">Từ ngày</label>
+                    <input id="cfFrom" type="date">
+                </div>
+                <div class="form-group">
+                    <label for="cfTo" data-i18n="seller.cashflow.to_date">Đến ngày</label>
+                    <input id="cfTo" type="date">
+                </div>
+                <button type="button" onclick="cfApplyRange()"><i class="ph ph-magnifying-glass"></i> <span data-i18n="seller.cashflow.apply">Xem</span></button>
+                <button class="btn-outline" type="button" onclick="cfQuickRange('this_month')" data-i18n="seller.cashflow.this_month">Tháng này</button>
+                <button class="btn-outline" type="button" onclick="cfQuickRange('last_month')" data-i18n="seller.cashflow.last_month">Tháng trước</button>
+                <button class="btn-outline" type="button" onclick="cfQuickRange('last_30')" data-i18n="seller.cashflow.last_30">30 ngày qua</button>
+            </div>
+
+            <div id="cfReminders" class="cf-reminder" style="display:none;"></div>
+
+            <div class="cf-headline">
+                <div class="cf-card cf-card-profit">
+                    <h4 data-i18n="seller.cashflow.net_profit">LỢI NHUẬN RÒNG</h4>
+                    <small data-i18n="seller.cashflow.net_profit_hint">Tiền lời thật sau khi trừ hết mọi chi phí</small>
+                    <strong id="cfNetProfit" class="stat-value">0 ₫</strong>
+                    <ul id="cfProfitLines" class="cf-lines"></ul>
+                    <p id="cfPrepaidNote" class="cf-prepaid" style="display:none;"></p>
+                </div>
+                <div class="cf-card cf-card-cash">
+                    <h4 data-i18n="seller.cashflow.net_cash">DÒNG TIỀN THỰC</h4>
+                    <small data-i18n="seller.cashflow.net_cash_hint">Túi tiền của bạn kỳ này dày lên hay mỏng đi</small>
+                    <strong id="cfNetCash" class="stat-value">0 ₫</strong>
+                    <div class="cf-flow-grid">
+                        <div>
+                            <h5 data-i18n="seller.cashflow.money_in">Tiền vào</h5>
+                            <ul id="cfInLines" class="cf-lines"></ul>
+                        </div>
+                        <div>
+                            <h5 data-i18n="seller.cashflow.money_out">Tiền ra</h5>
+                            <ul id="cfOutLines" class="cf-lines"></ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <p id="cfWhyDifferent" class="cf-why" style="display:none;"></p>
+
+            <div class="chart-card cf-chart">
+                <h4 data-i18n="seller.cashflow.chart_title">Tiền vào và tiền ra theo ngày</h4>
+                <div class="chart-container">
+                    <canvas id="cashflowChart"></canvas>
+                </div>
+                <small data-i18n="seller.cashflow.chart_hint">Đường "Cộng dồn" bắt đầu từ 0 ở đầu kỳ — nó cho biết kỳ này bạn dư ra hay hụt đi bao nhiêu, không phải số tiền đang có trong két.</small>
+            </div>
+
+            <div class="purchase-toolbar">
+                <div>
+                    <h3 data-i18n="seller.cashflow.ledger_title">Sổ chi phí</h3>
+                    <p data-i18n="seller.cashflow.ledger_hint">Chỉ ghi những khoản đã trả tiền. Khoản lấy tiền từ két sẽ tự trừ vào ca đang mở.</p>
+                </div>
+                <div class="purchase-toolbar-actions">
+                    <button class="btn-outline" type="button" onclick="cfOpenSettings()"><i class="ph ph-sliders"></i> <span data-i18n="seller.cashflow.manage">Chi phí cố định</span></button>
+                    <button type="button" onclick="cfOpenExpenseForm()"><i class="ph ph-plus-circle"></i> <span data-i18n="seller.cashflow.add_expense">Thêm chi phí</span></button>
+                </div>
+            </div>
+
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th data-i18n="seller.cashflow.col_date">Ngày chi</th>
+                            <th data-i18n="seller.cashflow.col_category">Loại</th>
+                            <th data-i18n="seller.cashflow.col_amount">Số tiền</th>
+                            <th data-i18n="seller.cashflow.col_method">Nguồn tiền</th>
+                            <th data-i18n="seller.cashflow.col_note">Ghi chú</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="cfExpenseRows"></tbody>
+                </table>
+            </div>
+            <div id="cfExpenseEmpty" class="purchase-empty" style="display:none;" data-i18n="seller.cashflow.no_expense">Kỳ này chưa ghi khoản chi nào.</div>
         </div>
 
         <!-- TAB 3: VOUCHER -->
@@ -1768,9 +1864,147 @@
         </div>
     </div>
 
+    <!-- K1: ghi một khoản chi phí đã trả -->
+    <div id="cfExpenseModal" class="purchase-modal-overlay" style="display:none;">
+        <div class="purchase-modal">
+            <div class="purchase-modal-heading">
+                <div>
+                    <h3 id="cfExpenseTitle" data-i18n="seller.cashflow.add_expense">Thêm chi phí</h3>
+                    <p data-i18n="seller.cashflow.form_hint">Chỉ ghi khoản đã trả tiền rồi. Ngày chi là ngày tiền ra khỏi túi, không phải hôm nay nếu bạn ghi bù.</p>
+                </div>
+                <button class="btn-outline" type="button" onclick="cfCloseExpenseForm()" aria-label="Close"><i class="ph ph-x"></i></button>
+            </div>
+
+            <!-- Chống trừ hai lần: hàng hỏng/hết hạn đã bị trừ vào lãi gộp qua
+                 phiếu hủy, ghi lại ở đây là trừ lần thứ hai. -->
+            <div class="cf-warn" data-i18n="seller.cashflow.write_off_warning">Hàng hỏng, hết hạn thì vào Kho Hàng → Hủy hàng. Ghi ở đây là bị trừ hai lần.</div>
+
+            <div id="cfExpenseRetryNotice" class="purchase-retry-notice" style="display:none;" data-i18n="seller.cashflow.retry_notice">Chưa biết máy chủ đã ghi khoản chi hay chưa. Bấm Thử lại để gửi đúng số tiền và đúng mã thao tác cũ.</div>
+
+            <div class="form-group">
+                <label for="cfExpCategory" data-i18n="seller.cashflow.field_category">Loại chi phí *</label>
+                <select id="cfExpCategory"></select>
+            </div>
+            <div class="form-group">
+                <label for="cfExpAmount" data-i18n="seller.cashflow.field_amount">Số tiền *</label>
+                <input id="cfExpAmount" type="text" inputmode="numeric" autocomplete="off" oninput="cfUpdatePreview()">
+                <small id="cfExpAmountWords"></small>
+            </div>
+            <div class="form-group">
+                <label for="cfExpDate" data-i18n="seller.cashflow.field_date">Ngày chi *</label>
+                <input id="cfExpDate" type="date" onchange="cfUpdatePreview()">
+            </div>
+            <div class="form-group">
+                <label for="cfExpMethod" data-i18n="seller.cashflow.field_method">Nguồn tiền *</label>
+                <select id="cfExpMethod" onchange="cfUpdatePreview()">
+                    <option value="CASH_SHIFT" data-owner-cash data-i18n="seller.cashflow.method_cash_shift">Tiền mặt lấy từ két</option>
+                    <option value="TRANSFER" selected data-i18n="seller.cashflow.method_transfer">Chuyển khoản</option>
+                    <option value="OUTSIDE" data-i18n="seller.cashflow.method_outside">Tiền túi riêng, không qua két</option>
+                </select>
+                <small id="cfExpMethodHint"></small>
+            </div>
+
+            <div class="form-group cf-prepaid-toggle">
+                <label>
+                    <input id="cfExpPrepaid" type="checkbox" onchange="cfUpdatePreview()">
+                    <span data-i18n="seller.cashflow.field_prepaid">Khoản này trả trước cho nhiều tháng</span>
+                </label>
+            </div>
+            <div id="cfExpPrepaidBox" class="cf-prepaid-box" style="display:none;">
+                <div class="cf-month-buttons">
+                    <button class="btn-outline" type="button" data-cf-months="1" onclick="cfSetMonths(1)">1 <span data-i18n="seller.cashflow.month">tháng</span></button>
+                    <button class="btn-outline" type="button" data-cf-months="3" onclick="cfSetMonths(3)">3 <span data-i18n="seller.cashflow.month">tháng</span></button>
+                    <button class="btn-outline" type="button" data-cf-months="6" onclick="cfSetMonths(6)">6 <span data-i18n="seller.cashflow.month">tháng</span></button>
+                    <button class="btn-outline" type="button" data-cf-months="12" onclick="cfSetMonths(12)">12 <span data-i18n="seller.cashflow.month">tháng</span></button>
+                </div>
+                <div class="form-group">
+                    <label for="cfExpStart" data-i18n="seller.cashflow.field_prepaid_start">Bắt đầu tính từ ngày</label>
+                    <input id="cfExpStart" type="date" onchange="cfUpdatePreview()">
+                    <small data-i18n="seller.cashflow.field_prepaid_start_hint">Để nguyên nếu khoản này phục vụ từ đúng ngày chi. Đổi lại nếu bạn đang trả tiền của tháng trước.</small>
+                </div>
+                <p id="cfExpPrepaidPreview" class="cf-preview"></p>
+            </div>
+
+            <div class="form-group">
+                <label for="cfExpNote" data-i18n="seller.fields.note">Ghi chú</label>
+                <textarea id="cfExpNote" rows="2"></textarea>
+                <small id="cfExpNoteHint"></small>
+            </div>
+
+            <div class="purchase-modal-actions">
+                <button class="btn-outline" type="button" onclick="cfCloseExpenseForm()" data-i18n="common.cancel">Hủy</button>
+                <button id="cfExpenseSubmit" type="button" onclick="cfSubmitExpense()"><i class="ph ph-check-circle"></i> <span data-i18n="seller.cashflow.save_expense">Lưu khoản chi</span></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- K1: mẫu chi phí cố định + loại chi phí -->
+    <div id="cfSettingsModal" class="purchase-modal-overlay" style="display:none;">
+        <div class="purchase-modal purchase-modal-wide">
+            <div class="purchase-modal-heading">
+                <div>
+                    <h3 data-i18n="seller.cashflow.settings_title">Chi phí cố định và loại chi phí</h3>
+                    <p data-i18n="seller.cashflow.settings_hint">Khai một lần, mỗi tháng hệ thống nhắc bạn ghi. Không tự trừ tiền — bạn vẫn phải bấm xác nhận.</p>
+                </div>
+                <button class="btn-outline" type="button" onclick="cfCloseSettings()" aria-label="Close"><i class="ph ph-x"></i></button>
+            </div>
+
+            <h4 data-i18n="seller.cashflow.templates_title">Chi phí lặp hàng tháng</h4>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th data-i18n="seller.cashflow.col_template">Khoản</th>
+                            <th data-i18n="seller.cashflow.col_category">Loại</th>
+                            <th data-i18n="seller.cashflow.col_amount">Số tiền/tháng</th>
+                            <th data-i18n="seller.cashflow.col_day">Ngày trong tháng</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="cfTemplateRows"></tbody>
+                </table>
+            </div>
+
+            <div class="cf-inline-form">
+                <div class="form-group">
+                    <label for="cfTplName" data-i18n="seller.cashflow.field_template_name">Tên khoản</label>
+                    <input id="cfTplName" type="text" placeholder="Tiền thuê mặt bằng">
+                </div>
+                <div class="form-group">
+                    <label for="cfTplCategory" data-i18n="seller.cashflow.field_category">Loại chi phí</label>
+                    <select id="cfTplCategory"></select>
+                </div>
+                <div class="form-group">
+                    <label for="cfTplAmount" data-i18n="seller.cashflow.field_amount">Số tiền/tháng</label>
+                    <input id="cfTplAmount" type="text" inputmode="numeric" autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="cfTplDay" data-i18n="seller.cashflow.col_day">Ngày trong tháng</label>
+                    <input id="cfTplDay" type="number" min="1" max="31" value="5">
+                </div>
+                <button type="button" onclick="cfAddTemplate()"><i class="ph ph-plus"></i> <span data-i18n="common.add">Thêm</span></button>
+            </div>
+
+            <h4 data-i18n="seller.cashflow.categories_title">Loại chi phí</h4>
+            <p class="cf-muted" data-i18n="seller.cashflow.categories_hint">Loại đã có khoản chi chỉ ẩn được, không xóa — xóa là báo cáo tháng trước mất tên loại.</p>
+            <div id="cfCategoryChips" class="cf-chips"></div>
+            <div class="cf-inline-form">
+                <div class="form-group">
+                    <label for="cfNewCategory" data-i18n="seller.cashflow.field_new_category">Thêm loại mới</label>
+                    <input id="cfNewCategory" type="text" placeholder="Ví dụ: Thuê kho">
+                </div>
+                <button type="button" onclick="cfAddCategory()"><i class="ph ph-plus"></i> <span data-i18n="common.add">Thêm</span></button>
+            </div>
+
+            <div class="purchase-modal-actions">
+                <button class="btn-outline" type="button" onclick="cfCloseSettings()" data-i18n="common.close">Đóng</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260807-nha-cung-cap-ui-f9"></script>
+    <script src="/js/locales/seller.js?v=20260808-dong-tien-k1"></script>
     <script src="/js/locales/subscriptions.js?v=20260807-goi-cuoc-f3"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260807-admin-nhap-hang"></script>
@@ -1778,8 +2012,11 @@
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260807-goi-cuoc-f2"></script>
+    <script src="/js/seller.js?v=20260808-dong-tien-k1"></script>
     <script src="/js/purchasing.js?v=20260807-nha-cung-cap-ui-f9"></script>
+    <!-- Nạp SAU seller.js: expenses.js dùng apiCall/showToast/showCustomConfirm
+         và các helper định dạng tiền của trang. -->
+    <script src="/js/expenses.js?v=20260808-dong-tien-k1"></script>
     <script src="/js/subscriptions.js?v=20260807-goi-cuoc-f3"></script>
     <script src="/js/pwa.js?v=20260806-pwa"></script>
 </body>

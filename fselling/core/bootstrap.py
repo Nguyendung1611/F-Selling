@@ -302,6 +302,33 @@ _MIGRATIONS = [
     # đúng ở "Ai Làm Gì" của shop đó mà không lẫn dữ liệu shop khác.
     "ALTER TABLE system_logs ADD COLUMN shop_id INTEGER",
     "CREATE INDEX IF NOT EXISTS ix_system_logs_shop_id ON system_logs(shop_id)",
+    # K1: chi phí vận hành + lãi ròng + dòng tiền. Ba bảng mới do create_all()
+    # tạo; khai lại mọi khóa để DB cũ hoặc lần khởi động lỗi dở tự chữa được.
+    # CỐ Ý không backfill gì: shop cũ bắt đầu với sổ chi phí rỗng, và lãi ròng
+    # bằng đúng lãi gộp cho tới khi chủ shop khai khoản đầu tiên. Đoán chi phí
+    # quá khứ là bịa ra một con số lỗ mà không ai kiểm chứng được.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_expense_categories_shop_name "
+    "ON expense_categories(shop_id, name)",
+    "CREATE INDEX IF NOT EXISTS ix_expense_categories_shop_active "
+    "ON expense_categories(shop_id, is_active)",
+    "CREATE INDEX IF NOT EXISTS ix_expense_templates_shop_active "
+    "ON expense_templates(shop_id, is_active)",
+    "CREATE INDEX IF NOT EXISTS ix_expense_templates_category_id "
+    "ON expense_templates(category_id)",
+    "CREATE INDEX IF NOT EXISTS ix_operating_expenses_shop_date "
+    "ON operating_expenses(shop_id, expense_date)",
+    "CREATE INDEX IF NOT EXISTS ix_operating_expenses_shop_amortize "
+    "ON operating_expenses(shop_id, amortize_start_date, amortize_end_date)",
+    "CREATE INDEX IF NOT EXISTS ix_operating_expenses_category_id "
+    "ON operating_expenses(category_id)",
+    "CREATE INDEX IF NOT EXISTS ix_operating_expenses_template_id "
+    "ON operating_expenses(template_id)",
+    "CREATE INDEX IF NOT EXISTS ix_operating_expenses_shift_id "
+    "ON operating_expenses(shift_id)",
+    # Bấm hai lần là trừ két hai lần. Cùng lớp bảo vệ với phiếu hủy hàng và
+    # trả nhà cung cấp, nên index này nằm trong nhóm financial fail-fast.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_operating_expenses_idempotency_key "
+    "ON operating_expenses(idempotency_key)",
 ]
 
 # Các index bắt buộc phải tồn tại sau khi migrate. `run_migrations` cố tình nuốt
@@ -336,6 +363,8 @@ _REQUIRED_INDEXES = [
     "ux_subscription_checkouts_operation_id",
     "ux_subscription_checkouts_one_open_per_shop",
     "ux_subscription_payments_idempotency_key",
+    "ux_expense_categories_shop_name",
+    "ux_operating_expenses_idempotency_key",
 ]
 
 # Thiếu/sai một index trong nhóm này thì tiếp tục chạy có thể nhân đôi tiền,
@@ -443,6 +472,11 @@ _FINANCIAL_INDEX_SPECS = {
     ),
     "ux_subscription_payments_idempotency_key": (
         "subscription_payments",
+        ("idempotency_key",),
+        None,
+    ),
+    "ux_operating_expenses_idempotency_key": (
+        "operating_expenses",
         ("idempotency_key",),
         None,
     ),

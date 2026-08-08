@@ -145,6 +145,25 @@ ROUTES_BO_SUNG = {
     ("POST", "/api/admin/subscriptions/{shop_id}/gifts"),
     ("POST", "/api/admin/subscriptions/grants/{grant_id}/revoke"),
     ("GET", "/api/admin/subscription-payments"),
+    # K1: chi phí vận hành + lãi ròng + dòng tiền. Ba tiền tố tách riêng để id
+    # danh mục / id khoản chi không bao giờ rơi vào cùng khuôn với shop_id.
+    # Danh mục CỐ Ý không có DELETE: SQLite production không bật khóa ngoại nên
+    # xóa một danh mục đang dùng chỉ để lại báo cáo cũ trỏ vào hư không.
+    ("GET", "/api/expense-categories/{shop_id}"),
+    ("POST", "/api/expense-categories/{shop_id}"),
+    ("PUT", "/api/expense-categories/{shop_id}/{category_id}"),
+    ("GET", "/api/expense-templates/{shop_id}"),
+    ("POST", "/api/expense-templates/{shop_id}"),
+    ("PUT", "/api/expense-templates/{shop_id}/{template_id}"),
+    ("GET", "/api/expense-reminders/{shop_id}"),
+    ("GET", "/api/expenses/{shop_id}"),
+    ("POST", "/api/expenses/{shop_id}"),
+    # Gỡ khoản ghi nhầm. KHÔNG phải DELETE: khoản đã rút tiền từ ca bị từ chối,
+    # và dòng vẫn được giữ lại để truy được ai gỡ.
+    ("POST", "/api/expenses/{shop_id}/{expense_id}/void"),
+    # Lợi nhuận ròng + dòng tiền thực. Khác /api/stats/{shop_id}: màn đó dừng ở
+    # lãi gộp và MANAGER xem được, còn màn này chỉ chủ shop/ADMIN.
+    ("GET", "/api/reports/cashflow/{shop_id}"),
 }
 
 
