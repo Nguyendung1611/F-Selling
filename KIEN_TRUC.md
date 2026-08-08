@@ -1305,6 +1305,46 @@ PERMISSION_REPORT — biết lãi ròng là suy ngược ra được giá vốn,
 viên không phải thứ để nhân viên khác đọc. Nhập chi phí là Free; chỉ xem báo cáo
 quá 31 ngày mới cần Pro, đúng cùng chính sách với báo cáo hiện có.
 
+### 35. Dự báo nhập hàng đếm khác báo cáo doanh thu, và đó là CỐ Ý
+
+`forecast_service` trả lời câu hỏi "hàng rời kệ nhanh cỡ nào", không phải "thu
+được bao nhiêu tiền". Hai câu hỏi khác nhau nên hai bộ lọc khác nhau:
+
+| | Đếm đơn nào |
+|---|---|
+| Báo cáo doanh thu | chỉ `PAID` |
+| Tốc độ bán (dự báo) | mọi đơn **trừ** `CANCELLED` |
+
+Bán ghi nợ (`DEBT`) và đơn chờ chuyển khoản (`PENDING`) đều đã trừ kho và khách
+đã cầm hàng về — kệ trống y như đơn đã trả tiền. Chỉ `CANCELLED` được hoàn tồn
+kho, nên chỉ nó bị loại. Ai "sửa cho thống nhất" thành `PAID`-only sẽ làm dự báo
+thiếu đúng bằng phần bán nợ, và cửa hàng cháy hàng mà không hiểu vì sao.
+
+**Ba chỗ khác dễ tính sai, đã có test giữ:**
+
+**Mẫu số luôn là đủ 30 ngày**, kể cả ngày không bán được món nào. Chia cho "số
+ngày CÓ bán" là mọi mặt hàng bỗng thành hàng bán chạy cần nhập gấp. Bù lại phải
+nói ra khi dữ liệu mỏng: `so_ngay_co_ban` và `du_lieu_yeu` có mặt để giao diện
+gắn dấu sao, thay vì để chủ shop tin một con số dựng trên đúng một ngày bán.
+
+**Tồn dùng để dự báo là `ton_kha_dung`, không phải `Product.stock`** (mục 21).
+Tính cả hàng hết hạn là báo "còn nhiều, khỏi nhập" trong khi kệ toàn hàng sắp
+phải hủy — sai theo đúng hướng làm người xem yên tâm.
+
+**Mốc cắt ngày phải KHỚP với `report_service`.** `forecast_service` giữ bản sao
+`_dau_ngay_vn_sang_utc` của riêng nó (hai service không nên gọi hàm `_` của
+nhau), nên có `test_moc_gio_khop_voi_report_service` ghim hai chỗ lại. Lệch nhau
+là màn Dự Báo và màn Thống Kê đếm hai khoảng thời gian khác nhau rồi đưa ra hai
+con số cho cùng một câu hỏi, và không ai biết tin cái nào.
+
+Đệm dự phòng dùng **độ lệch chuẩn của lượng bán theo ngày** nhân hệ số 1.65
+(mức phục vụ 95%), không dùng một tỷ lệ phần trăm cố định: hàng bán đều mỗi ngày
+gần như không cần đệm, hàng lúc bán 1 lúc bán 50 mới cần.
+
+Quyền: `PERMISSION_INVENTORY` hoặc `PERMISSION_REPORT` — nhân viên kho là người
+đi đặt hàng nên phải xem được, còn thu ngân thì không. Cột tiền đi theo
+`has_cost_visibility` và **bỏ hẳn khóa** khi không có quyền (mục 13).
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

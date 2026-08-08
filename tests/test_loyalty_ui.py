@@ -187,9 +187,9 @@ def test_don_giam_con_0_dong_khong_hien_qr_va_file_tinh_da_bump_cache():
     assert "qrSection" not in zero_total
     assert "/js/pos.js?v=20260806-tich-diem-offline" in pos_html
     assert "/js/locales/pos.js?v=20260806-tich-diem-offline" in pos_html
-    # K1 (Dòng Tiền) sửa cả hai file này nên chúng sang mốc mới.
-    assert "/js/seller.js?v=20260808-dong-tien-k1" in seller_html
-    assert "/js/locales/seller.js?v=20260808-dong-tien-k1" in seller_html
+    # L1 (Dự Báo Nhập Hàng) sửa cả hai file này nên chúng sang mốc mới.
+    assert "/js/seller.js?v=20260809-du-bao-nhap-hang" in seller_html
+    assert "/js/locales/seller.js?v=20260809-du-bao-nhap-hang" in seller_html
 
 
 def test_khoa_i18n_quan_trong_co_du_tieng_viet_va_tieng_anh():

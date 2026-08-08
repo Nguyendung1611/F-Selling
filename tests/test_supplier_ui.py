@@ -96,18 +96,20 @@ def test_module_nap_sau_seller_va_moi_file_dung_dung_phien_ban():
     cũ trong im lặng, không lỗi gì cả.
 
     Phiên bản được ghim CỨNG ở đây có chủ ý: sửa file thì phải sửa cả dòng này,
-    tức là phải nghĩ về chuyện cache một lần nữa. K1 (Dòng Tiền) đụng vào
-    seller.css, locales/seller.js và seller.js nên cả ba sang mốc mới;
-    purchasing.js không đổi nên giữ nguyên mốc cũ.
+    tức là phải nghĩ về chuyện cache một lần nữa. L1 (Dự Báo Nhập Hàng) chỉ đụng
+    vào locales/seller.js và seller.js nên hai file đó sang mốc mới; seller.css,
+    expenses.js và purchasing.js không đổi nên giữ nguyên mốc cũ - bump bừa cả
+    cụm là bắt người dùng tải lại vô ích.
     """
     html = _read("static/seller.html")
     purchasing_version = "20260807-nha-cung-cap-ui-f9"
     cashflow_version = "20260808-dong-tien-k1"
+    forecast_version = "20260809-du-bao-nhap-hang"
 
     expected = (
         f"/css/seller.css?v={cashflow_version}",
-        f"/js/locales/seller.js?v={cashflow_version}",
-        f"/js/seller.js?v={cashflow_version}",
+        f"/js/locales/seller.js?v={forecast_version}",
+        f"/js/seller.js?v={forecast_version}",
         f"/js/purchasing.js?v={purchasing_version}",
         f"/js/expenses.js?v={cashflow_version}",
     )
@@ -116,7 +118,7 @@ def test_module_nap_sau_seller_va_moi_file_dung_dung_phien_ban():
 
     # Hai module đều dùng apiCall/showToast/định dạng tiền của seller.js nên
     # phải nạp SAU nó, nếu không sẽ gọi hàm chưa tồn tại.
-    vi_tri_seller = html.index(f"/js/seller.js?v={cashflow_version}")
+    vi_tri_seller = html.index(f"/js/seller.js?v={forecast_version}")
     assert vi_tri_seller < html.index(f"/js/purchasing.js?v={purchasing_version}")
     assert vi_tri_seller < html.index(f"/js/expenses.js?v={cashflow_version}")
 

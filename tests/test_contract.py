@@ -164,6 +164,10 @@ ROUTES_BO_SUNG = {
     # Lợi nhuận ròng + dòng tiền thực. Khác /api/stats/{shop_id}: màn đó dừng ở
     # lãi gộp và MANAGER xem được, còn màn này chỉ chủ shop/ADMIN.
     ("GET", "/api/reports/cashflow/{shop_id}"),
+    # L1: dự báo nhập hàng. Chỉ ĐỌC và tính bằng công thức, không ghi gì và
+    # không gọi dịch vụ ngoài. Tách khỏi /api/stats vì trả lời câu hỏi khác:
+    # stats nói chuyện đã xảy ra, còn màn này nói ngày mai phải nhập bao nhiêu.
+    ("GET", "/api/forecast/{shop_id}"),
 }
 
 

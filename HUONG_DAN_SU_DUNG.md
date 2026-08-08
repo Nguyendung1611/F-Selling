@@ -268,6 +268,42 @@ Xuất kho: xuất kho làm tồn giảm mà lãi vẫn báo như cũ, tức là
 > Thao tác này **không hoàn tác được**, và lô nào chưa khai giá vốn thì phần lỗ
 > của nó không tính được — hệ thống sẽ nói rõ thay vì coi như bằng 0.
 
+### Dự báo nhập hàng (hàng nào sắp hết, nên gọi bao nhiêu)
+
+Kho hàng → tab **Dự Báo Nhập Hàng**. Máy nhìn 30 ngày bán gần nhất rồi trả lời
+ba câu: món này bán bao nhiêu một ngày, còn đủ bán mấy ngày nữa, và nên gọi về
+bao nhiêu.
+
+Hai ô chọn ở đầu màn là để bạn khai thói quen của tiệm mình:
+
+| Ô | Nghĩa | Chọn sao cho đúng |
+|---|---|---|
+| **Gọi hàng bao lâu thì về** | Từ lúc gọi điện tới lúc hàng nằm trên kệ | Nhà cung cấp giao trong ngày thì chọn 1; đặt Sài Gòn về tỉnh thì 3-5 |
+| **Nhập một lần đủ bán** | Bạn muốn một lần nhập xài được bao lâu | Nhập hàng tuần thì 7; tiền eo hẹp thì để 7, dư vốn thì 14-30 |
+
+Cột **Tình trạng** đọc từ trên xuống, gấp nhất nằm trên cùng:
+
+- **Hết sạch hàng** — đang có khách hỏi mà không còn gì để bán. Gọi ngay.
+- **Sắp cháy hàng** — sẽ hết TRƯỚC khi hàng mới kịp về. Cũng phải gọi ngay.
+- **Nên gọi hàng** — còn đủ qua đợt giao tới, nhưng gọi luôn thể cho đỡ mất công.
+- **Còn đủ** — chưa cần làm gì.
+- **Đang nằm ế** — 30 ngày qua không bán được món nào. Đây là tiền đang chôn
+  trong kho, không phải chuyện nhập hàng.
+
+Ô **Tiền cần chuẩn bị** cộng tổng số tiền cho tất cả mặt hàng cần nhập, để bạn
+biết trước phải xoay bao nhiêu. Chỉ chủ cửa hàng thấy ô này — nhân viên kho vẫn
+xem được nên gọi món gì, số lượng bao nhiêu, nhưng không thấy tiền.
+
+> **Dấu sao (\*) cạnh cột Bán/ngày** nghĩa là món đó chỉ phát sinh bán vài ngày
+> trong cả tháng, nên con số mới là gợi ý chứ chưa đủ để chắc chắn. Hàng theo
+> mùa hoặc hàng mới nhập về hay bị vậy.
+>
+> **Món chưa khai giá vốn** vẫn được gợi ý số lượng, chỉ là không tính được
+> thành tiền — hệ thống nói rõ còn bao nhiêu món như vậy thay vì coi như 0đ.
+>
+> Cột "Gọi cho ai" lấy từ **phiếu nhập gần nhất** của món đó. Chưa từng tạo
+> phiếu nhập ở tab Nhập Hàng thì ô này còn trống.
+
 ### Dòng tiền và lợi nhuận ròng
 
 Tab **Dòng Tiền** (chỉ chủ cửa hàng thấy) trả lời câu "cuối tháng túi tôi còn

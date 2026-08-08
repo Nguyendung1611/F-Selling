@@ -1636,12 +1636,14 @@ function switchWarehouseSubTab(subTab) {
         products: 'whSubTabProds',
         categories: 'whSubTabCats',
         expiry: 'whSubTabExpiry',
+        forecast: 'whSubTabForecast',
         writeoff: 'whSubTabWriteOff'
     };
     const khoi = {
         products: ['warehouseProductsSection', 'grid'],
         categories: ['warehouseCategoriesSection', 'grid'],
         expiry: ['warehouseExpirySection', 'block'],
+        forecast: ['warehouseForecastSection', 'block'],
         writeoff: ['warehouseWriteOffSection', 'block']
     };
     // Nhân viên gọi thẳng switchWarehouseSubTab('writeoff') từ console vẫn không
@@ -1659,7 +1661,136 @@ function switchWarehouseSubTab(subTab) {
     });
 
     if (subTab === 'expiry') loadHanSuDung();
+    if (subTab === 'forecast') loadDuBaoNhapHang();
     if (subTab === 'writeoff') loadPhieuHuy();
+}
+
+// ===== L1: dự báo nhập hàng =====
+
+let duBaoRequestId = 0;
+// Giữ lại kết quả vừa vẽ để đổi ngôn ngữ không phải gọi lại server. Có kèm
+// shopId vì đổi shop xong mới đổi ngôn ngữ là vẽ số của shop cũ lên màn shop
+// mới - lỗi im lặng, nhìn vẫn ra một bảng đầy đủ.
+let duBaoCache = null;
+
+/** Màu và nhãn của từng tình trạng. Trạng thái lạ (backend thêm sau) vẫn hiện
+ *  được chuỗi thô chứ không làm vỡ bảng. */
+const NHAN_DU_BAO = {
+    HET_HANG:  { mau: '#B91C1C', khoa: 'seller.forecast.state_out' },
+    NGUY_CAP:  { mau: '#B45309', khoa: 'seller.forecast.state_critical' },
+    CAN_NHAP:  { mau: '#0369A1', khoa: 'seller.forecast.state_reorder' },
+    ON_DINH:   { mau: '#15803D', khoa: 'seller.forecast.state_ok' },
+    KHONG_BAN: { mau: '#64748B', khoa: 'seller.forecast.state_idle' }
+};
+
+async function loadDuBaoNhapHang() {
+    const shopId = currentShopId;
+    if (!shopId) return;
+    const lead = Number(document.getElementById('forecastLeadTime')?.value) || 3;
+    const dich = Number(document.getElementById('forecastTargetDays')?.value) || 7;
+    const requestId = ++duBaoRequestId;
+    const generation = currentShopGeneration;
+    try {
+        const d = await apiCall(
+            `/forecast/${shopId}?thoi_gian_dat_hang=${lead}&muon_du_cho=${dich}`
+        );
+        // Đổi shop giữa chừng thì kết quả cũ không được ghi đè lên màn mới.
+        if (requestId !== duBaoRequestId
+            || generation !== currentShopGeneration
+            || currentShopId !== shopId) return;
+        duBaoCache = { shopId, data: d };
+        veDuBaoNhapHang(d);
+    } catch (e) {
+        if (requestId === duBaoRequestId && currentShopId === shopId) {
+            showToast(e.message);
+        }
+    }
+}
+
+function veDuBaoNhapHang(d) {
+    const danhSach = d.danh_sach || [];
+    const soCanNhap = Number(d.so_mat_hang_can_nhap || 0);
+
+    document.getElementById('forecastNeedCount').innerText = dinhDangSoSeller(soCanNhap);
+    document.getElementById('forecastPeriod').innerText =
+        t('seller.forecast.period', { from: d.tu_ngay || '', to: d.den_ngay || '' });
+
+    // Ô tiền chỉ dựng khi server thực sự gửi số. Không có quyền xem giá vốn thì
+    // các khóa đó KHÔNG có mặt - hiện 0 ở đây là nói dối chứ không phải giấu.
+    const oTien = document.getElementById('forecastMoneyCard');
+    if (oTien) {
+        oTien.style.display = d.xem_duoc_gia_von ? '' : 'none';
+        if (d.xem_duoc_gia_von) {
+            document.getElementById('forecastTotalMoney').innerText =
+                dinhDangTienDoiSoat(Number(d.tong_tien_can_nhap || 0));
+            const thieu = Number(d.so_mat_hang_chua_khai_gia_von || 0);
+            document.getElementById('forecastMissingCost').innerText = thieu
+                ? t('seller.forecast.missing_cost', { count: dinhDangSoSeller(thieu) })
+                : '';
+        }
+    }
+
+    const badge = document.getElementById('forecastBadge');
+    if (badge) {
+        badge.innerText = soCanNhap > 99 ? '99+' : String(soCanNhap);
+        badge.style.display = soCanNhap > 0 ? 'inline-block' : 'none';
+    }
+
+    const tbody = document.getElementById('forecastList');
+    tbody.innerHTML = '';
+    if (!danhSach.length) {
+        tbody.innerHTML = `<tr><td colspan="7" style="color: var(--text-muted);">`
+            + `${escapeHtml(t('seller.forecast.empty'))}</td></tr>`;
+        return;
+    }
+
+    danhSach.forEach(r => {
+        const kieu = NHAN_DU_BAO[r.trang_thai];
+        const nhan = kieu
+            ? `<span style="color:${kieu.mau}; font-weight:700; white-space:nowrap;">`
+              + `${escapeHtml(t(kieu.khoa))}</span>`
+            : escapeHtml(r.trang_thai || '');
+
+        // "Đủ bán mấy ngày nữa" là con số chủ shop nhìn để quyết định, nên nó
+        // phải đọc ra được ngay: null nghĩa là không bán được món nào trong kỳ,
+        // chia cho 0 không ra ngày nào cả.
+        const conLai = (r.con_ban_duoc_ngay === null || r.con_ban_duoc_ngay === undefined)
+            ? '--'
+            : t('seller.forecast.days_value', { days: r.con_ban_duoc_ngay });
+
+        const nhapVe = r.can_nhap > 0
+            ? `<strong>${escapeHtml(dinhDangSoSeller(r.can_nhap))}</strong>`
+            : '--';
+
+        // Hàng theo lô: tồn khả dụng đã loại phần hết hạn, nên nói rõ tổng tồn
+        // để người xem không tưởng hệ thống đếm thiếu hàng của họ.
+        const ghiChuTon = (r.theo_lo && r.ton_tong !== r.ton_kho)
+            ? `<br><small style="color:#B45309;">`
+              + `${escapeHtml(t('seller.forecast.expired_note', { total: dinhDangSoSeller(r.ton_tong) }))}</small>`
+            : '';
+
+        const canhBaoDuLieu = r.du_lieu_yeu
+            ? ` <span title="${escapeHtml(t('seller.forecast.weak_data_title'))}" `
+              + `style="color:#B45309; cursor:help;">*</span>`
+            : '';
+
+        const ncc = r.nha_cung_cap
+            ? escapeHtml(r.nha_cung_cap.ten || '')
+              + (r.nha_cung_cap.dien_thoai
+                  ? `<br><small style="color:#64748B;">${escapeHtml(r.nha_cung_cap.dien_thoai)}</small>`
+                  : '')
+            : `<small style="color:#64748B;">${escapeHtml(t('seller.forecast.no_supplier'))}</small>`;
+
+        tbody.innerHTML += `<tr>
+            <td>${escapeHtml(r.ten || '')}</td>
+            <td>${nhan}</td>
+            <td>${escapeHtml(dinhDangSoSeller(r.ton_kho))}${ghiChuTon}</td>
+            <td>${escapeHtml(String(r.ban_moi_ngay))}${canhBaoDuLieu}</td>
+            <td style="white-space:nowrap;">${escapeHtml(conLai)}</td>
+            <td>${nhapVe}</td>
+            <td>${ncc}</td>
+        </tr>`;
+    });
 }
 
 // ===== F5: hàng sắp hết hạn và đã hết hạn =====
@@ -4725,6 +4856,9 @@ function capNhatSellerTheoNgonNgu() {
                 : 'var(--text-muted)';
         }
         capNhatLoyaltyPreview();
+    }
+    if (duBaoCache && Number(duBaoCache.shopId) === Number(currentShopId)) {
+        veDuBaoNhapHang(duBaoCache.data);
     }
     window.FSellingPurchasing?.rerender?.();
 }
