@@ -299,6 +299,7 @@
                 <i class="ph ph-warning-diamond"></i> <span data-i18n="seller.tabs.reconciliation">Cần Đối Soát</span>
                 <span id="doiSoatBadge" class="doi-soat-badge" data-i18n-aria-label="seller.reconciliation.badge_aria">0</span>
             </button>
+            <button class="tab-btn" data-main-tab="assistant" onclick="switchTab('assistant', this)"><i class="ph ph-chat-circle-dots"></i> <span data-i18n="seller.tabs.assistant">Trợ Lý</span></button>
             <button class="tab-btn" data-main-tab="warehouse" onclick="switchTab('warehouse', this)"><i class="ph ph-package"></i> <span data-i18n="seller.tabs.warehouse">Kho Hàng</span></button>
             <!-- Phiếu nhập chứa giá nhập và công nợ nên mặc định ẩn. applyRoleUI
                  chỉ mở cho chủ shop; server vẫn là lớp chặn quyền thật. -->
@@ -501,6 +502,37 @@
         </div>
 
         <!-- TAB 2: WAREHOUSE -->
+        <!-- L3: hỏi đáp báo cáo. Máy KHÔNG tự viết câu lệnh lấy dữ liệu — nó
+             chỉ chọn một báo cáo có sẵn rồi gọi lại, nên số ở đây luôn khớp với
+             số ở các màn khác. Xem bẫy 38 trong KIEN_TRUC.md. -->
+        <div id="assistant" class="tab-content glass-card">
+            <div id="assistantShopSelector" style="margin-bottom: 1.5rem;">
+                <h3 style="margin-bottom: 1rem;"><i class="ph ph-chat-circle-dots"></i> <span data-i18n="seller.assistant.title">Hỏi gì về cửa hàng cũng được</span></h3>
+                <p style="color:#64748B; font-size:0.85rem;" data-i18n="seller.assistant.subtitle">Gõ câu hỏi bằng tiếng Việt như đang nhắn tin. Trả lời lấy từ đúng các báo cáo trong app, không phải máy tự đoán.</p>
+                <div id="assistantShopList" style="display:flex; gap:1rem; flex-wrap:wrap; margin-top:1rem;"></div>
+            </div>
+
+            <div id="assistantBody" style="display:none;">
+                <div id="assistantChat" style="min-height:220px; max-height:420px; overflow-y:auto; padding:1rem; border:1px solid var(--border-color); border-radius:12px; margin-bottom:1rem;"></div>
+
+                <div id="assistantSuggestions" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.8rem;"></div>
+
+                <form id="assistantForm" onsubmit="guiCauHoi(event)" style="display:flex; gap:0.5rem;">
+                    <input
+                        id="assistantInput"
+                        type="text"
+                        maxlength="200"
+                        autocomplete="off"
+                        style="flex:1; margin-bottom:0;"
+                        data-i18n-placeholder="seller.assistant.placeholder"
+                        placeholder="Ví dụ: hôm nay bán được bao nhiêu?">
+                    <button type="submit" id="assistantSend" style="white-space:nowrap;">
+                        <i class="ph ph-paper-plane-right"></i> <span data-i18n="seller.assistant.send">Hỏi</span>
+                    </button>
+                </form>
+            </div>
+        </div>
+
         <div id="warehouse" class="tab-content glass-card">
             <div id="warehouseShopSelector" style="margin-bottom: 2rem;">
                 <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> <span data-i18n="seller.warehouse.choose_shop">Chọn Cửa Hàng Để Quản Lý Kho</span></h3>
@@ -2148,7 +2180,7 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260809-xa-hang-ton"></script>
+    <script src="/js/locales/seller.js?v=20260809-tro-ly"></script>
     <script src="/js/locales/subscriptions.js?v=20260807-goi-cuoc-f3"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260807-admin-nhap-hang"></script>
@@ -2156,7 +2188,7 @@
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260809-xa-hang-ton"></script>
+    <script src="/js/seller.js?v=20260809-tro-ly"></script>
     <script src="/js/purchasing.js?v=20260807-nha-cung-cap-ui-f9"></script>
     <!-- Nạp SAU seller.js: expenses.js dùng apiCall/showToast/showCustomConfirm
          và các helper định dạng tiền của trang. -->

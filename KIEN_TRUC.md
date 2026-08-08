@@ -1409,6 +1409,50 @@ chặn. Khác `forecast_service` (nhân viên kho xem được phần số lư�
 con số — giá sàn, mức giảm, vốn đang đọng — đều dựng từ giá vốn, nên không có
 phần nào che đi mà màn hình còn nghĩa. Cho xem mức giảm là cho suy ngược ra giá vốn.
 
+### 38. Trợ lý CHỌN báo cáo, không tự viết câu lệnh lấy dữ liệu
+
+`assistant_service` chỉ làm một việc: đọc câu hỏi tiếng Việt rồi chọn xem nên
+gọi báo cáo nào trong số các báo cáo đã có, và điền khoảng thời gian. Việc chạy
+số vẫn do `report_service` / `forecast_service` / `clearance_service` làm.
+
+**Ba lý do không cho máy tự sinh SQL** — dù đó là cách mọi bài viết về "hỏi đáp
+cơ sở dữ liệu bằng AI" đều dạy:
+
+1. **App phục vụ nhiều cửa hàng.** Gần như mọi bảng có `shop_id`. Một câu lệnh
+   quên điều kiện đó là chủ shop A đọc được doanh thu shop B. Sandbox chỉ-đọc
+   chặn được việc GHI nhưng không chặn được việc ĐỌC NHẦM.
+2. **Giá vốn có vòng người xem hẹp hơn doanh thu.** Đi qua service là đi qua
+   đúng `has_cost_visibility`; SQL tự sinh đi vòng qua hết.
+3. **Múi giờ** (mục 36). Máy không biết luật `date(created_at,'+7 hours')`, và
+   "hôm nay bán bao nhiêu" sẽ lệch 7 tiếng so với màn Thống Kê.
+
+Bộ so khớp hiện tại chạy bằng biểu thức chính quy ngay trong máy chủ: không gọi
+mạng, không tốn tiền, không gửi dữ liệu cửa hàng đi đâu, trả lời dưới 50ms.
+Muốn cắm mô hình ngôn ngữ thì chỗ duy nhất cần tới nó là khi `_doan_y_dinh()`
+trả `None`, và việc của nó cũng chỉ là **chọn một `Y_DINH_*` + khoảng ngày**,
+KHÔNG phải sinh câu lệnh. Mọi thứ sau đó giữ nguyên.
+
+**Không có nhánh "đoán đại cái gần nhất".** Câu không khớp mẫu nào thì nói
+thẳng là chưa hiểu rồi gợi ý các câu làm được. Một con số bịa ra trông y hệt một
+con số thật, và người hỏi không có cách nào biết là nó sai.
+
+**Mẫu dài phải đứng trước mẫu ngắn** trong `_MAU_THOI_GIAN` và `_MAU_Y_DINH`:
+"tuần trước" phải được thử trước "tuần", "lãi" trước "bao nhiêu tiền". Đảo thứ
+tự là câu trả lời sai mà vẫn nhìn hợp lý.
+
+**Hai loại "không được xem" xử lý khác nhau.** Không được vào shop ->
+`require_shop_access` ném 403/404 như mọi endpoint khác; trả 200 kèm câu từ chối
+lịch sự nghe thì tử tế nhưng biến một lần truy cập trái phép thành request
+"thành công" trong log. Vào được shop nhưng không được xem phần đó (nhân viên
+hỏi về lãi) -> trả lời trong khung chat, tuyệt đối không kèm con số nào.
+
+**`total_orders` và `total_revenue` đếm hai thứ khác nhau.** Cái đầu đếm MỌI
+đơn, cái sau chỉ đếm đơn đã thanh toán. Màn Thống Kê để hai ô riêng nên người
+xem thấy ngay chúng khác nhau; một câu văn dán liền hai số lại thì mất điều đó
+và đọc ra thành "bán được 1 đơn, thu về 0đ" — nghe như máy hỏng trong khi cả hai
+số đều đúng. Khi lệch nhau thì phải nói thẳng lý do (đơn còn chờ thanh toán hoặc
+đang ghi nợ).
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

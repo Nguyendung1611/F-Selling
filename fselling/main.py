@@ -22,6 +22,7 @@ from .core.config import (
 from .core.i18n import LocaleMiddleware, tr
 from .routers import (
     admin,
+    assistant,
     auth,
     categories,
     clearance,
@@ -187,6 +188,7 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
     application.include_router(reports.router)
     application.include_router(forecast.router)
     application.include_router(clearance.router)
+    application.include_router(assistant.router)
     application.include_router(admin.router)
     application.include_router(tts.router)
     application.include_router(cron.router)

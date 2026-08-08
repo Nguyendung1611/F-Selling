@@ -268,6 +268,42 @@ Xuất kho: xuất kho làm tồn giảm mà lãi vẫn báo như cũ, tức là
 > Thao tác này **không hoàn tác được**, và lô nào chưa khai giá vốn thì phần lỗ
 > của nó không tính được — hệ thống sẽ nói rõ thay vì coi như bằng 0.
 
+### Trợ lý — hỏi gì về cửa hàng cũng được
+
+Tab **Trợ Lý** ở đầu trang. Chọn cửa hàng, rồi gõ câu hỏi bằng tiếng Việt như
+đang nhắn tin. Gõ không dấu cũng hiểu.
+
+Hỏi được những nhóm này:
+
+| Bạn hỏi | Trợ lý trả lời |
+|---|---|
+| "Hôm nay bán được bao nhiêu?" | Số đơn và số tiền đã thu |
+| "So sánh tuần này với tuần trước" | Hai con số và phần trăm tăng/giảm |
+| "Sản phẩm nào sắp hết hạn?" | Danh sách lô sắp và đã hết hạn |
+| "Cần nhập hàng gì?" | Món gấp nhất và số lượng nên nhập |
+| "Hàng nào đang nằm ế?" | Món chôn vốn nhiều nhất và giá nên hạ |
+| "Tháng này lãi bao nhiêu?" | Lãi gộp (chỉ chủ cửa hàng) |
+| "Khách còn nợ bao nhiêu?" | Tổng công nợ phải thu |
+
+Đổi được khoảng thời gian trong chính câu hỏi: *hôm nay, hôm qua, tuần này,
+tuần trước, tháng này, tháng trước, 7 ngày qua…*
+
+**Ba điều nên biết:**
+
+1. **Số của trợ lý luôn khớp với số trên các màn báo cáo**, vì nó gọi lại đúng
+   những màn đó chứ không tự tính lấy. Nếu hai chỗ lệch nhau thì đó là lỗi, báo
+   ngay.
+2. **Câu nào không hiểu, nó nói thẳng là chưa hiểu** và gợi ý cách hỏi khác. Nó
+   sẽ không bao giờ đoán bừa một con số — một con số bịa ra trông y hệt số thật.
+3. **Nhân viên hỏi được, nhưng chỉ trong phạm vi quyền của họ.** Nhân viên hỏi
+   "lãi bao nhiêu" sẽ được trả lời lịch sự là không có quyền, và không kèm bất
+   kỳ con số nào.
+
+> Trợ lý **chỉ đọc**. Nó không tạo đơn, không sửa giá, không đổi tồn kho.
+>
+> Tính năng này chạy hoàn toàn trong máy chủ của bạn: không gọi dịch vụ AI nào
+> bên ngoài, không tốn phí, và dữ liệu cửa hàng không đi đâu cả.
+
 ### Dự báo nhập hàng (hàng nào sắp hết, nên gọi bao nhiêu)
 
 Kho hàng → tab **Dự Báo Nhập Hàng**. Máy nhìn 30 ngày bán gần nhất rồi trả lời

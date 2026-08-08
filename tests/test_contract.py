@@ -172,6 +172,11 @@ ROUTES_BO_SUNG = {
     # khỏi /api/forecast vì hỏi ngược lại: forecast lo hàng sắp HẾT, màn này lo
     # hàng KHÔNG ĐI. Chỉ chủ shop/ADMIN vì mọi con số đều dựng từ giá vốn.
     ("GET", "/api/clearance/{shop_id}"),
+    # L3: hỏi đáp báo cáo bằng tiếng Việt. POST chứ không GET vì câu hỏi là nội
+    # dung người dùng gõ, mà query string thì nằm lại trong lịch sử trình duyệt
+    # và log máy chủ. CHỈ ĐỌC: nó chỉ chọn một báo cáo có sẵn rồi gọi lại, không
+    # tự sinh câu lệnh và không ghi gì.
+    ("POST", "/api/assistant/{shop_id}"),
 }
 
 

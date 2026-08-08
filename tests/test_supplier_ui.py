@@ -97,7 +97,7 @@ def test_module_nap_sau_seller_va_moi_file_dung_dung_phien_ban():
 
     Phiên bản được ghim CỨNG ở đây có chủ ý: sửa file thì phải sửa cả dòng này,
     tức là phải nghĩ về chuyện cache một lần nữa. Mỗi file mang mốc của lần cuối
-    NÓ bị sửa, không phải mốc của lần phát hành gần nhất: L2 (Xả Hàng Tồn) đụng
+    NÓ bị sửa, không phải mốc của lần phát hành gần nhất: L3 (Trợ Lý) đụng
     vào cả seller.js lẫn locales/seller.js nên hai file cùng đi tiếp, còn
     seller.css, expenses.js và purchasing.js không đổi nên đứng yên. Bump bừa cả
     cụm là bắt người dùng tải lại những file không hề đổi.
@@ -105,8 +105,8 @@ def test_module_nap_sau_seller_va_moi_file_dung_dung_phien_ban():
     html = _read("static/seller.html")
     purchasing_version = "20260807-nha-cung-cap-ui-f9"
     cashflow_version = "20260808-dong-tien-k1"
-    locale_version = "20260809-xa-hang-ton"
-    seller_version = "20260809-xa-hang-ton"
+    locale_version = "20260809-tro-ly"
+    seller_version = "20260809-tro-ly"
 
     expected = (
         f"/css/seller.css?v={cashflow_version}",

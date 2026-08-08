@@ -232,6 +232,7 @@ function switchTab(tabId, buttonEl = null) {
     const nutTab = buttonEl || document.querySelector(`.tab-btn[data-main-tab="${tabId}"]`);
     if (nutTab) nutTab.classList.add('active');
     if (tabId === 'reconciliation') loadDoiSoat();
+    if (tabId === 'assistant') moTroLy();
     if (tabId === 'nhatky') loadNhatKy();
     // Nạp lô mỗi lần MỞ tab chứ không nạp một lần lúc khởi động: hàng nhập vào
     // giữa buổi phải đếm được, và số lượng của lô là thứ thay đổi liên tục.
@@ -341,6 +342,16 @@ function renderShopSelectors() {
             btn2.innerText = s.name;
             btn2.onclick = () => changeShop(s.id);
             whList.appendChild(btn2);
+        }
+
+        // Trợ lý
+            const troLyList = document.getElementById('assistantShopList');
+        if (troLyList) {
+            const btnTroLy = document.createElement('button');
+            btnTroLy.className = currentShopId === s.id ? 'btn-primary' : 'btn-outline';
+            btnTroLy.innerText = s.name;
+            btnTroLy.onclick = () => { changeShop(s.id); moTroLy(); };
+            troLyList.appendChild(btnTroLy);
         }
 
         // Kiểm kê
@@ -1670,6 +1681,109 @@ function switchWarehouseSubTab(subTab) {
     if (subTab === 'forecast') loadDuBaoNhapHang();
     if (subTab === 'clearance') loadXaHangTon();
     if (subTab === 'writeoff') loadPhieuHuy();
+}
+
+// ===== L3: trợ lý hỏi đáp =====
+
+let troLyDangHoi = false;
+
+function moTroLy() {
+    const than = document.getElementById('assistantBody');
+    const chonShop = document.getElementById('assistantShopSelector');
+    if (!than) return;
+    // Chưa chọn shop thì chỉ hiện danh sách shop. Hỏi "hôm nay bán bao nhiêu"
+    // khi chưa biết hỏi về cửa hàng nào là câu hỏi không có câu trả lời.
+    const daChon = Boolean(currentShopId);
+    than.style.display = daChon ? '' : 'none';
+    if (chonShop) chonShop.style.display = '';
+    if (!daChon) return;
+
+    const khungChat = document.getElementById('assistantChat');
+    if (khungChat && !khungChat.dataset.daChao) {
+        khungChat.dataset.daChao = '1';
+        themBongChat('may', t('seller.assistant.greeting'));
+    }
+    veGoiY();
+}
+
+function veGoiY(danhSach = null) {
+    const o = document.getElementById('assistantSuggestions');
+    if (!o) return;
+    const goiY = danhSach || [
+        t('seller.assistant.sample_today'),
+        t('seller.assistant.sample_compare'),
+        t('seller.assistant.sample_expiry'),
+        t('seller.assistant.sample_reorder'),
+        t('seller.assistant.sample_idle')
+    ];
+    o.innerHTML = '';
+    goiY.forEach(cau => {
+        const nut = document.createElement('button');
+        nut.type = 'button';
+        nut.className = 'btn-outline';
+        nut.style.cssText = 'padding:0.3rem 0.7rem; font-size:0.8rem;';
+        nut.innerText = cau;
+        nut.onclick = () => {
+            document.getElementById('assistantInput').value = cau;
+            guiCauHoi();
+        };
+        o.appendChild(nut);
+    });
+}
+
+/** Một bong bóng chat. `ben` = 'nguoi' | 'may'. */
+function themBongChat(ben, chu, phuChu = '') {
+    const khung = document.getElementById('assistantChat');
+    if (!khung) return null;
+    const cuaNguoi = ben === 'nguoi';
+    const bong = document.createElement('div');
+    bong.style.cssText = `margin-bottom:0.8rem; display:flex; `
+        + `justify-content:${cuaNguoi ? 'flex-end' : 'flex-start'};`;
+    bong.innerHTML = `<div style="max-width:80%; padding:0.6rem 0.9rem; border-radius:14px;`
+        + `background:${cuaNguoi ? 'var(--primary)' : 'rgba(127,127,127,0.14)'};`
+        + `color:${cuaNguoi ? '#fff' : 'inherit'};">`
+        + `${escapeHtml(chu)}`
+        + (phuChu ? `<div style="font-size:0.72rem; opacity:0.7; margin-top:0.3rem;">${escapeHtml(phuChu)}</div>` : '')
+        + `</div>`;
+    khung.appendChild(bong);
+    khung.scrollTop = khung.scrollHeight;
+    return bong;
+}
+
+async function guiCauHoi(bienCo) {
+    if (bienCo) bienCo.preventDefault();
+    const o = document.getElementById('assistantInput');
+    const cau = (o?.value || '').trim();
+    if (!cau || !currentShopId) return;
+    // Chặn bấm hai lần: câu hỏi thứ hai gửi đè lên câu thứ nhất sẽ làm hai câu
+    // trả lời về lộn xộn, và người dùng không biết cái nào trả lời cái nào.
+    if (troLyDangHoi) return;
+
+    const shopId = currentShopId;
+    troLyDangHoi = true;
+    document.getElementById('assistantSend').disabled = true;
+    themBongChat('nguoi', cau);
+    o.value = '';
+    const dangGo = themBongChat('may', t('seller.assistant.thinking'));
+
+    try {
+        const d = await apiCall(`/assistant/${shopId}`, 'POST', { cau_hoi: cau });
+        // Đổi cửa hàng giữa chừng thì câu trả lời cũ không được hiện lên nữa:
+        // nó là số của cửa hàng khác.
+        if (currentShopId !== shopId) { dangGo?.remove(); return; }
+        dangGo?.remove();
+        themBongChat('may', d.tra_loi, d.nguon ? t('seller.assistant.source', { name: d.nguon }) : '');
+        if (d.goi_y && d.goi_y.length) veGoiY(d.goi_y);
+        else veGoiY();
+    } catch (e) {
+        dangGo?.remove();
+        themBongChat('may', e.message || t('seller.assistant.error'));
+    } finally {
+        troLyDangHoi = false;
+        const nut = document.getElementById('assistantSend');
+        if (nut) nut.disabled = false;
+        o?.focus();
+    }
 }
 
 // ===== L2: xả hàng tồn =====
