@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core import thoi_gian
 from ..core.i18n import tr
 from ..dependencies import (
     PERMISSION_SALE,
@@ -31,7 +32,10 @@ def is_expired(voucher: models.Voucher, today: Optional[date] = None) -> bool:
         expiry = datetime.strptime(raw, "%Y-%m-%d").date()
     except ValueError:
         return False
-    return (today or date.today()) > expiry
+    # `date.today()` đọc theo múi giờ của MÁY chạy app: đúng trên máy dev ở Việt
+    # Nam, sai ngay khi deploy (container mặc định UTC) - voucher sống thêm 7
+    # tiếng so với ngày ghi trên giao diện.
+    return (today or thoi_gian.hom_nay_vn()) > expiry
 
 
 def is_usage_exhausted(voucher: models.Voucher) -> bool:

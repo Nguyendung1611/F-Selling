@@ -12,6 +12,7 @@ from conftest import (
 )
 
 from fselling import models
+from fselling.core import thoi_gian
 from fselling.core.database import SessionLocal
 from fselling.services import forecast_service, report_service
 
@@ -192,11 +193,12 @@ def test_hang_het_han_khong_duoc_tinh_la_con_ban_duoc(client):
     prod = create_product(client, token, shop_id, "Sữa tươi", 30000, 0, cat_id)
     ctx = {"shop_id": shop_id, "token": token}
 
-    # Lùi hẳn 3 ngày chứ không phải 1: `inventory_service._hom_nay()` so hạn
-    # theo ngày UTC, nên "hôm qua" giờ Việt Nam có lúc vẫn là "hôm nay" UTC và
-    # test sẽ đỏ/xanh tùy giờ chạy.
-    da_het_han = (date.today() - timedelta(days=3)).isoformat()
-    sang_nam = (date.today() + timedelta(days=300)).isoformat()
+    # Lấy ngày từ `core.thoi_gian` chứ không phải `date.today()`: hạn sử dụng
+    # được so theo ngày nghiệp vụ Việt Nam, còn `date.today()` đọc theo múi giờ
+    # của máy chạy test (bẫy 36).
+    hom_nay = thoi_gian.hom_nay_vn()
+    da_het_han = (hom_nay - timedelta(days=1)).isoformat()
+    sang_nam = (hom_nay + timedelta(days=300)).isoformat()
     session = SessionLocal()
     try:
         p = session.query(models.Product).filter(models.Product.id == prod["id"]).first()

@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core import thoi_gian
 from ..core.i18n import tr
 from ..schemas.order import OrderItemCreate
 
@@ -121,7 +122,14 @@ def resolve_items(
 
 
 def _hom_nay() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%d")
+    """Ngày nghiệp vụ Việt Nam.
+
+    TRƯỚC ĐÂY dùng `datetime.utcnow()`: từ 0h đến 7h sáng giờ Việt Nam, máy vẫn
+    tưởng còn là hôm qua nên hàng đã quá hạn vẫn bán được thêm 7 tiếng. Phải
+    dùng chung nguồn với `write_off_service` và `catalog_service`, nếu không sẽ
+    có khoảng thời gian một lô vừa không bán được vừa chưa được phép hủy.
+    """
+    return thoi_gian.hom_nay_vn_str()
 
 
 def lo_con_ban_duoc(db: Session, product_id: int):

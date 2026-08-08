@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core import thoi_gian
 from ..core.i18n import tr
 from ..dependencies import require_cost_visibility, require_shop_access
 from ..schemas.catalog import WriteOffCreate
@@ -352,7 +353,9 @@ def de_xuat_huy_het_han(
     shop = require_shop_access(db, shop_id, current_user)
     require_cost_visibility(shop, current_user)
 
-    hom_nay = datetime.utcnow().strftime("%Y-%m-%d")
+    # Phải là ĐÚNG cái "hôm nay" mà inventory_service dùng để loại hàng quá hạn
+    # khỏi tồn bán được. Lệch nhau là có lô không bán được mà cũng không hủy được.
+    hom_nay = thoi_gian.hom_nay_vn_str()
     lo = (
         db.query(models.ProductBatch)
         .filter(

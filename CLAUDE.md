@@ -94,6 +94,10 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
 
 **Database**
 
+- **"Hôm nay là ngày mấy" chỉ được hỏi ở `core/thoi_gian.py`.** `utcnow()` lệch
+  7 tiếng, `date.today()` đổi theo múi giờ máy deploy. Hàng còn bán được, hàng
+  được phép hủy và màn cảnh báo hạn phải dùng **chung một mốc** — lệch nhau là
+  có lô vừa không bán được vừa chưa hủy được. Xem bẫy 36 trong `KIEN_TRUC.md`.
 - `run_migrations()` **cố ý nuốt mọi lỗi** để chạy lặp lại được. Nên thêm unique
   index thì phải khai vào `_REQUIRED_INDEXES`, nếu không lệnh tạo index thất bại
   sẽ trôi qua im lặng và ràng buộc bị hổng mà không ai biết.
@@ -205,7 +209,7 @@ lỗi giúp. Bộ test chạy ở máy là lưới an toàn duy nhất — càng
 
 | File | Nội dung |
 |---|---|
-| `KIEN_TRUC.md` | Kiến trúc + 35 bẫy khi viết service. **Đọc trước khi sửa backend** |
+| `KIEN_TRUC.md` | Kiến trúc + 36 bẫy khi viết service. **Đọc trước khi sửa backend** |
 | `QUY_TRINH_LAM_VIEC.md` | Quy trình sửa → test → nhìn thử → commit → push |
 | `HUONG_DAN_SU_DUNG.md` | Hướng dẫn cho người dùng cuối |
 | `DEPLOY_FLY.md` | Deploy lên Fly.io (xem cảnh báo secret ở trên) |

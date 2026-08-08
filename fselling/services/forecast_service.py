@@ -29,6 +29,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core import thoi_gian
 from ..dependencies import (
     PERMISSION_INVENTORY,
     PERMISSION_REPORT,
@@ -74,19 +75,19 @@ _TRANG_THAI_KHONG_TINH = (order_service.STATUS_CANCELLED,)
 
 
 def _hom_nay_vn() -> date:
-    return datetime.now(_VIETNAM_TZ).date()
+    return thoi_gian.hom_nay_vn()
 
 
 def _dau_ngay_vn_sang_utc(ngay: date) -> datetime:
     """00:00 ngày Việt Nam -> UTC-naive, cùng chuẩn lưu ``created_at``.
 
-    Cùng quy ước với ``report_service._dau_ngay_viet_nam_sang_utc``. Hai chỗ
-    PHẢI cho ra cùng một kết quả, nếu không màn Dự Báo và màn Thống Kê sẽ đếm
-    hai khoảng thời gian khác nhau rồi cãi nhau về cùng một ngày. Có
-    ``test_moc_gio_khop_voi_report_service`` giữ điều đó.
+    Cùng nguồn với ``report_service._dau_ngay_viet_nam_sang_utc``: cả hai gọi
+    vào ``core.thoi_gian``. Trước đây mỗi chỗ giữ một bản sao và
+    ``test_moc_gio_khop_voi_report_service`` phải ghim chúng lại với nhau - nay
+    không còn hai bản để lệch nữa, nhưng test đó vẫn giữ để ai tách ra lần nữa
+    thì biết ngay.
     """
-    local = datetime.combine(ngay, datetime.min.time(), tzinfo=_VIETNAM_TZ)
-    return local.astimezone(timezone.utc).replace(tzinfo=None)
+    return thoi_gian.dau_ngay_vn_sang_utc(ngay)
 
 
 def _ngay_vn(cot):

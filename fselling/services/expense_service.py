@@ -35,6 +35,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core import thoi_gian
 from ..core.i18n import tr
 from ..dependencies import require_cost_visibility, require_shop_access
 from ..schemas.expense import (
@@ -88,7 +89,7 @@ DEFAULT_CATEGORIES = (
 
 def today_vn() -> date:
     """Ngày nghiệp vụ Việt Nam, không phụ thuộc timezone máy deploy."""
-    return datetime.now(_VIETNAM_TZ).date()
+    return thoi_gian.hom_nay_vn()
 
 
 def parse_ngay(chuoi: Optional[str], ten_truong: str) -> Optional[date]:

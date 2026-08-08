@@ -1345,6 +1345,34 @@ Quyền: `PERMISSION_INVENTORY` hoặc `PERMISSION_REPORT` — nhân viên kho l
 đi đặt hàng nên phải xem được, còn thu ngân thì không. Cột tiền đi theo
 `has_cost_visibility` và **bỏ hẳn khóa** khi không có quyền (mục 13).
 
+### 36. "Hôm nay là ngày mấy" chỉ được hỏi ở MỘT chỗ: `core/thoi_gian.py`
+
+Trước khi có file đó, câu hỏi này có **ba** câu trả lời khác nhau nằm rải trong
+services, và không ai nhận ra vì trên máy dev ở Việt Nam cả ba đều đúng:
+
+| Cách viết | Sai ở đâu |
+|---|---|
+| `datetime.utcnow().date()` | lệch 7 tiếng: từ 0h đến 7h sáng, máy vẫn tưởng còn là hôm qua |
+| `date.today()` | theo múi giờ MÁY: đúng ở máy dev, sai ngay khi deploy (container mặc định UTC) |
+| `datetime.now(VN).date()` | đúng — nhưng đã bị chép thành 3 bản sao ở 3 service |
+
+Bốn chỗ đã bị sai: `inventory_service._hom_nay` (hàng còn bán được),
+`write_off_service` (hàng được phép hủy), `catalog_service` (màn cảnh báo hạn)
+và `voucher_service.is_expired`.
+
+**Hậu quả nặng nhất không phải "lệch vài tiếng".** Nó là hai màn hình nói hai
+điều khác nhau về cùng một lô hàng. Ba chỗ đầu PHẢI dùng chung một mốc: lệch
+nhau là có lô rơi vào khe — không bán được mà cũng không hủy được, và chủ shop
+không có đường nào đưa nó ra khỏi kho.
+
+`_bay_gio()` được tách riêng để test đứng được ở một mốc cố định:
+`tests/test_ngay_nghiep_vu.py` dựng lúc 02:00 sáng giờ Việt Nam (19:00 hôm
+trước giờ UTC) rồi kiểm cả bảy chỗ cùng đổi theo. Không có nó thì lỗi này chỉ
+lộ ra trong khung 0h–7h sáng, tức là không bao giờ có ai ngồi xem.
+
+Viết service mới cần ngày hôm nay thì **gọi vào `core.thoi_gian`**, đừng viết
+lại `datetime.now(...)` — đó đúng là cách bốn bản sao lệch nhau đã ra đời.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

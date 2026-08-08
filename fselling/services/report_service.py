@@ -12,6 +12,7 @@ from sqlalchemy import and_, distinct, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from .. import models
+from ..core import thoi_gian
 from ..core.config import log_to_file
 from ..core.i18n import tr
 from ..dependencies import (
@@ -37,7 +38,7 @@ _VIETNAM_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 def _today_vietnam():
     """Ngày nghiệp vụ theo múi giờ mà giao diện và cửa hàng đang sử dụng."""
-    return datetime.now(_VIETNAM_TZ).date()
+    return thoi_gian.hom_nay_vn()
 
 
 def _paid_revenue(db: Session, shop_id: int) -> float:
@@ -71,8 +72,7 @@ def _parse_ngay(chuoi: Optional[str], ten_truong: str) -> Optional[date]:
 
 def _dau_ngay_viet_nam_sang_utc(ngay: date) -> datetime:
     """00:00 ngày Việt Nam -> UTC-naive, cùng chuẩn lưu ``created_at``."""
-    local = datetime.combine(ngay, datetime.min.time(), tzinfo=_VIETNAM_TZ)
-    return local.astimezone(timezone.utc).replace(tzinfo=None)
+    return thoi_gian.dau_ngay_vn_sang_utc(ngay)
 
 
 def _loc_khoang_ngay(

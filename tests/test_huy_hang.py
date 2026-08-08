@@ -15,12 +15,19 @@ import openpyxl
 from conftest import _unique, admin_token, auth, new_seller, new_staff, seller_with_shop
 
 from fselling import models
+from fselling.core import thoi_gian
 from fselling.core.database import SessionLocal
 from fselling.services import inventory_service
 
 
 def _ngay(cach_hom_nay: int) -> str:
-    return (datetime.utcnow() + timedelta(days=cach_hom_nay)).strftime("%Y-%m-%d")
+    """Ngày cách hôm nay N ngày, tính theo NGÀY NGHIỆP VỤ Việt Nam (bẫy 36).
+
+    Các ca ở đây đều lùi từ -1 trở đi nên bản cũ tính bằng `utcnow()` vẫn xanh,
+    nhưng giữ nguyên là để sẵn một cái bẫy: ai thêm ca `_ngay(0)` sau này sẽ
+    thấy test đỏ ngẫu nhiên trong khung 0h-7h sáng mà không hiểu vì sao.
+    """
+    return (thoi_gian.hom_nay_vn() + timedelta(days=cach_hom_nay)).isoformat()
 
 
 def _sp(product_id):

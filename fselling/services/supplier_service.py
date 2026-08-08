@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core import thoi_gian
 from ..core.i18n import tr
 from ..core.numeric_limits import MAX_SAFE_QUANTITY, MAX_SAFE_VND
 from ..dependencies import require_cost_visibility, require_shop_access
@@ -46,7 +47,7 @@ METHODS = frozenset({METHOD_CASH_SHIFT, METHOD_TRANSFER, METHOD_OUTSIDE})
 
 def _today_vn() -> str:
     """Ngày nghiệp vụ Việt Nam, không phụ thuộc timezone của máy deploy."""
-    return datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date().isoformat()
+    return thoi_gian.hom_nay_vn_str()
 
 
 def _clean(value: Optional[str], maximum: int) -> Optional[str]:

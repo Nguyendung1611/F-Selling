@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core import thoi_gian
 from ..core.config import (
     ALLOWED_IMAGE_EXTS,
     ALLOWED_IMAGE_MIMES,
@@ -707,7 +708,10 @@ def danh_sach_lo(
     require_staff_permission(current_user, PERMISSION_INVENTORY)
     xem_gia_von = has_cost_visibility(shop, current_user)
 
-    hom_nay = datetime.utcnow().date()
+    # Ngày nghiệp vụ Việt Nam, cùng nguồn với inventory_service (hàng còn bán
+    # được) và write_off_service (hàng được phép hủy). Ba chỗ này lệch nhau là
+    # có lô vừa không bán được vừa chưa hủy được.
+    hom_nay = thoi_gian.hom_nay_vn()
     moc_canh_bao = (hom_nay + timedelta(days=max(sap_het_han_trong, 0))).strftime(
         "%Y-%m-%d"
     )

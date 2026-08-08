@@ -12,11 +12,19 @@ from datetime import datetime, timedelta
 from conftest import _unique, auth, seller_with_shop
 
 from fselling import models
+from fselling.core import thoi_gian
 from fselling.core.database import SessionLocal
 
 
 def _ngay(cach_hom_nay: int) -> str:
-    return (datetime.utcnow() + timedelta(days=cach_hom_nay)).strftime("%Y-%m-%d")
+    """Ngày cách hôm nay N ngày, tính theo NGÀY NGHIỆP VỤ Việt Nam.
+
+    Trước đây tính bằng `datetime.utcnow()`. Trong khung 0h-7h sáng giờ Việt
+    Nam, UTC vẫn còn là hôm qua, nên "lô hết hạn hôm nay" của test thực ra là lô
+    đã quá hạn từ hôm qua - và `test_lo_het_han_hom_nay_van_ban_duoc` đỏ dù luật
+    "hết hạn ngày hôm nay thì dùng hết ngày hôm nay" không hề đổi (bẫy 36).
+    """
+    return (thoi_gian.hom_nay_vn() + timedelta(days=cach_hom_nay)).isoformat()
 
 
 def _sp(product_id):

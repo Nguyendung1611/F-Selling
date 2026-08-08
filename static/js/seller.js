@@ -1796,6 +1796,9 @@ function veDuBaoNhapHang(d) {
 // ===== F5: hàng sắp hết hạn và đã hết hạn =====
 
 let hanSuDungRequestId = 0;
+// Giữ kết quả vừa vẽ để đổi ngôn ngữ không phải gọi lại server. Kèm shopId vì
+// đổi shop xong mới đổi ngôn ngữ là vẽ số của shop cũ lên màn shop mới.
+let hanSuDungCache = null;
 
 async function loadHanSuDung() {
     const shopId = currentShopId;
@@ -1809,6 +1812,7 @@ async function loadHanSuDung() {
         if (requestId !== hanSuDungRequestId
             || generation !== currentShopGeneration
             || currentShopId !== shopId) return;
+        hanSuDungCache = { shopId, data: d };
         veHanSuDung(d);
     } catch (e) {
         if (requestId === hanSuDungRequestId && currentShopId === shopId) {
@@ -4856,6 +4860,9 @@ function capNhatSellerTheoNgonNgu() {
                 : 'var(--text-muted)';
         }
         capNhatLoyaltyPreview();
+    }
+    if (hanSuDungCache && Number(hanSuDungCache.shopId) === Number(currentShopId)) {
+        veHanSuDung(hanSuDungCache.data);
     }
     if (duBaoCache && Number(duBaoCache.shopId) === Number(currentShopId)) {
         veDuBaoNhapHang(duBaoCache.data);
