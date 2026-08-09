@@ -25,6 +25,12 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   `PAID`. Thiếu tiền → `UNRECONCILED`. Tiền RA (`transferType: out`, số tiền âm)
   → từ chối. Payload không có số tiền → từ chối. Đừng gộp "số tiền = 0" với
   "không có số tiền", đó là hai ca khác nhau.
+- Webhook `ORDER` có account number thì **phải khớp `Shop.bank_account_no` của
+  chính đơn** trước mọi side effect. Sai account → `ACCOUNT_MISMATCH`, không
+  `OrderPayment`, không `BANK_UNAPPLIED`, không đổi trạng thái/refund/loyalty;
+  vẫn trả HTTP 200 và đưa id vào `rejected_order_ids`. Khi so bỏ số 0 đầu.
+  Payload thiếu account number tạm giữ hành vi tương thích cũ — đây là residual
+  risk có chủ đích, không được lặng lẽ đổi provider contract trong cùng lát cắt.
 - Giao dịch bị từ chối **vẫn trả HTTP 200**. Trả 4xx/5xx thì ngân hàng retry vô
   hạn. Lý do ghi vào `SystemLog` và khóa `rejected_order_ids`.
 - Webhook **chỉ được đụng vào trạng thái trong `WEBHOOK_PAY_FROM`**, kiểm

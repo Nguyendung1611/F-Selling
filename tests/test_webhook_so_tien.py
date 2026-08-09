@@ -53,6 +53,69 @@ def _don(order_id):
         s.close()
 
 
+def _financial_snapshot(order_id):
+    """Ảnh chụp mọi side effect tiền/kho gắn với một đơn."""
+    s = SessionLocal()
+    try:
+        o = s.query(models.Order).filter(models.Order.id == order_id).one()
+        product_ids = [
+            product_id
+            for (product_id,) in s.query(models.OrderItem.product_id)
+            .filter(models.OrderItem.order_id == order_id)
+            .all()
+            if product_id is not None
+        ]
+        return {
+            "order": {
+                "status": o.status,
+                "paid_amount": o.paid_amount,
+                "cash_paid_amount": o.cash_paid_amount,
+                "bank_txn_id": o.bank_txn_id,
+                "reconciliation_reason": o.reconciliation_reason,
+                "refunded_amount": o.refunded_amount,
+                "refund_due_amount": o.refund_due_amount,
+                "refund_completed_at": o.refund_completed_at,
+                "refund_completed_by": o.refund_completed_by,
+                "refund_method": o.refund_method,
+                "refund_note": o.refund_note,
+                "refund_reference": o.refund_reference,
+                "loyalty_points_earned": o.loyalty_points_earned,
+                "loyalty_awarded_at": o.loyalty_awarded_at,
+            },
+            "payments": [
+                (
+                    p.entry_type,
+                    p.amount,
+                    p.idempotency_key,
+                    p.bank_txn_id,
+                    p.account_no,
+                    p.shift_id,
+                )
+                for p in s.query(models.OrderPayment)
+                .filter(models.OrderPayment.order_id == order_id)
+                .order_by(models.OrderPayment.id)
+                .all()
+            ],
+            "loyalty": [
+                (e.entry_type, e.points_delta, e.idempotency_key)
+                for e in s.query(models.LoyaltyPointEntry)
+                .filter(models.LoyaltyPointEntry.order_id == order_id)
+                .order_by(models.LoyaltyPointEntry.id)
+                .all()
+            ],
+            "stocks": [
+                (p.id, p.stock)
+                for p in s.query(models.Product)
+                .filter(models.Product.id.in_(product_ids))
+                .order_by(models.Product.id)
+                .all()
+            ],
+            "cash_movements": s.query(models.CashMovement).count(),
+        }
+    finally:
+        s.close()
+
+
 def _logs(action, order_id):
     s = SessionLocal()
     try:
@@ -189,26 +252,258 @@ def test_cung_mot_giao_dich_gui_lai_khong_bao_tra_trung(client, webhook_secret):
     assert _logs("WEBHOOK_TRA_TRUNG", order_id) == []
 
 
-# ---------- Sai tài khoản: chỉ cảnh báo ----------
+# ---------- Sai tài khoản: từ chối trước mọi side effect ----------
 
 
-def test_sai_tai_khoan_chi_canh_bao_khong_chan(client, webhook_secret):
+def test_sai_tai_khoan_pending_bi_tu_choi_khong_co_side_effect(
+    client, webhook_secret
+):
+    ctx, order_id = _tao_don(client)
+    before = _financial_snapshot(order_id)
+    res = _goi(client, {
+        "content": f"ORDER{order_id}", "transferAmount": TONG_TIEN,
+        "accountNumber": "9999999999", "id": "ACCOUNT-MISMATCH-PENDING",
+    })
+    assert res.status_code == 200, res.text
+    assert res.json()["order_ids"] == []
+    assert res.json()["unreconciled_order_ids"] == []
+    assert res.json()["rejected_order_ids"] == [order_id]
+    assert _trang_thai(client, ctx, order_id) == "PENDING"
+    assert _financial_snapshot(order_id) == before
+
+    logs = _logs("WEBHOOK_TU_CHOI", order_id)
+    assert len(logs) == 1
+    assert "ACCOUNT_MISMATCH" in logs[0].details
+    human_details = logs[0].details.split("(event", 1)[0]
+    assert "9999999999" not in human_details
+    assert "0123456789" not in human_details
+
+
+def test_account_shop_b_khong_duoc_ap_vao_order_shop_a(client, webhook_secret):
+    ctx_a, order_id = _tao_don(client)
+    ctx_b = seller_with_shop(client)
+
+    s = SessionLocal()
+    try:
+        shop_b = s.query(models.Shop).filter(models.Shop.id == ctx_b["shop_id"]).one()
+        shop_b.bank_account_no = "9876543210"
+        s.commit()
+    finally:
+        s.close()
+
+    before_order = _financial_snapshot(order_id)
+    res = _goi(client, {
+        "content": f"ORDER{order_id}",
+        "transferAmount": TONG_TIEN,
+        "accountNumber": "9876543210",
+        "id": "CROSS-SHOP-ACCOUNT",
+    })
+
+    assert res.status_code == 200, res.text
+    assert res.json()["rejected_order_ids"] == [order_id]
+    assert _financial_snapshot(order_id) == before_order
+
+    s = SessionLocal()
+    try:
+        product_b = (
+            s.query(models.Product)
+            .filter(models.Product.id == ctx_b["product"]["id"])
+            .one()
+        )
+        assert product_b.stock == 10
+        assert (
+            s.query(models.OrderPayment)
+            .join(models.Order)
+            .filter(models.Order.shop_id == ctx_b["shop_id"])
+            .count()
+            == 0
+        )
+    finally:
+        s.close()
+
+
+def test_sai_tai_khoan_debt_khong_tao_bank_unapplied_va_cong_no_khong_doi(
+    client, webhook_secret
+):
+    ctx = seller_with_shop(client)
+    customer = client.post(
+        f"/api/customers/{ctx['shop_id']}",
+        json={"name": "Khach no sai account", "phone": "0901234567"},
+        headers=auth(ctx["token"]),
+    ).json()
+    created = client.post(
+        f"/api/orders/{ctx['shop_id']}",
+        json={
+            "items": [{
+                "product_id": ctx["product"]["id"],
+                "price": TONG_TIEN,
+                "quantity": 1,
+            }],
+            "payment_method": "debt",
+            "customer_id": customer["id"],
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert created.status_code == 200, created.text
+    order_id = created.json()["order_id"]
+    before = _financial_snapshot(order_id)
+    receivable_before = client.get(
+        f"/api/shops/{ctx['shop_id']}/stats", headers=auth(ctx["token"])
+    ).json()["receivable_amount"]
+
+    res = _goi(client, {
+        "content": f"ORDER{order_id}",
+        "transferAmount": TONG_TIEN,
+        "accountNumber": "9999999999",
+        "id": "ACCOUNT-MISMATCH-DEBT",
+    })
+
+    assert res.status_code == 200, res.text
+    assert res.json()["rejected_order_ids"] == [order_id]
+    assert _financial_snapshot(order_id) == before
+    assert client.get(
+        f"/api/shops/{ctx['shop_id']}/stats", headers=auth(ctx["token"])
+    ).json()["receivable_amount"] == receivable_before
+
+
+@pytest.mark.parametrize("state", ["CANCELLED", "UNRECONCILED", "PAID"])
+def test_sai_tai_khoan_khong_dung_trang_thai_doi_soat_hien_tai(
+    client, webhook_secret, state
+):
+    ctx, order_id = _tao_don(client)
+    if state == "CANCELLED":
+        cancelled = client.post(
+            f"/api/orders/{order_id}/cancel", headers=auth(ctx["token"])
+        )
+        assert cancelled.status_code == 200, cancelled.text
+    elif state == "UNRECONCILED":
+        underpaid = _goi(client, {
+            "content": f"ORDER{order_id}",
+            "transferAmount": 40_000,
+            "accountNumber": "0123456789",
+            "id": f"SETUP-UNDERPAID-{order_id}",
+        })
+        assert underpaid.json()["unreconciled_order_ids"] == [order_id]
+    else:
+        paid = _goi(client, {
+            "content": f"ORDER{order_id}",
+            "transferAmount": TONG_TIEN,
+            "accountNumber": "0123456789",
+            "id": f"SETUP-PAID-{order_id}",
+        })
+        assert paid.json()["order_ids"] == [order_id]
+
+    assert _trang_thai(client, ctx, order_id) == state
+    before = _financial_snapshot(order_id)
+    res = _goi(client, {
+        "content": f"ORDER{order_id}",
+        "transferAmount": TONG_TIEN,
+        "accountNumber": "9999999999",
+        "id": f"ACCOUNT-MISMATCH-{state}-{order_id}",
+    })
+
+    assert res.status_code == 200, res.text
+    assert res.json()["rejected_order_ids"] == [order_id]
+    assert _financial_snapshot(order_id) == before
+
+
+def test_tai_khoan_khop_khi_chi_khac_so_0_dau_van_duoc_xu_ly(
+    client, webhook_secret
+):
+    ctx, order_id = _tao_don(client)
+    res = _goi(client, {
+        "content": f"ORDER{order_id}",
+        "transferAmount": TONG_TIEN,
+        "accountNumber": "000123456789",
+        "id": "LEADING-ZERO-MATCH",
+    })
+    assert res.status_code == 200, res.text
+    assert res.json()["order_ids"] == [order_id]
+    assert _trang_thai(client, ctx, order_id) == "PAID"
+
+
+def test_payload_khong_co_account_giu_hanh_vi_tuong_thich(client, webhook_secret):
+    ctx, order_id = _tao_don(client)
+    res = _goi(client, {
+        "content": f"ORDER{order_id}",
+        "transferAmount": TONG_TIEN,
+        "id": "MISSING-ACCOUNT-COMPAT",
+    })
+    assert res.status_code == 200, res.text
+    assert res.json()["order_ids"] == [order_id]
+    assert _trang_thai(client, ctx, order_id) == "PAID"
+
+
+def test_batch_mixed_account_dung_van_ap_account_sai_bi_tu_choi(
+    client, webhook_secret
+):
+    ctx, correct_order_id = _tao_don(client)
+    second = client.post(
+        f"/api/orders/{ctx['shop_id']}",
+        json={
+            "items": [{
+                "product_id": ctx["product"]["id"],
+                "price": TONG_TIEN,
+                "quantity": 1,
+            }]
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert second.status_code == 200, second.text
+    rejected_order_id = second.json()["order_id"]
+    rejected_before = _financial_snapshot(rejected_order_id)
+
+    res = _goi(client, {"data": [
+        {
+            "description": f"ORDER{correct_order_id}",
+            "amount": TONG_TIEN,
+            "accountNumber": "0123456789",
+            "tid": "BATCH-CORRECT",
+        },
+        {
+            "description": f"ORDER{rejected_order_id}",
+            "amount": TONG_TIEN,
+            "accountNumber": "9999999999",
+            "tid": "BATCH-MISMATCH",
+        },
+    ]})
+
+    assert res.status_code == 200, res.text
+    assert res.json()["order_ids"] == [correct_order_id]
+    assert res.json()["rejected_order_ids"] == [rejected_order_id]
+    assert _trang_thai(client, ctx, correct_order_id) == "PAID"
+    assert _financial_snapshot(rejected_order_id) == rejected_before
+
+
+def test_retry_sai_tai_khoan_chi_ghi_mot_system_log(client, webhook_secret):
+    _, order_id = _tao_don(client)
+    payload = {
+        "content": f"ORDER{order_id}",
+        "transferAmount": TONG_TIEN,
+        "accountNumber": "9999999999",
+        "id": "ACCOUNT-MISMATCH-RETRY",
+    }
+
+    for _ in range(3):
+        res = _goi(client, payload)
+        assert res.status_code == 200, res.text
+        assert res.json()["rejected_order_ids"] == [order_id]
+
+    logs = _logs("WEBHOOK_TU_CHOI", order_id)
+    assert len(logs) == 1
+    assert "ACCOUNT_MISMATCH" in logs[0].details
+
+
+def test_tai_khoan_khop_thi_duoc_xu_ly(client, webhook_secret):
     ctx, order_id = _tao_don(client)
     res = _goi(client, {
         "content": f"ORDER{order_id}", "transferAmount": TONG_TIEN,
-        "accountNumber": "9999999999",
-    })
-    assert _trang_thai(client, ctx, order_id) == "PAID"   # vẫn cho qua
-    assert len(_logs("WEBHOOK_KHAC_TAI_KHOAN", order_id)) == 1
-
-
-def test_tai_khoan_khop_thi_khong_canh_bao(client, webhook_secret):
-    _, order_id = _tao_don(client)
-    _goi(client, {
-        "content": f"ORDER{order_id}", "transferAmount": TONG_TIEN,
         "accountNumber": "0123456789",     # khớp SHOP_PAYLOAD trong conftest
     })
-    assert _logs("WEBHOOK_KHAC_TAI_KHOAN", order_id) == []
+    assert res.status_code == 200, res.text
+    assert res.json()["order_ids"] == [order_id]
+    assert res.json()["rejected_order_ids"] == []
+    assert _trang_thai(client, ctx, order_id) == "PAID"
 
 
 # ---------- Bộ phân tích payload ----------

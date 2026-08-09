@@ -107,6 +107,13 @@ Toàn bộ đều có test bảo vệ trong `tests/`.
    Rủi ro: nếu xuất hiện loại lỗi ngoài dự kiến, nó sẽ nổi lên thành 500
    thay vì bị nuốt im lặng - đây là chủ ý để không giấu lỗi.
 
+6. **Webhook `ORDER` chặn tiền vào sai tài khoản shop trước mọi side effect.**
+   Trước đây account mismatch chỉ sinh cảnh báo sau khi ledger/trạng thái đã
+   đổi, nên account của shop B vẫn có thể làm order shop A thành `PAID`. Nay
+   payload có account number sai bị từ chối với `ACCOUNT_MISMATCH`, không tạo
+   `OrderPayment`/`BANK_UNAPPLIED`, không đổi refund/loyalty/trạng thái và vẫn
+   trả HTTP 200. Payload thiếu account giữ tương thích cũ trong increment này.
+
 ## Bẫy cần biết khi viết service mới
 
 ### 1. Luôn `db.refresh(obj)` sau `log_system_action()` nếu còn trả object về client
@@ -203,9 +210,16 @@ Luật hiện tại:
 | Tổng nhận = tổng đơn | Tự động `PAID`, frontend xuất hóa đơn |
 | Tổng nhận > tổng đơn | `PAID/OVERPAID`, xuất hóa đơn ngay và mở khoản chờ hoàn |
 | Tiền về sau khi đơn đã hủy | `UNRECONCILED/LATE_PAYMENT`, không hồi sinh đơn; chờ hoàn |
-| Sai số tài khoản nhận | Chỉ cảnh báo, KHÔNG chặn |
+| Có account number nhưng sai tài khoản shop chứa đơn | Từ chối `ACCOUNT_MISMATCH`, không có side effect tài chính |
 
-Ba điều dễ làm sai khi sửa tiếp:
+Bốn điều dễ làm sai khi sửa tiếp:
+
+**Account mismatch phải được kiểm ngay sau khi tìm thấy order, trước cả
+`WEBHOOK_PAY_FROM`.** Nếu kiểm sau nhánh trạng thái thì tiền sai account trỏ tới
+đơn `DEBT` vẫn sinh `BANK_UNAPPLIED`; nếu kiểm trong `_apply_bank_transaction`
+thì ledger/refund/loyalty đã có thể đổi. So account sau khi bỏ số 0 đầu. Payload
+không có account number tạm giữ hành vi tương thích cũ; đây là residual risk,
+không phải bằng chứng rằng provider đã xác nhận đúng tài khoản.
 
 **Phải phân biệt "số tiền = 0" với "không có số tiền".** `GiaoDich.amount is None`
 nghĩa là payload không chứa số tiền nên không có cơ sở xác nhận; `amount == 0`
@@ -867,6 +881,11 @@ và là cỗ duy nhất không được ai canh.
 Nay hằng số được kiểm thật, ngay trong vòng lặp của `apply_webhook_payment` và
 **trước khi ghi ledger** — một khi `OrderPayment` đã vào thì tiền đã cộng và
 trạng thái đã bị suy lại từ tổng lũy kế, không lùi được nữa.
+
+Guard `ACCOUNT_MISMATCH` còn phải đứng **trước guard trạng thái này**. Một giao
+dịch sai account trỏ tới đơn `DEBT` là giao dịch bị từ chối hoàn toàn, không
+phải tiền đúng tài khoản đang chờ thu nợ; vì vậy tuyệt đối không được tạo
+`BANK_UNAPPLIED` cho nó.
 
 **Danh sách cho phép phải liệt kê ĐỦ**, không phải chỉ `PENDING`: webhook vốn xử
 lý đúng cả `UNRECONCILED` (chuyển thêm cho đơn thiếu), `CANCELLED` (tiền về sau

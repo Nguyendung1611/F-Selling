@@ -1919,6 +1919,22 @@ def apply_webhook_payment(db: Session, request_data: Dict[str, Any]) -> Dict[str
             continue
         found_any = True
 
+        configured_account = (
+            db.query(models.Shop.bank_account_no)
+            .filter(models.Shop.id == order.shop_id)
+            .scalar()
+        )
+        # Payload không có account number vẫn đi đường tương thích cũ trong
+        # increment này. Nhưng một account CÓ MẶT mà không khớp shop của chính
+        # order phải bị chặn trước MỌI side effect: kể cả WEBHOOK_PAY_FROM,
+        # BANK_UNAPPLIED, ledger thật, trạng thái, refund và loyalty.
+        if _account_mismatch(gd.account_no, configured_account):
+            _ghi_tu_choi_sai_tai_khoan(
+                db, order, gd, configured_account
+            )
+            rejected.add(gd.order_id)
+            continue
+
         # Kiểm TRƯỚC khi ghi ledger: một khi `OrderPayment` đã vào thì tiền đã
         # được cộng và trạng thái đã bị suy lại từ tổng lũy kế.
         #
@@ -1963,7 +1979,9 @@ def apply_webhook_payment(db: Session, request_data: Dict[str, Any]) -> Dict[str
             rejected.add(gd.order_id)
             continue
 
-        result = _apply_bank_transaction(db, order, gd, amount)
+        result = _apply_bank_transaction(
+            db, order, gd, amount, configured_account=configured_account
+        )
         if result == "paid":
             paid.add(gd.order_id)
             unreconciled.discard(gd.order_id)
@@ -2005,6 +2023,25 @@ def _bank_idempotency_key(gd: Any, fallback_account: Optional[str] = None) -> st
     return "bank:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _normalize_account_no(account_no: Any) -> str:
+    """Chuẩn hóa account để so khớp, giữ tương thích luật bỏ số 0 đầu."""
+    raw = str(account_no or "").strip()
+    if not raw:
+        return ""
+    return raw.lstrip("0") or "0"
+
+
+def _account_mismatch(account_no: Any, configured_account: Any) -> bool:
+    """Chỉ kết luận mismatch khi payload và shop đều có account rõ ràng.
+
+    Shop tạo mới bắt buộc có tài khoản. Nhánh cấu hình trống chỉ giữ hành vi
+    legacy, tránh tự đặt một policy mới cho dữ liệu cũ trong lát cắt P0.1 này.
+    """
+    received = _normalize_account_no(account_no)
+    configured = _normalize_account_no(configured_account)
+    return bool(received and configured and received != configured)
+
+
 def _classify_existing(order: models.Order) -> str:
     if order.status == STATUS_PAID:
         return "paid"
@@ -2044,15 +2081,15 @@ def _duplicate_or_collision(
 
 
 def _apply_bank_transaction(
-    db: Session, order: models.Order, gd: Any, amount: float
+    db: Session,
+    order: models.Order,
+    gd: Any,
+    amount: float,
+    *,
+    configured_account: Optional[str],
 ) -> str:
     """Ghi một giao dịch vào ledger rồi suy ra trạng thái từ tổng lũy kế."""
     order_id = order.id
-    configured_account = (
-        db.query(models.Shop.bank_account_no)
-        .filter(models.Shop.id == order.shop_id)
-        .scalar()
-    )
     key = _bank_idempotency_key(gd, configured_account)
     # Cùng mã thô trên CÙNG đơn vẫn là retry kể cả provider lúc retry làm rơi
     # mất account/provider. Cột này non-unique ở DB; đây chỉ là lớp tương thích.
@@ -2223,7 +2260,6 @@ def _apply_bank_transaction(
 
     if result == "paid":
         _award_loyalty_paid_order(db, order, None)
-    _add_account_warning(db, order, gd)
     db.commit()
     return result
 
@@ -2295,21 +2331,36 @@ def _ghi_tu_choi(db: Session, order_id: int, ly_do: str) -> None:
     log_system_action(db, None, "WEBHOOK_TU_CHOI", f"Order {order_id}: {ly_do}")
 
 
-def _add_account_warning(
-    db: Session, order: models.Order, gd: Any
+def _ghi_tu_choi_sai_tai_khoan(
+    db: Session,
+    order: models.Order,
+    gd: Any,
+    configured_account: Optional[str],
 ) -> None:
-    """Sai tài khoản chỉ cảnh báo trong cùng transaction, không chặn tiền."""
-    if not gd.account_no:
-        return
-    shop = db.query(models.Shop).filter(models.Shop.id == order.shop_id).first()
-    shop_account = (shop.bank_account_no or "") if shop else ""
-    if not shop_account:
-        return
-    if str(gd.account_no).lstrip("0") != shop_account.lstrip("0"):
-        _them_nhat_ky(
-            db,
-            None,
-            "WEBHOOK_KHAC_TAI_KHOAN",
-            f"Order {order.id}: tiền vào tài khoản {gd.account_no} nhưng shop khai "
-            f"{shop_account} - kiểm tra lại cấu hình",
+    """Ghi audit ACCOUNT_MISMATCH đúng một lần cho một lần chuyển/retry.
+
+    Mã sự kiện là hash idempotency, đủ để phân biệt giao dịch nhưng không ghi
+    account number hoặc raw payload vào SystemLog.
+    """
+    event_key = _bank_idempotency_key(gd, configured_account)
+    details = (
+        f"Order {order.id}: ACCOUNT_MISMATCH - tài khoản nhận không khớp "
+        f"tài khoản ngân hàng cấu hình của shop (event {event_key})"
+    )
+    exists = (
+        db.query(models.SystemLog.id)
+        .filter(
+            models.SystemLog.action == "WEBHOOK_TU_CHOI",
+            models.SystemLog.details == details,
         )
+        .first()
+    )
+    if exists:
+        return
+    log_system_action(
+        db,
+        None,
+        "WEBHOOK_TU_CHOI",
+        details,
+        shop_id=order.shop_id,
+    )
