@@ -278,3 +278,79 @@ def test_ky_tu_la_khong_lam_vo_bo_so_khop(client):
         session.query(models.Order).count()
     finally:
         session.close()
+
+
+# ---------- Thứ tự mẫu: ba ca đã hiểu SAI khi dùng thử ----------
+def test_ba_cau_tung_hieu_sai_gio_vao_dung_nhanh():
+    """Mẫu hẹp phải đứng trước mẫu rộng.
+
+    Cả ba câu này từng rơi vào nhánh sai và trả về một câu trả lời rất tự tin
+    cho câu hỏi người dùng không hề hỏi - kiểu hỏng tệ nhất, vì không có cách
+    nào nhận ra.
+    """
+    for cau, mong_doi in (
+        # "chi phí" nhưng hỏi giá GÓI CƯỚC, không phải tiền điện nước
+        ("chi phí gói cước", assistant_service.Y_DINH_SHOP),
+        # "còn bao nhiêu" nhưng hỏi TIỀN MẶT, không phải tồn kho
+        ("trong két còn bao nhiêu", assistant_service.Y_DINH_CA_TIEN),
+        # "lãi" nhưng là lãi RÒNG - con số khác hẳn lãi gộp
+        ("lãi ròng bao nhiêu", assistant_service.Y_DINH_CHI_PHI),
+        # từng bị hiểu thành hàng BÁN CHẠY
+        ("liệt kê hàng nào đắt nhất", assistant_service.Y_DINH_GIA_TON),
+    ):
+        thuc_te = assistant_service._doan_y_dinh(assistant_service._bo_dau(cau))
+        assert thuc_te == mong_doi, f"{cau!r} -> {thuc_te}, mong đợi {mong_doi}"
+
+
+def test_cau_hoi_rong_tra_ve_buc_tranh_chu_khong_mot_con_so(client):
+    """"Làm ăn ra sao" mà nhận đúng một câu "có 20 đơn" thì đúng nhưng vô dụng."""
+    ctx_full = seller_with_shop(client)
+    ctx = {"shop_id": ctx_full["shop_id"], "token": ctx_full["token"]}
+    for _ in range(3):
+        _ban(client, ctx, ctx_full["product"]["id"])
+
+    body = _hoi(client, ctx, "bữa giờ tiệm làm ăn ra sao").json()
+    assert body["y_dinh"] == assistant_service.Y_DINH_TONG_QUAN
+    # Ít nhất phải có số đơn VÀ lãi (chủ shop xem được giá vốn).
+    assert "đơn" in body["tra_loi"]
+    assert "Lãi gộp" in body["tra_loi"], body["tra_loi"]
+
+
+def test_hoi_gia_va_ton_cua_mot_mon_cu_the(client):
+    ctx_full = seller_with_shop(client)
+    ctx = {"shop_id": ctx_full["shop_id"], "token": ctx_full["token"]}
+    ten = ctx_full["product"]["name"]
+
+    body = _hoi(client, ctx, f"còn bao nhiêu {ten}").json()
+    assert body["y_dinh"] == assistant_service.Y_DINH_GIA_TON
+    assert body["chi_tiet"]["product_id"] == ctx_full["product"]["id"]
+    assert ten in body["tra_loi"]
+
+
+def test_khong_neu_ten_mon_thi_hieu_la_dat_nhat_re_nhat(client):
+    ctx_full = seller_with_shop(client)
+    ctx = {"shop_id": ctx_full["shop_id"], "token": ctx_full["token"]}
+
+    dat = _hoi(client, ctx, "hàng nào đắt nhất").json()
+    re_ = _hoi(client, ctx, "hàng nào rẻ nhất").json()
+    assert "đắt nhất" in dat["tra_loi"]
+    assert "rẻ nhất" in re_["tra_loi"]
+
+
+def test_hoi_thong_tin_shop_va_goi_cuoc(client):
+    ctx_full = seller_with_shop(client)
+    ctx = {"shop_id": ctx_full["shop_id"], "token": ctx_full["token"]}
+
+    body = _hoi(client, ctx, "chủ shop tên gì").json()
+    assert body["y_dinh"] == assistant_service.Y_DINH_SHOP
+    assert ctx_full["username"] in body["tra_loi"]
+
+
+def test_cau_hoi_tai_sao_duoc_noi_thang_la_chua_tra_loi_duoc(client):
+    """Dữ liệu không chứa lý do. Trả lời "cái gì" rồi im lặng trông như đã trả
+    lời xong."""
+    ctx_full = seller_with_shop(client)
+    ctx = {"shop_id": ctx_full["shop_id"], "token": ctx_full["token"]}
+
+    body = _hoi(client, ctx, "tại sao hàng bán chậm").json()
+    assert "chưa nói được vì sao" in body["tra_loi"], body["tra_loi"]

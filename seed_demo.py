@@ -341,6 +341,19 @@ def main() -> None:
                     f"tạo đơn ngày -{so_ngay_truoc}",
                 )
                 so_don += 1
+
+                # THU TIỀN. Tạo đơn xong nó mới ở trạng thái chờ thanh toán;
+                # app chỉ tính vào doanh thu những đơn ĐÃ trả tiền. Thiếu bước
+                # này thì bản demo có 90 đơn mà mọi báo cáo tiền đều bằng 0 -
+                # và người xem sẽ tưởng phần mềm tính sai.
+                _ok(
+                    client.post(
+                        f"/api/orders/{don['order_id']}/pay",
+                        json={"tendered_amount": don["total"]},
+                        headers=_auth(token),
+                    ),
+                    f"thu tiền đơn {don['order_id']}",
+                )
                 # Lùi ngày tạo. Trừ nguyên ngày khỏi một mốc UTC nên ngày Việt
                 # Nam lùi đúng chừng ấy ngày, không lệ thuộc giờ chạy script.
                 session = SessionLocal()

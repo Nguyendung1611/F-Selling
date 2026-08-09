@@ -49,6 +49,7 @@ from . import (
     clearance_service,
     forecast_service,
     gemini_service,
+    inventory_service,
     report_service,
     subscription_service,
 )
@@ -63,6 +64,32 @@ Y_DINH_CAN_NHAP = "CAN_NHAP"
 Y_DINH_HANG_E = "HANG_E"
 Y_DINH_CONG_NO = "CONG_NO"
 Y_DINH_LAI = "LAI"
+Y_DINH_TONG_QUAN = "TONG_QUAN"
+Y_DINH_GIA_TON = "GIA_TON"
+Y_DINH_CHI_PHI = "CHI_PHI"
+Y_DINH_SHOP = "SHOP"
+Y_DINH_CA_TIEN = "CA_TIEN"
+
+# Tên tiếng Việt của từng ý định. Dùng để NÓI RA máy đã hiểu câu hỏi thành gì,
+# mỗi khi phải nhờ AI đoán. Không có dòng này thì người hỏi "hàng nào đắt nhất"
+# nhận về số liệu hàng BÁN CHẠY mà không hề biết mình đang đọc câu trả lời của
+# một câu hỏi khác - đã xảy ra thật trong lần dùng thử đầu tiên.
+NHAN_Y_DINH = {
+    Y_DINH_DOANH_THU: "doanh thu",
+    Y_DINH_SO_DON: "số đơn hàng",
+    Y_DINH_SO_SANH_TUAN: "so sánh hai tuần",
+    Y_DINH_BAN_CHAY: "hàng bán chạy",
+    Y_DINH_SAP_HET_HAN: "hàng sắp hết hạn",
+    Y_DINH_CAN_NHAP: "hàng cần nhập thêm",
+    Y_DINH_HANG_E: "hàng đang nằm ế",
+    Y_DINH_CONG_NO: "khách còn nợ",
+    Y_DINH_LAI: "lãi",
+    Y_DINH_TONG_QUAN: "tình hình chung của cửa hàng",
+    Y_DINH_GIA_TON: "giá và tồn kho của hàng",
+    Y_DINH_CHI_PHI: "chi phí và lãi ròng",
+    Y_DINH_SHOP: "thông tin cửa hàng và gói cước",
+    Y_DINH_CA_TIEN: "ca bán hàng và tiền mặt",
+}
 
 CAU_HOI_TOI_DA = 200
 
@@ -132,21 +159,52 @@ def _khoang_ngay(cau_khong_dau: str, mac_dinh: str = "HOM_NAY") -> Tuple[str, da
 # Thứ tự QUAN TRỌNG: câu càng cụ thể càng phải đứng trước. "lãi bao nhiêu" phải
 # được thử trước "bao nhiêu tiền", nếu không nó rơi vào doanh thu.
 _MAU_Y_DINH: List[Tuple[str, str]] = [
+    # THỨ TỰ LÀ MỘT PHẦN CỦA LOGIC. Mẫu hẹp phải đứng trước mẫu rộng, nếu không
+    # câu hỏi rơi vào nhánh sai và người dùng nhận một câu trả lời rất tự tin
+    # cho câu hỏi họ không hề hỏi. Ba ca đã dính thật khi dùng thử:
+    #   "chi phí gói cước"      -> phải là GÓI CƯỚC, không phải chi phí vận hành
+    #   "trong két còn bao nhiêu" -> phải là TIỀN MẶT, không phải tồn kho
+    #   "lãi ròng"              -> phải là CHI PHÍ/lãi ròng, không phải lãi gộp
     (r"\bso sanh\b.*\btuan\b|\btuan nay.*tuan truoc\b|\btuan truoc.*tuan nay\b",
      Y_DINH_SO_SANH_TUAN),
+    # Đứng trước CHI_PHI: "chi phí gói cước" là hỏi giá gói, không phải tiền điện.
+    (r"\bchu shop\b|\bchu tiem\b|\bchu cua hang\b|\bten cua hang\b|\bten shop\b"
+     r"|\bgoi cuoc\b|\bgoi pro\b|\bgoi free\b|\bthue bao\b|\bhet han goi\b"
+     r"|\bshop cua toi\b",
+     Y_DINH_SHOP),
+    # Đứng trước GIA_TON: "trong két còn bao nhiêu" không phải hỏi tồn kho.
+    (r"\btrong ket\b|\bket con\b|\btien mat\b|\bca ban hang\b|\bca hom nay\b"
+     r"|\bmo ca\b|\bdong ca\b|\bchot ca\b",
+     Y_DINH_CA_TIEN),
+    # Đứng trước LAI: "lãi ròng" là con số khác hẳn "lãi gộp".
+    (r"\bchi phi\b|\blai rong\b|\bloi nhuan rong\b|\btieu het\b|\bchi het\b"
+     r"|\btien dien\b|\btien nuoc\b|\bthue mat bang\b|\bdong tien\b|\bchi bao nhieu\b",
+     Y_DINH_CHI_PHI),
     (r"\blai\b|\bloi nhuan\b|\blai gop\b|\blo hay lai\b", Y_DINH_LAI),
-    (r"\bsap het han\b|\bhet han\b|\bhan su dung\b|\bcan date\b", Y_DINH_SAP_HET_HAN),
-    # `\bsap het\b` đứng SAU mẫu hạn sử dụng ở trên nên "sắp hết hạn" đã được
-    # nhận ở đó rồi; ở đây nó bắt các cách nói khác thứ tự như "hàng nào sắp hết".
+    # Đứng trước nhóm doanh thu: "làm ăn ra sao" muốn một bức tranh, không phải
+    # một con số.
+    (r"\blam an\b|\btinh hinh\b|\bra sao\b|\bthe nao\b|\bon khong\b"
+     r"|\bkha khong\b|\btong quan\b|\btom tat\b|\bdao nay\b",
+     Y_DINH_TONG_QUAN),
+    (r"\bsap het han\b|\bhet han\b|\bhan su dung\b|\bcan date\b|\bhet date\b"
+     r"|\bqua date\b|\bsap hong\b|\bqua han\b",
+     Y_DINH_SAP_HET_HAN),
+    # `\bsap het\b` đứng SAU mẫu hạn sử dụng nên "sắp hết hạn" đã được nhận ở
+    # đó rồi; ở đây nó bắt cách nói khác thứ tự như "hàng nào sắp hết".
     (r"\bsap het hang\b|\bsap het\b|\bcan nhap\b|\bnhap hang\b|\bdat hang\b"
-     r"|\bhet hang\b|\bnhap gi\b|\bgoi hang\b",
+     r"|\bhet hang\b|\bnhap gi\b|\bgoi hang\b|\blay hang\b",
      Y_DINH_CAN_NHAP),
-    (r"\bban chay\b|\bban duoc nhieu nhat\b|\bton hang nao chay\b|\btop\b|\bhut hang\b",
+    (r"\bban chay\b|\bban duoc nhieu nhat\b|\btop\b|\bhut hang\b|\bdat khach\b",
      Y_DINH_BAN_CHAY),
-    (r"\be\b|\bnam e\b|\bton kho lau\b|\bkhong ai mua\b|\bkhong ban duoc\b|\bchon von\b|\bdong von\b",
+    (r"\be\b|\bnam e\b|\bton kho lau\b|\bkhong ai mua\b|\bkhong ban duoc\b"
+     r"|\bchon von\b|\bdong von\b|\bxa hang\b|\bban cham\b|\bde lau\b|\bton dong\b",
      Y_DINH_HANG_E),
     (r"\bno\b|\bcong no\b|\bkhach no\b|\bphai thu\b|\bthu no\b", Y_DINH_CONG_NO),
-    (r"\bbao nhieu don\b|\bmay don\b|\bso don\b|\bso luong don\b|\bdon hang\b", Y_DINH_SO_DON),
+    (r"\bdat nhat\b|\bre nhat\b|\bmac nhat\b|\bgia bao nhieu\b|\bgia cua\b"
+     r"|\bcon bao nhieu\b|\bton kho con\b|\bcon may cai\b|\bbao nhieu cai\b",
+     Y_DINH_GIA_TON),
+    (r"\bbao nhieu don\b|\bmay don\b|\bso don\b|\bso luong don\b|\bdon hang\b",
+     Y_DINH_SO_DON),
     (r"\bdoanh thu\b|\bban duoc bao nhieu\b|\bthu ve\b|\bthu (duoc )?bao nhieu\b"
      r"|\bban duoc\b|\bbao nhieu tien\b|\bduoc bao nhieu\b|\bkiem duoc\b|\bthu nhap\b",
      Y_DINH_DOANH_THU),
@@ -413,7 +471,10 @@ def _tra_loi_can_nhap(db, user, shop_id, cau) -> Dict[str, Any]:
                 "chi_tiet": None, "nguon": "Dự báo nhập hàng"}
     dau = can[0]
     loi = f"Có {len(can)} mặt hàng cần nhập. Gấp nhất là {dau['ten']}"
-    if dau["con_ban_duoc_ngay"] is not None:
+    # "chỉ còn đủ bán 0.0 ngày" là cách nói của máy. Hết là hết.
+    if dau["ton_kho"] <= 0:
+        loi += " (đã hết sạch hàng)"
+    elif dau["con_ban_duoc_ngay"] is not None:
         loi += f" (chỉ còn đủ bán {dau['con_ban_duoc_ngay']} ngày)"
     loi += f", nên nhập {_so(dau['can_nhap'])}."
     if d.get("tong_tien_can_nhap"):
@@ -472,6 +533,183 @@ def _tra_loi_lai(db, user, shop_id, cau) -> Dict[str, Any]:
     return {"tra_loi": loi, "chi_tiet": {"lai_gop": lai}, "nguon": "Thống kê"}
 
 
+def _tra_loi_tong_quan(db, user, shop_id, cau) -> Dict[str, Any]:
+    """Bức tranh chung, không phải một con số.
+
+    "Bữa giờ tiệm làm ăn ra sao" mà nhận đúng một câu "tuần này có 20 đơn" thì
+    đúng nhưng vô dụng - người hỏi muốn biết bán được bao nhiêu, có lãi không,
+    hơn kém kỳ trước ra sao, và có gì cần để mắt. Gom bốn thứ đó lại.
+    """
+    _, tu, den, nhan = _khoang_ngay(cau, mac_dinh="TUAN_NAY")
+    so_lieu = report_service.shop_stats(
+        db, user, shop_id, tu_ngay=tu.isoformat(), den_ngay=den.isoformat()
+    )
+    don = int(so_lieu.get("total_orders") or 0)
+    tien = float(so_lieu.get("total_revenue") or 0)
+
+    dong = []
+    if don:
+        dong.append(f"{nhan.capitalize()} có {_so(don)} đơn, thu về {_tien(tien)}.")
+    else:
+        dong.append(f"{nhan.capitalize()} chưa bán được đơn nào.")
+
+    # Lãi chỉ nói với người được xem giá vốn. Thiếu khóa = không có quyền, và ở
+    # đây bỏ qua trong im lặng thay vì báo lỗi: họ vẫn xứng đáng nhận phần còn lại.
+    if "gross_profit" in so_lieu:
+        dong.append(f"Lãi gộp khoảng {_tien(float(so_lieu['gross_profit'] or 0))}.")
+
+    # So với kỳ trước liền kề, cùng độ dài - đó mới là so sánh công bằng.
+    so_ngay = (den - tu).days + 1
+    truoc_den = tu - timedelta(days=1)
+    truoc_tu = truoc_den - timedelta(days=so_ngay - 1)
+    truoc = report_service.shop_stats(
+        db, user, shop_id,
+        tu_ngay=truoc_tu.isoformat(), den_ngay=truoc_den.isoformat(),
+    )
+    tien_truoc = float(truoc.get("total_revenue") or 0)
+    if tien_truoc > 0:
+        chenh = (tien - tien_truoc) / tien_truoc * 100
+        dong.append(
+            f"{'Tăng' if tien >= tien_truoc else 'Giảm'} {abs(chenh):.0f}% "
+            f"so với {so_ngay} ngày trước đó ({_tien(tien_truoc)})."
+        )
+
+    # Việc cần để mắt: ưu tiên hàng sắp hỏng, rồi tới hàng sắp cháy.
+    viec = []
+    try:
+        sap_het = forecast_service.du_bao_nhap_hang(db, user, shop_id)
+        gap = [
+            r for r in sap_het["danh_sach"]
+            if r["trang_thai"] in (forecast_service.TT_HET_HANG, forecast_service.TT_NGUY_CAP)
+        ]
+        if gap:
+            viec.append(f"{len(gap)} mặt hàng sắp cháy hàng (gấp nhất: {gap[0]['ten']})")
+    except HTTPException:
+        pass
+    no = float(so_lieu.get("receivable_amount") or 0)
+    if no > 0:
+        viec.append(f"khách còn nợ {_tien(no)}")
+    if viec:
+        dong.append("Cần để mắt: " + ", ".join(viec) + ".")
+
+    return {"tra_loi": " ".join(dong), "nguon": "Thống kê", "chi_tiet": {
+        "so_don": don, "doanh_thu": tien, "doanh_thu_ky_truoc": tien_truoc,
+    }}
+
+
+def _tim_san_pham(db, shop_id: int, cau_khong_dau: str):
+    """Tìm sản phẩm có tên xuất hiện trong câu hỏi.
+
+    So khớp trên bản KHÔNG DẤU và lấy tên DÀI NHẤT khớp được: "sữa tươi
+    Vinamilk 1L" phải thắng "sữa tươi" khi cả hai cùng có trong kho, nếu không
+    người hỏi món cụ thể lại nhận số của món khác.
+    """
+    ds = (
+        db.query(models.Product)
+        .filter(models.Product.shop_id == shop_id, models.Product.is_active.is_(True))
+        .all()
+    )
+    khop = [p for p in ds if _bo_dau(p.name or "") and _bo_dau(p.name) in cau_khong_dau]
+    if not khop:
+        return None
+    return max(khop, key=lambda p: len(_bo_dau(p.name)))
+
+
+def _tra_loi_gia_ton(db, user, shop_id, cau) -> Dict[str, Any]:
+    from ..dependencies import has_cost_visibility
+
+    shop = require_shop_access(db, shop_id, user)
+    prod = _tim_san_pham(db, shop_id, cau)
+
+    if prod is not None:
+        ton = inventory_service.ton_kha_dung(db, prod)
+        loi = f"{prod.name} đang bán {_tien(float(prod.price or 0))}, còn {_so(ton)} trong kho."
+        if has_cost_visibility(shop, user) and prod.cost_price is not None:
+            loi += f" Giá vốn {_tien(float(prod.cost_price))}."
+        return {"tra_loi": loi, "nguon": "Kho hàng",
+                "chi_tiet": {"product_id": prod.id, "gia": prod.price, "ton": ton}}
+
+    # Không nêu tên món nào -> hiểu là hỏi đắt nhất / rẻ nhất.
+    re_nhat = bool(re.search(r"\bre nhat\b", cau))
+    ds = (
+        db.query(models.Product)
+        .filter(models.Product.shop_id == shop_id, models.Product.is_active.is_(True))
+        .order_by(models.Product.price.asc() if re_nhat else models.Product.price.desc())
+        .limit(5)
+        .all()
+    )
+    if not ds:
+        return {"tra_loi": "Kho chưa có sản phẩm nào.", "nguon": "Kho hàng"}
+    dau = ds[0]
+    return {
+        "tra_loi": (
+            f"Hàng {'rẻ' if re_nhat else 'đắt'} nhất là {dau.name}, "
+            f"{_tien(float(dau.price or 0))}."
+        ),
+        "bang": [{"ten": p.name, "gia": p.price} for p in ds],
+        "nguon": "Kho hàng",
+    }
+
+
+def _tra_loi_chi_phi(db, user, shop_id, cau) -> Dict[str, Any]:
+    _, tu, den, nhan = _khoang_ngay(cau, mac_dinh="THANG_NAY")
+    d = report_service.net_cashflow_report(
+        db, user, shop_id, tu_ngay=tu.isoformat(), den_ngay=den.isoformat()
+    )
+    chi = float(d.get("operating_expense_total") or 0)
+    rong = float(d.get("net_profit") or 0)
+    loi = f"Chi phí vận hành {nhan} là {_tien(chi)}, lãi ròng {_tien(rong)}."
+    if rong < 0:
+        # Số âm phải đổi thành TỪ. "Bạn lãi -3.881.347đ" là câu không ai đọc được.
+        loi = f"Chi phí vận hành {nhan} là {_tien(chi)}, và bạn đang LỖ {_tien(abs(rong))}."
+    return {"tra_loi": loi, "nguon": "Dòng tiền",
+            "chi_tiet": {"chi_phi": chi, "lai_rong": rong}}
+
+
+def _tra_loi_shop(db, user, shop_id, cau) -> Dict[str, Any]:
+    from . import subscription_service
+
+    shop = require_shop_access(db, shop_id, user)
+    chu = db.get(models.User, shop.owner_id)
+    tt = subscription_service.get_subscription_state(db, shop_id)
+    goi = tt.get("plan") or "FREE"
+
+    loi = f"Cửa hàng {shop.name}"
+    if chu:
+        loi += f", chủ là {chu.username}"
+    loi += f". Đang dùng gói {goi}"
+    han = tt.get("paid_until") or tt.get("trial_ends_at")
+    if goi != "FREE" and han:
+        loi += f", tới ngày {han.strftime('%d/%m/%Y')}"
+    loi += "."
+
+    # "Chi phí gói cước" là hỏi GIÁ TIỀN. Trả về tên gói rồi dừng là trả lời
+    # một câu khác - lấy giá từ đúng bảng giá đang áp dụng, đừng chép số vào đây.
+    if re.search(r"\bchi phi\b|\bgia\b|\bbao nhieu\b|\bmat bao nhieu\b", cau):
+        gia = subscription_service.PRICE_VND
+        loi += (
+            f" Gói Pro giá {_tien(gia[subscription_service.CYCLE_MONTHLY])}/30 ngày"
+            f" hoặc {_tien(gia[subscription_service.CYCLE_YEARLY])}/365 ngày."
+        )
+    return {"tra_loi": loi, "nguon": "Gói cước",
+            "chi_tiet": {"ten_shop": shop.name, "goi": goi}}
+
+
+def _tra_loi_ca_tien(db, user, shop_id, cau) -> Dict[str, Any]:
+    from . import shift_service
+
+    d = shift_service.get_current_shift(db, user, shop_id)
+    ca = d.get("shift") if isinstance(d, dict) and "shift" in d else d
+    if not ca:
+        return {"tra_loi": "Bạn chưa mở ca bán hàng nào.", "nguon": "Ca bán hàng"}
+    du_kien = ca.get("expected_cash_amount")
+    loi = "Ca của bạn đang mở"
+    if du_kien is not None:
+        loi += f", trong két dự kiến có {_tien(float(du_kien))}"
+    loi += "."
+    return {"tra_loi": loi, "nguon": "Ca bán hàng", "chi_tiet": ca}
+
+
 _BANG_XU_LY: Dict[str, Callable] = {
     Y_DINH_DOANH_THU: lambda db, u, s, c: _tra_loi_doanh_thu(db, u, s, c),
     Y_DINH_SO_DON: lambda db, u, s, c: _tra_loi_doanh_thu(db, u, s, c, chi_dem_don=True),
@@ -482,6 +720,11 @@ _BANG_XU_LY: Dict[str, Callable] = {
     Y_DINH_HANG_E: _tra_loi_hang_e,
     Y_DINH_CONG_NO: _tra_loi_cong_no,
     Y_DINH_LAI: _tra_loi_lai,
+    Y_DINH_TONG_QUAN: _tra_loi_tong_quan,
+    Y_DINH_GIA_TON: _tra_loi_gia_ton,
+    Y_DINH_CHI_PHI: _tra_loi_chi_phi,
+    Y_DINH_SHOP: _tra_loi_shop,
+    Y_DINH_CA_TIEN: _tra_loi_ca_tien,
 }
 
 GOI_Y = [
@@ -571,6 +814,22 @@ def hoi_dap(
                 "nguon": None,
             }
         raise
+
+    if nho_gemini:
+        # NÓI RA máy đã hiểu câu hỏi thành gì. Không có dòng này thì người hỏi
+        # "hàng nào đắt nhất" nhận về số liệu hàng BÁN CHẠY mà không biết mình
+        # đang đọc câu trả lời của một câu hỏi khác - đã xảy ra thật.
+        nhan = NHAN_Y_DINH.get(y_dinh)
+        if nhan:
+            ket_qua["tra_loi"] = f"Tôi hiểu là bạn hỏi về {nhan}. " + ket_qua["tra_loi"]
+
+    # Câu hỏi "vì sao" là thứ dữ liệu không chứa. Trả lời "cái gì" rồi im lặng
+    # trông như đã trả lời xong, nên phải nói thẳng phần còn thiếu.
+    if re.search(r"\btai sao\b|\bvi sao\b|\bly do\b|\bsao lai\b", khong_dau):
+        ket_qua["tra_loi"] += (
+            " (Tôi chỉ nói được chuyện gì đang xảy ra, chưa nói được vì sao — "
+            "dữ liệu trong app không ghi lý do.)"
+        )
 
     ket_qua.update({"cau_hoi": cau, "hieu_duoc": True, "y_dinh": y_dinh})
     ket_qua.setdefault("goi_y", None)

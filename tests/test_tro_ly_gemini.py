@@ -14,7 +14,7 @@ from fselling.core import thoi_gian
 from fselling.core.database import SessionLocal
 from fselling.services import assistant_service, gemini_service, subscription_service
 
-CAU_LA = "bữa giờ tiệm làm ăn ra sao"
+CAU_LA = "kể tui nghe chuyện buôn bán"
 
 
 @pytest.fixture(autouse=True)
