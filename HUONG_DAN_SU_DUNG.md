@@ -300,9 +300,40 @@ tuần trước, tháng này, tháng trước, 7 ngày qua…*
    kỳ con số nào.
 
 > Trợ lý **chỉ đọc**. Nó không tạo đơn, không sửa giá, không đổi tồn kho.
+
+#### Cắm AI để hiểu thêm các câu hỏi lạ (tùy chọn)
+
+Mặc định trợ lý chạy **hoàn toàn trong máy chủ của bạn**: 0 đồng, không gọi ra
+ngoài, dữ liệu cửa hàng không đi đâu cả. Nó hiểu các cách hỏi thông dụng.
+
+Muốn nó hiểu cả những câu nói vòng vo kiểu *"bữa giờ tiệm làm ăn ra sao"* thì
+cắm thêm khóa Google Gemini:
+
+1. Vào Google AI Studio lấy một **API key miễn phí** (khoảng 30 giây).
+2. Thêm vào file `.env`: `GEMINI_API_KEY=<khóa vừa lấy>`
+3. Khởi động lại web.
+
+**Không cắm thì không sao cả** — trợ lý vẫn chạy y như trước, chỉ là câu lạ sẽ
+nhận trả lời "chưa hiểu".
+
+Sáu lớp bảo vệ đã cài sẵn để hạn mức miễn phí không bị đốt:
+
+| Lớp | Ý nghĩa |
+|---|---|
+| Chỉ dùng khi cần | Câu thông dụng vẫn trả lời tại chỗ, **không tốn lượt nào** |
+| Chỉ gói Pro | Shop Free không chạm tới phần này |
+| 20 lượt/ngày/shop | Đếm trong dữ liệu, khởi động lại máy không reset |
+| Vài lượt/phút/người | Giữ Enter không đốt sạch trong nửa phút |
+| Nhớ câu đã hỏi | Cùng một cách hỏi chỉ tốn lượt đúng một lần |
+| Chặn gõ bậy | "???" hay "123" không tốn lượt |
+
+> **Điều quan trọng nhất:** kể cả khi bật AI, **dữ liệu cửa hàng vẫn không rời
+> khỏi máy chủ**. Thứ duy nhất gửi cho Google là *câu hỏi bạn vừa gõ*. Google
+> trả về đúng một chữ — tên báo cáo cần mở. Mọi con số vẫn do phần mềm của bạn
+> tự tính.
 >
-> Tính năng này chạy hoàn toàn trong máy chủ của bạn: không gọi dịch vụ AI nào
-> bên ngoài, không tốn phí, và dữ liệu cửa hàng không đi đâu cả.
+> Câu nào có nhờ AI sẽ ghi rõ *"câu hỏi này đã nhờ AI hiểu hộ"* ngay dưới câu
+> trả lời, để bạn luôn biết câu nào vừa đi ra ngoài.
 
 ### Dự báo nhập hàng (hàng nào sắp hết, nên gọi bao nhiêu)
 

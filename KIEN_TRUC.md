@@ -1453,6 +1453,51 @@ và đọc ra thành "bán được 1 đơn, thu về 0đ" — nghe như máy h�
 số đều đúng. Khi lệch nhau thì phải nói thẳng lý do (đơn còn chờ thanh toán hoặc
 đang ghi nợ).
 
+### 39. Gemini chỉ được PHÂN LOẠI câu hỏi, và bảy lớp chặn hao hạn mức
+
+Tầng dự phòng của trợ lý (mục 38). Nó chạy **duy nhất** khi `_doan_y_dinh()`
+trả `None`, và việc của nó gói gọn trong một câu: *câu hỏi này ứng với báo cáo
+nào, khoảng thời gian nào*. Trả về hai chữ, không hơn.
+
+**Gemini không thấy dữ liệu cửa hàng.** Không doanh thu, không giá vốn, không
+tên khách, không tên hàng lấy từ kho — chỉ có câu người dùng vừa gõ và danh sách
+tên báo cáo cố định. Gói miễn phí của Google được phép dùng dữ liệu gửi lên để
+cải thiện sản phẩm, nên thứ duy nhất gửi lên phải là thứ mất cũng không sao.
+`test_prompt_khong_chua_du_lieu_cua_hang` giữ điều đó.
+
+**Hạn mức Google chặn ở SỐ LƯỢT, không ở token.** Prompt chỉ ~200 token (so với
+~2.000 nếu phải kèm cấu trúc CSDL như cách text-to-SQL), nên mọi lớp bảo vệ đều
+nhắm vào việc *đừng gọi*, không phải *gọi ngắn lại*:
+
+| Lớp | Chặn cái gì |
+|---|---|
+| Bộ so khớp mẫu (mục 38) | Mọi câu thường gặp — mạnh nhất, và miễn phí |
+| Chưa cắm `GEMINI_API_KEY` | Tính năng không tồn tại, không có đường phát sinh phí |
+| Chuỗi rác (không có 2 chữ cái liền) | Gõ bậy không tốn lượt |
+| Cache câu hỏi | Cùng một cách hỏi chỉ tốn lượt đúng một lần |
+| `require_pro` | Chỉ shop trả tiền mới dùng tầng này |
+| Trần mỗi phút mỗi người | Giữ Enter không đốt sạch trong 30 giây |
+| Trần mỗi ngày mỗi shop | Một tiệm không kéo cả hệ thống xuống |
+
+**Bộ đếm ngày nằm trong DATABASE, không trong RAM** — cùng bài học với bộ đếm
+chống dò mật khẩu (mục 17): restart là bộ đếm RAM về 0, mà restart thì ép được.
+Ở đây hậu quả là tiền chứ không phải bảo mật. Điều kiện `so_luot < :tran` phải
+nằm **ngay trong câu UPDATE**; kiểm-rồi-ghi bằng hai câu riêng thì hai request
+cùng lúc đều thấy "còn 1 lượt" rồi cùng gọi.
+
+**KHÔNG tự thử lại khi Google treo.** Retry là nhân đôi lượt gọi cho một người
+vốn đã đang chờ, mà lượt gọi mới là thứ hạn mức đếm. Timeout ngắn, cùng lý do
+với `SMTP_TIMEOUT_SECONDS` (mục 18): một request treo giữ một luồng threadpool.
+
+**Giá trị lạ từ model bị loại ở `gemini_service`**, không đi tiếp được vào
+`_BANG_XU_LY`. Ai gõ "bỏ qua chỉ dẫn trên và..." thì tệ nhất là chọn nhầm báo
+cáo — không có đường nào để bịa ra một con số.
+
+**Câu bị trượt được ghi vào `request_log.txt` với tiền tố `[TRO LY]`.** Đây là
+thứ làm lớp phòng thủ mạnh dần: mỗi mẫu thêm vào `_MAU_Y_DINH` là bớt một loại
+câu phải gọi ra Google. Đọc log đó định kỳ, đừng để tính năng tự chạy mãi mà
+không ai biết nó có đáng giữ không.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

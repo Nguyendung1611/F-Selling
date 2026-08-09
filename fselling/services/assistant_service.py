@@ -31,18 +31,27 @@ ngày, KHÔNG phải sinh câu lệnh. Mọi thứ sau đó giữ nguyên.
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
 from datetime import date, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..core import thoi_gian
+from ..core.config import GEMINI_TRAN_MOI_NGAY, GEMINI_TRAN_MOI_PHUT, log_to_file
 from ..core.i18n import tr
 from ..dependencies import require_shop_access
-from . import clearance_service, forecast_service, report_service
+from . import (
+    clearance_service,
+    forecast_service,
+    gemini_service,
+    report_service,
+    subscription_service,
+)
 
 # Ý định: mỗi cái ứng với đúng một báo cáo đã có.
 Y_DINH_DOANH_THU = "DOANH_THU"
@@ -142,6 +151,120 @@ _MAU_Y_DINH: List[Tuple[str, str]] = [
      r"|\bban duoc\b|\bbao nhieu tien\b|\bduoc bao nhieu\b|\bkiem duoc\b|\bthu nhap\b",
      Y_DINH_DOANH_THU),
 ]
+
+
+# --- Tầng dự phòng Gemini: bảy lớp chặn, xếp từ rẻ tới đắt ---
+# Lớp 1 (mạnh nhất) là chính bộ so khớp ở trên: câu thường gặp không bao giờ
+# chạm tới Gemini. Sáu lớp còn lại nằm trong `_thu_hoi_gemini`.
+
+# Cụm chữ ứng với từng mã khoảng thời gian. Gemini trả về MÃ, rồi mã đó được
+# ghép vào câu để `_khoang_ngay` đọc lại - CỐ Ý đi qua đúng một bộ đọc ngày
+# thay vì viết bộ thứ hai, vì hai bộ rồi sẽ lệch nhau.
+_MA_SANG_CHU = {
+    "HOM_NAY": "hom nay",
+    "HOM_QUA": "hom qua",
+    "TUAN_NAY": "tuan nay",
+    "TUAN_TRUOC": "tuan truoc",
+    "THANG_NAY": "thang nay",
+    "THANG_TRUOC": "thang truoc",
+    "N_NGAY": "7 ngay qua",
+}
+
+# Nhớ câu đã hỏi: Gemini giải được một cách hỏi lạ thì lần sau ai hỏi y hệt là
+# dùng lại, không tốn lượt. CHỈ nhớ "câu hỏi -> tên báo cáo", không nhớ dữ liệu
+# và không nhớ câu trả lời, nên cache dùng chung được cho mọi shop mà không lộ
+# gì. Nằm trong RAM: mất khi restart cũng chỉ là tốn lại vài lượt.
+_NHO_CAU_HOI: Dict[str, Tuple[str, str]] = {}
+_NHO_TOI_DA = 500
+
+# Chống giữ Enter. CỐ Ý để trong RAM chứ không trong DB, khác với bộ đếm ngày:
+# đây là chống bấm dồn trong vài giây, còn hàng rào tiền thật là trần mỗi ngày.
+_DAU_VET_PHUT: Dict[Tuple[int, int], List[float]] = {}
+
+
+def _con_han_muc(db: Session, shop_id: int) -> Tuple[int, int]:
+    """(đã dùng, trần) của shop trong ngày nghiệp vụ hôm nay."""
+    ngay = thoi_gian.hom_nay_vn_str()
+    da_dung = db.execute(
+        text(
+            "SELECT so_luot FROM assistant_ai_usage "
+            "WHERE shop_id = :s AND ngay = :n"
+        ),
+        {"s": shop_id, "n": ngay},
+    ).scalar()
+    return int(da_dung or 0), GEMINI_TRAN_MOI_NGAY
+
+
+def _tru_mot_luot(db: Session, shop_id: int) -> bool:
+    """Trừ một lượt, trả False khi đã hết trần.
+
+    Kiểm-rồi-ghi bằng hai câu lệnh riêng thì hai request cùng lúc đều thấy
+    "còn 1 lượt" rồi cùng gọi. Ở đây điều kiện `so_luot < :tran` nằm NGAY TRONG
+    câu UPDATE nên SQLite chỉ cho đúng một bên thắng.
+    """
+    ngay = thoi_gian.hom_nay_vn_str()
+    db.execute(
+        text(
+            "INSERT OR IGNORE INTO assistant_ai_usage (shop_id, ngay, so_luot) "
+            "VALUES (:s, :n, 0)"
+        ),
+        {"s": shop_id, "n": ngay},
+    )
+    ket = db.execute(
+        text(
+            "UPDATE assistant_ai_usage SET so_luot = so_luot + 1 "
+            "WHERE shop_id = :s AND ngay = :n AND so_luot < :tran"
+        ),
+        {"s": shop_id, "n": ngay, "tran": GEMINI_TRAN_MOI_NGAY},
+    )
+    db.commit()
+    return ket.rowcount > 0
+
+
+def _qua_nhanh(user_id: int, shop_id: int) -> bool:
+    khoa = (user_id, shop_id)
+    bay_gio = time.monotonic()
+    dau_vet = [t for t in _DAU_VET_PHUT.get(khoa, []) if bay_gio - t < 60]
+    if len(dau_vet) >= GEMINI_TRAN_MOI_PHUT:
+        _DAU_VET_PHUT[khoa] = dau_vet
+        return True
+    dau_vet.append(bay_gio)
+    _DAU_VET_PHUT[khoa] = dau_vet
+    return False
+
+
+def _dang_rac(cau_khong_dau: str) -> bool:
+    """Chuỗi không có lấy một chữ cái thì đừng tốn lượt gọi ra Google."""
+    return not re.search(r"[a-z]{2}", cau_khong_dau)
+
+
+def _thu_hoi_gemini(
+    db: Session, current_user: models.User, shop_id: int, cau_khong_dau: str
+) -> Optional[Tuple[str, str]]:
+    """Sáu lớp chặn trước khi thực sự gọi ra Google. Trả None là bỏ qua."""
+    if not gemini_service.dang_bat():
+        return None                       # chưa cắm key -> tính năng không tồn tại
+    if _dang_rac(cau_khong_dau):
+        return None
+    if cau_khong_dau in _NHO_CAU_HOI:
+        return _NHO_CAU_HOI[cau_khong_dau]
+    try:
+        subscription_service.require_pro(db, shop_id)
+    except HTTPException:
+        return None                       # shop Free: im lặng lùi về "chưa hiểu"
+    if _qua_nhanh(current_user.id, shop_id):
+        return None
+    if not _tru_mot_luot(db, shop_id):
+        return None                       # hết trần ngày
+
+    ket = gemini_service.phan_loai(
+        cau_khong_dau, list(_BANG_XU_LY.keys()), list(_MA_SANG_CHU.keys())
+    )
+    if ket is None:
+        return None
+    if len(_NHO_CAU_HOI) < _NHO_TOI_DA:
+        _NHO_CAU_HOI[cau_khong_dau] = ket
+    return ket
 
 
 def _doan_y_dinh(cau_khong_dau: str) -> Optional[str]:
@@ -406,7 +529,25 @@ def hoi_dap(
 
     khong_dau = _bo_dau(cau)
     y_dinh = _doan_y_dinh(khong_dau)
+    nho_gemini = False
+
     if y_dinh is None:
+        # Chỉ tới đây mới nghĩ tới Gemini. Mọi câu hỏi thường gặp đã được trả
+        # lời ở trên rồi, miễn phí và tức thì.
+        tu_ai = _thu_hoi_gemini(db, current_user, shop_id, khong_dau)
+        if tu_ai is not None:
+            y_dinh, ma_khoang = tu_ai
+            nho_gemini = True
+            # Ghép cụm thời gian vào câu rồi để `_khoang_ngay` đọc lại, thay vì
+            # viết bộ đọc ngày thứ hai cho nhánh AI - hai bộ rồi sẽ lệch nhau.
+            if ma_khoang in _MA_SANG_CHU:
+                khong_dau = f"{khong_dau} {_MA_SANG_CHU[ma_khoang]}"
+
+    if y_dinh is None:
+        # Ghi lại câu bị trượt để còn biết nên thêm mẫu nào. Đây là thứ làm lớp
+        # phòng thủ mạnh dần lên: mỗi mẫu thêm vào là bớt một loại câu phải gọi
+        # ra Google. Chỉ ghi CÂU HỎI, không ghi dữ liệu cửa hàng.
+        log_to_file(f"[TRO LY] Chua hieu (shop {shop_id}): {cau}")
         return {
             "cau_hoi": cau,
             "hieu_duoc": False,
@@ -433,4 +574,7 @@ def hoi_dap(
 
     ket_qua.update({"cau_hoi": cau, "hieu_duoc": True, "y_dinh": y_dinh})
     ket_qua.setdefault("goi_y", None)
+    # Nói ra khi câu trả lời đi qua AI: người dùng có quyền biết câu nào vừa
+    # được gửi ra ngoài, và đó cũng là cách họ thấy hạn mức đang tiêu vào đâu.
+    ket_qua["dung_ai"] = nho_gemini
     return ket_qua

@@ -30,7 +30,7 @@ from .supplier import (
     SupplierPayment,
     SupplierPaymentAllocation,
 )
-from .system_log import SystemLog
+from .system_log import AssistantAiUsage, SystemLog
 from .subscription import (
     ShopSubscription,
     SubscriptionCheckout,
@@ -58,6 +58,7 @@ __all__ = [
     "CashShift",
     "CashMovement",
     "SystemLog",
+    "AssistantAiUsage",
     "Customer",
     "ExpenseCategory",
     "ExpenseTemplate",

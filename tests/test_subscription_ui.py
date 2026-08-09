@@ -83,4 +83,4 @@ def test_asset_goi_cuoc_duoc_bump_o_ca_hai_trang():
 
     # seller.js sang mốc L3 (Trợ Lý); ba asset gói cước ở trên KHÔNG đổi nên
     # vẫn giữ nguyên mốc cũ - bump bừa cả cụm là bắt người dùng tải lại vô ích.
-    assert "/js/seller.js?v=20260809-tro-ly" in seller_html
+    assert "/js/seller.js?v=20260809-tro-ly-ai" in seller_html

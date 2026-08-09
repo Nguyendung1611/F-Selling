@@ -302,6 +302,11 @@ _MIGRATIONS = [
     # đúng ở "Ai Làm Gì" của shop đó mà không lẫn dữ liệu shop khác.
     "ALTER TABLE system_logs ADD COLUMN shop_id INTEGER",
     "CREATE INDEX IF NOT EXISTS ix_system_logs_shop_id ON system_logs(shop_id)",
+    # L4: bộ đếm lượt gọi Gemini của trợ lý. Bảng do create_all() tạo; index
+    # duy nhất khai ở đây VÀ trong _REQUIRED_INDEXES vì thiếu nó thì hai
+    # request cùng lúc đẻ ra hai dòng cho cùng một ngày và trần bị nhân đôi.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_assistant_ai_usage_shop_ngay "
+    "ON assistant_ai_usage(shop_id, ngay)",
     # K1: chi phí vận hành + lãi ròng + dòng tiền. Ba bảng mới do create_all()
     # tạo; khai lại mọi khóa để DB cũ hoặc lần khởi động lỗi dở tự chữa được.
     # CỐ Ý không backfill gì: shop cũ bắt đầu với sổ chi phí rỗng, và lãi ròng
@@ -350,6 +355,7 @@ _REQUIRED_INDEXES = [
     "ux_loyalty_programs_shop_id",
     "ux_loyalty_point_entries_idempotency_key",
     "ux_suppliers_create_operation_id",
+    "ux_assistant_ai_usage_shop_ngay",
     "ux_purchase_receipts_create_operation_id",
     "ux_purchase_receipts_confirm_operation_id",
     "ux_supplier_payable_entries_idempotency_key",

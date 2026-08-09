@@ -54,7 +54,8 @@ fly secrets set --app <ten-app> `
   SMTP_HOST="smtp.gmail.com" `
   SMTP_PORT="587" `
   SMTP_USER="<email Gmail của bạn>" `
-  SMTP_PASSWORD="<Gmail App Password mới>"
+  SMTP_PASSWORD="<Gmail App Password mới>" `
+  GEMINI_API_KEY="<khóa Google AI Studio - BỎ QUA nếu không dùng>"
 ```
 
 - Bảy dòng đầu chỉ là **chỗ trống hướng dẫn**. Mở file `.env` trên máy, sao chép
@@ -62,6 +63,9 @@ fly secrets set --app <ten-app> `
   vào tài liệu, `fly.toml` hoặc bất kỳ file nào sẽ commit.
 - Nhớ **tạo Gmail App Password MỚI** (cái cũ trong `.env` đã bị lộ, nên thu hồi).
 - Nếu không cần gửi email, bỏ 4 dòng SMTP — app vẫn chạy, chỉ in OTP ra log.
+- `GEMINI_API_KEY` là **tùy chọn**: không đặt thì trợ lý vẫn chạy bằng bộ nhận
+  dạng nội bộ (0 đồng, không ra mạng), chỉ là không hiểu được các câu hỏi nói
+  vòng vo. Đặt vào thì mỗi shop Pro được 20 lượt nhờ AI mỗi ngày.
 
 ## 6. Deploy
 

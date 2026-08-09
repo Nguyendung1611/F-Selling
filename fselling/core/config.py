@@ -57,6 +57,33 @@ TTS_CACHE_DIR: str = os.getenv("TTS_CACHE_DIR") or os.path.join(
     os.path.dirname(os.path.abspath(UPLOAD_DIR)), "tts_cache"
 )
 
+# --- Trợ lý: hiểu câu hỏi lạ bằng Gemini ---
+# Chỉ là TẦNG DỰ PHÒNG. Bộ so khớp mẫu trong `assistant_service` xử lý mọi câu
+# hỏi thường gặp ngay tại máy chủ: 0 đồng, không ra mạng, dưới 50ms. Gemini chỉ
+# vào cuộc khi bộ đó chịu thua.
+#
+# Chưa cấu hình key thì tính năng TẮT HẲN: câu lạ nhận câu trả lời "chưa hiểu"
+# kèm gợi ý, đúng như trước khi có phần này. Không có chế độ "bật một nửa", và
+# quan trọng hơn: không có đường nào phát sinh chi phí ngoài ý muốn.
+#
+# Gemini KHÔNG nhận dữ liệu cửa hàng. Nó chỉ thấy câu hỏi và danh sách tên báo
+# cáo, rồi trả về một tên. Mọi con số vẫn do service trong app tính.
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY") or ""
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL") or "gemini-2.0-flash"
+
+# Trần lượt gọi mỗi shop mỗi ngày. Đây là trần cho các câu bộ so khớp nội bộ
+# KHÔNG hiểu, không phải trần số câu hỏi - hỏi bình thường không tiêu lượt nào.
+GEMINI_TRAN_MOI_NGAY: int = 20
+
+# Chống giữ Enter: một người không gọi quá ngần này lượt trong một phút.
+GEMINI_TRAN_MOI_PHUT: int = 5
+
+# Trần thiệt hại khi Google treo, cùng lý do với SMTP_TIMEOUT_SECONDS: một
+# request treo giữ một luồng threadpool, hết luồng là cả app đứng kể cả POS.
+# KHÔNG tự thử lại khi hết giờ - retry là nhân đôi lượt gọi cho một người vốn
+# đã đang chờ.
+GEMINI_TIMEOUT_SECONDS: int = 6
+
 # --- JWT ---
 # JWT secret: lấy từ biến môi trường. Nếu chưa cấu hình, sinh key ngẫu nhiên an toàn
 # cho phiên chạy hiện tại (token sẽ mất hiệu lực sau khi restart - đây là hành vi an toàn,

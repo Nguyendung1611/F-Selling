@@ -1772,7 +1772,13 @@ async function guiCauHoi(bienCo) {
         // nó là số của cửa hàng khác.
         if (currentShopId !== shopId) { dangGo?.remove(); return; }
         dangGo?.remove();
-        themBongChat('may', d.tra_loi, d.nguon ? t('seller.assistant.source', { name: d.nguon }) : '');
+        // Nói rõ khi câu hỏi vừa được gửi ra Google. Người dùng có quyền biết
+        // câu nào rời khỏi máy chủ, và đó cũng là cách họ thấy hạn mức tiêu đi đâu.
+        let phuChu = d.nguon ? t('seller.assistant.source', { name: d.nguon }) : '';
+        if (d.dung_ai) {
+            phuChu += (phuChu ? ' · ' : '') + t('seller.assistant.via_ai');
+        }
+        themBongChat('may', d.tra_loi, phuChu);
         if (d.goi_y && d.goi_y.length) veGoiY(d.goi_y);
         else veGoiY();
     } catch (e) {
