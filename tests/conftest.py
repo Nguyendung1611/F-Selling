@@ -3,7 +3,8 @@
 Nguyên tắc:
 - Không bao giờ chạm vào DB thật: DB_PATH trỏ vào file tạm.
 - Không gửi email thật: send_otp_email luôn bị thay bằng fake.
-- Không gọi mạng: VietQR chỉ là chuỗi URL, webhook secret được monkeypatch.
+- Không gọi mạng: VietQR chỉ là chuỗi URL, webhook secret được monkeypatch, và
+  `GEMINI_API_KEY` bị xóa nên trợ lý không bao giờ gọi ra Google thật.
 """
 from __future__ import annotations
 
@@ -52,6 +53,12 @@ os.environ["ALLOWED_ORIGINS"] = "http://testserver"
 # Chặn mọi khả năng gửi mail thật
 os.environ["SMTP_USER"] = ""
 os.environ["SMTP_PASSWORD"] = ""
+# Chặn mọi khả năng gọi Gemini thật. Máy dev có `GEMINI_API_KEY` trong `.env`
+# là bộ test sẽ gọi ra Google thật: tiêu hạn mức miễn phí của chủ dự án mỗi lần
+# chạy test, và đỏ ngẫu nhiên vào đúng hôm Google chậm hoặc đổi model.
+# Test nào cần tầng dự phòng thì tự monkeypatch `gemini_service` (xem
+# `tests/test_tro_ly_gemini.py`) - đó mới là cách kiểm nó.
+os.environ["GEMINI_API_KEY"] = ""
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

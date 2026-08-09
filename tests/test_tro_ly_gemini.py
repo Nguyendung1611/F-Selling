@@ -55,6 +55,19 @@ def _hoi(client, ctx, cau):
     )
 
 
+def test_bo_test_khong_bao_gio_goi_gemini_that():
+    """Máy dev có `GEMINI_API_KEY` trong `.env` thật.
+
+    `conftest` phải xóa biến đó, nếu không mỗi lần chạy test là tiêu hạn mức
+    miễn phí của chủ dự án, và bộ test đỏ ngẫu nhiên vào đúng hôm Google chậm
+    hoặc đổi model. Đã dính đúng lỗi này một lần, ngay hôm cắm khóa.
+    """
+    import os
+
+    assert os.environ.get("GEMINI_API_KEY") == ""
+    assert gemini_service.dang_bat() is False
+
+
 # ---------- Lớp 1: chưa cắm key thì tính năng không tồn tại ----------
 def test_chua_cam_key_thi_khong_goi_gi_va_app_chay_nhu_cu(client, monkeypatch):
     goi = {"so_lan": 0}

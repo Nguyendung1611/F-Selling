@@ -69,7 +69,21 @@ TTS_CACHE_DIR: str = os.getenv("TTS_CACHE_DIR") or os.path.join(
 # Gemini KHÔNG nhận dữ liệu cửa hàng. Nó chỉ thấy câu hỏi và danh sách tên báo
 # cáo, rồi trả về một tên. Mọi con số vẫn do service trong app tính.
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY") or ""
-GEMINI_MODEL: str = os.getenv("GEMINI_MODEL") or "gemini-2.0-flash"
+
+# Mặc định là BÍ DANH `-latest`, không phải một số phiên bản cụ thể. Ghim số là
+# tự hẹn ngày hỏng: kiểm ngày 2026-08-09 bằng key thật cho thấy
+# `gemini-2.0-flash` đã bị hạ suất miễn phí xuống 0 (HTTP 429, "limit: 0") và
+# `gemini-2.5-flash` bị gỡ hẳn (404) - trong khi tính năng vẫn "chạy", chỉ là
+# câu nào cũng trượt. Bí danh tự đi theo bản Flash hiện hành của Google.
+#
+# Đổi model KHÔNG thể làm sai một con số: câu trả lời của model bị ép nằm trong
+# danh sách báo cáo có sẵn (`gemini_service.phan_loai`), giá trị lạ bị loại.
+# Đó là lý do bí danh trôi theo thời gian ở đây an toàn, khác hẳn chỗ khác.
+#
+# Bản `lite` là đủ: việc của nó chỉ là đọc một câu tiếng Việt rồi chọn một
+# trong chín tên báo cáo. Đo ngày 2026-08-09 trên bảy câu hỏi đời thường
+# (kể cả câu vô nghĩa phải trả "không hiểu"): đúng 7/7.
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL") or "gemini-flash-lite-latest"
 
 # Trần lượt gọi mỗi shop mỗi ngày. Đây là trần cho các câu bộ so khớp nội bộ
 # KHÔNG hiểu, không phải trần số câu hỏi - hỏi bình thường không tiêu lượt nào.

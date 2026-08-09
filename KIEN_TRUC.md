@@ -1493,6 +1493,17 @@ với `SMTP_TIMEOUT_SECONDS` (mục 18): một request treo giữ một luồng 
 `_BANG_XU_LY`. Ai gõ "bỏ qua chỉ dẫn trên và..." thì tệ nhất là chọn nhầm báo
 cáo — không có đường nào để bịa ra một con số.
 
+**`conftest` phải xóa `GEMINI_API_KEY`.** Máy dev có khóa thật trong `.env`, và
+bộ test không tự biết điều đó: mỗi lần chạy test là tiêu hạn mức miễn phí của
+chủ dự án, và bộ test đỏ ngẫu nhiên vào đúng hôm Google chậm. Cùng nguyên tắc
+đã áp cho SMTP từ trước. Có `test_bo_test_khong_bao_gio_goi_gemini_that` canh.
+
+**Mặc định là bí danh `-latest`, đừng ghim số phiên bản.** Ghim số là tự hẹn
+ngày hỏng: đo ngày 2026-08-09 bằng key thật cho thấy `gemini-2.0-flash` đã bị hạ
+suất miễn phí về 0 (429 "limit: 0") và `gemini-2.5-flash` bị gỡ hẳn (404) — mà
+tính năng vẫn "chạy", chỉ là câu nào cũng trượt. Bí danh trôi theo thời gian an
+toàn ở đây vì đầu ra bị ép nằm trong danh sách báo cáo có sẵn.
+
 **Câu bị trượt được ghi vào `request_log.txt` với tiền tố `[TRO LY]`.** Đây là
 thứ làm lớp phòng thủ mạnh dần: mỗi mẫu thêm vào `_MAU_Y_DINH` là bớt một loại
 câu phải gọi ra Google. Đọc log đó định kỳ, đừng để tính năng tự chạy mãi mà
