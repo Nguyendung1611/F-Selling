@@ -98,7 +98,32 @@ async def order_webhook(
     )
     log_to_file(f"ORDER WEBHOOK AUTHENTICATED body_bytes={body_size}")
 
-    result = order_service.apply_webhook_payment(db, request_data)
+    try:
+        result = order_service.apply_webhook_payment(db, request_data)
+    except HTTPException as exc:
+        # Chỉ 400/404 top-level của parser/order lookup được giữ. HTTPException
+        # nảy ra sau khi một event tài chính đã bắt đầu phải thành 5xx.
+        if exc.status_code in (400, 404):
+            raise
+        db.rollback()
+        log_to_file(
+            "ORDER WEBHOOK FAILURE category=persistence error_type=webhook_event"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Không thể lưu bền vững giao dịch webhook",
+        ) from exc
+    except Exception as exc:
+        # Persistence/audit/unknown error phải hiện thành 5xx để provider retry.
+        # Chỉ log category cố định; không ghi exception message/raw client data.
+        db.rollback()
+        log_to_file(
+            "ORDER WEBHOOK FAILURE category=persistence error_type=webhook_event"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Không thể lưu bền vững giao dịch webhook",
+        ) from exc
     paid = result["paid"]
     unreconciled = result["unreconciled"]
     rejected = result.get("rejected", [])
@@ -113,8 +138,10 @@ async def order_webhook(
         # Lý do đầy đủ của TỪNG đơn nằm trong SystemLog `WEBHOOK_TU_CHOI`.
         msg += f" | Từ chối, xem SystemLog: {rejected}"
 
-    # CỐ Ý trả 200 cho cả giao dịch bị từ chối: ngân hàng sẽ retry vô hạn nếu
-    # nhận 4xx/5xx. Lý do từ chối nằm trong SystemLog và trong `msg`.
+    # CỐ Ý trả 200 cho duplicate tương thích và business rejection CHỈ SAU KHI
+    # ledger/audit bắt buộc đã durable. Collision xác định được đã có audit
+    # WEBHOOK_XUNG_DOT_IDEMPOTENCY. Persistence/audit/commit/unknown failure đi
+    # nhánh 5xx bên trên để provider retry.
     #
     # `order_ids` giữ nguyên ý nghĩa cũ (các đơn đã PAID) để không phá contract;
     # hai khóa còn lại là bổ sung, thêm khóa là thay đổi an toàn.

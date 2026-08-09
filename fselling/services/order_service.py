@@ -159,12 +159,18 @@ def payment_summary(order: models.Order) -> Dict[str, Any]:
 
 
 def _them_nhat_ky(
-    db: Session, user_id: Optional[int], action: str, details: str
+    db: Session,
+    user_id: Optional[int],
+    action: str,
+    details: str,
+    *,
+    shop_id: Optional[int] = None,
 ) -> None:
     """Thêm audit vào transaction hiện tại, KHÔNG tự commit."""
     db.add(
         models.SystemLog(
             user_id=user_id,
+            shop_id=shop_id,
             action=action,
             details=details,
         )
@@ -1125,6 +1131,14 @@ def debt_payment(
             detail=tr("Mã thao tác thu nợ đã được dùng cho một giao dịch khác"),
         )
 
+    # Thu nợ và webhook phải xếp hàng trên cùng một write lock. Nếu không,
+    # webhook có thể đọc DEBT, chờ đường thu nợ commit PAID, rồi vẫn ghi một
+    # BANK_UNAPPLIED mới hơn dựa trên object cũ. Lấy lock xong phải refresh lại
+    # cả trạng thái lẫn số đã thu trước khi quyết định/mutation. Nếu có két,
+    # thứ tự lock toàn hệ thống là shop -> cash_shift để không tạo vòng deadlock.
+    _lock_shop_for_order(db, order.shop_id)
+    db.refresh(order)
+
     shift = None
     if request.method == "cash":
         # Tiền mặt vào két phải thuộc về ca của người đang đứng quầy, giống hệt
@@ -1138,6 +1152,22 @@ def debt_payment(
             lock_for_cash_write=True,
         )
         db.refresh(order)
+
+    # Một request cùng operation_id có thể đã hoàn tất trong lúc chờ lock.
+    da_ghi = (
+        db.query(models.OrderPayment)
+        .filter(models.OrderPayment.idempotency_key == operation_key)
+        .first()
+    )
+    if da_ghi is not None:
+        if same_debt_request(da_ghi):
+            db.rollback()
+            return _ket_qua_thu_no(db, order, lap_lai=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Mã thao tác thu nợ đã được dùng cho một giao dịch khác"),
+        )
 
     if order.status != STATUS_DEBT:
         db.rollback()
@@ -1914,74 +1944,22 @@ def apply_webhook_payment(db: Session, request_data: Dict[str, Any]) -> Dict[str
     # Không gộp theo order_id: một payload Casso có thể chứa 40k + 60k cho cùng
     # đơn, và cả hai khoản đều phải được ghi nhận.
     for gd in transactions:
-        order = db.query(models.Order).filter(models.Order.id == gd.order_id).first()
-        if order is None:
+        try:
+            result = _apply_one_webhook_event(db, gd)
+        except Exception as exc:
+            # Mỗi vòng là một transaction độc lập. Item trước đã commit vẫn
+            # durable; riêng item hiện tại phải quay về hoàn toàn rồi để lỗi
+            # nổi thành 5xx, buộc provider retry cả batch.
+            db.rollback()
+            # HTTPException từ loyalty/helper sau khi event đã bắt đầu KHÔNG
+            # còn là ingress 4xx. Chuẩn hóa nó cùng mọi persistence/unknown
+            # failure để route trả 5xx và provider retry.
+            raise WebhookEventPersistenceError(
+                "ORDER webhook event was not durably persisted"
+            ) from exc
+        if result is None:
             continue
         found_any = True
-
-        configured_account = (
-            db.query(models.Shop.bank_account_no)
-            .filter(models.Shop.id == order.shop_id)
-            .scalar()
-        )
-        # Payload không có account number vẫn đi đường tương thích cũ trong
-        # increment này. Nhưng một account CÓ MẶT mà không khớp shop của chính
-        # order phải bị chặn trước MỌI side effect: kể cả WEBHOOK_PAY_FROM,
-        # BANK_UNAPPLIED, ledger thật, trạng thái, refund và loyalty.
-        if _account_mismatch(gd.account_no, configured_account):
-            _ghi_tu_choi_sai_tai_khoan(
-                db, order, gd, configured_account
-            )
-            rejected.add(gd.order_id)
-            continue
-
-        # Kiểm TRƯỚC khi ghi ledger: một khi `OrderPayment` đã vào thì tiền đã
-        # được cộng và trạng thái đã bị suy lại từ tổng lũy kế.
-        #
-        # An toàn khi kiểm ở đây chứ không kiểm lại sau khi lấy khóa ghi: DEBT
-        # chỉ được đặt lúc TẠO đơn (`create_order`), không có đường nào chuyển
-        # một đơn đang chạy sang DEBT, nên không có race đẩy đơn vào DEBT giữa
-        # chừng. Ngược lại CANCELLED thì có, và nó đã nằm trong danh sách cho
-        # phép rồi nên `_apply_bank_transaction` tự xử.
-        if order.status not in WEBHOOK_PAY_FROM:
-            # Ghi nhận là tiền ĐÃ về, nhưng không áp vào đơn. Phải làm trước khi
-            # `_ghi_tu_choi` commit, để bút toán và dòng log cùng vào một lần.
-            _ghi_tien_ve_chua_ghi_nhan(db, order, gd)
-            _ghi_tu_choi(
-                db,
-                gd.order_id,
-                f"đơn đang ở trạng thái {order.status}, webhook không tự xử lý "
-                "(đơn ghi nợ thu qua chức năng thu nợ)",
-            )
-            rejected.add(gd.order_id)
-            continue
-        if gd.direction == "out":
-            _ghi_tu_choi(
-                db, gd.order_id, "giao dịch là tiền RA, không phải tiền vào"
-            )
-            rejected.add(gd.order_id)
-            continue
-        if gd.amount is None:
-            _ghi_tu_choi(
-                db,
-                gd.order_id,
-                "payload không có số tiền nên không xác nhận được đã thu đủ",
-            )
-            rejected.add(gd.order_id)
-            continue
-        amount = float(gd.amount)
-        if not math.isfinite(amount) or amount <= 0:
-            _ghi_tu_choi(
-                db,
-                gd.order_id,
-                "số tiền giao dịch phải lớn hơn 0 (khác với payload thiếu số tiền)",
-            )
-            rejected.add(gd.order_id)
-            continue
-
-        result = _apply_bank_transaction(
-            db, order, gd, amount, configured_account=configured_account
-        )
         if result == "paid":
             paid.add(gd.order_id)
             unreconciled.discard(gd.order_id)
@@ -2003,6 +1981,117 @@ def apply_webhook_payment(db: Session, request_data: Dict[str, Any]) -> Dict[str
     }
 
 
+def _apply_one_webhook_event(db: Session, gd: Any) -> Optional[str]:
+    """Xử lý đúng một bank event và kết thúc transaction của chính event đó."""
+    order = db.query(models.Order).filter(models.Order.id == gd.order_id).first()
+    if order is None:
+        # Chỉ có read transaction; đóng nó để item kế tiếp không dùng chung
+        # snapshot với một event không tìm thấy order.
+        db.rollback()
+        return None
+
+    # Account mismatch là một quyết định dựa trên cấu hình durable. Webhook và
+    # update shop cùng xếp hàng trên hàng Shop; sau lock phải refresh Order và
+    # đọc lại account, không dùng snapshot đã đọc trước lock.
+    order_id = order.id
+    shop_id = order.shop_id
+    # SQLite không thể nâng một read snapshot cũ thành writer sau khi update
+    # account khác đã commit. Transaction này mới chỉ nhận diện order/shop nên
+    # đóng snapshot trước lock là an toàn; mọi state nghiệp vụ được nạp lại dưới
+    # lock ngay sau đó.
+    db.rollback()
+    _lock_shop_for_order(db, shop_id)
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if order is None:
+        db.rollback()
+        return None
+    db.refresh(order)
+    configured_account = (
+        db.query(models.Shop.bank_account_no)
+        .filter(models.Shop.id == shop_id)
+        .scalar()
+    )
+    # Payload không có account number vẫn đi đường tương thích P0.1. Account
+    # CÓ MẶT nhưng sai phải bị chặn trước cả BANK_UNAPPLIED/status/refund/điểm.
+    if _account_mismatch(gd.account_no, configured_account):
+        _ghi_tu_choi_sai_tai_khoan(db, order, gd, configured_account)
+        return "rejected"
+
+    amount = _valid_webhook_amount(gd)
+    key = _bank_idempotency_key(gd, configured_account)
+    existing = _find_existing_bank_events(
+        db,
+        key=key,
+        order_id=order.id,
+        gd=gd,
+    )
+    if existing:
+        return _duplicate_or_collision_outcome(
+            db,
+            order=order,
+            gd=gd,
+            amount=amount,
+            existing=existing,
+            key=key,
+        )
+
+    # Guard trạng thái đứng trước validation chiều/số tiền như hành vi P0.1:
+    # tiền hợp lệ về cho DEBT thành BANK_UNAPPLIED; tiền ra/thiếu tiền chỉ log.
+    if order.status not in WEBHOOK_PAY_FROM:
+        return _apply_unapplied_bank_event(
+            db,
+            order,
+            gd,
+            configured_account=configured_account,
+        )
+    if gd.direction == "out":
+        _commit_webhook_rejection(
+            db,
+            order,
+            "giao dịch là tiền RA, không phải tiền vào",
+        )
+        return "rejected"
+    if gd.amount is None:
+        _commit_webhook_rejection(
+            db,
+            order,
+            "payload không có số tiền nên không xác nhận được đã thu đủ",
+        )
+        return "rejected"
+    if amount is None:
+        _commit_webhook_rejection(
+            db,
+            order,
+            "số tiền giao dịch phải lớn hơn 0 (khác với payload thiếu số tiền)",
+        )
+        return "rejected"
+
+    return _apply_bank_transaction(
+        db, order, gd, amount, configured_account=configured_account
+    )
+
+
+def _valid_webhook_amount(gd: Any) -> Optional[float]:
+    """Trả số tiền dương/hữu hạn; None cho payload thiếu hoặc amount sai."""
+    if gd.amount is None:
+        return None
+    amount = float(gd.amount)
+    if not math.isfinite(amount) or amount <= 0:
+        return None
+    return amount
+
+
+def _canonical_bank_txn_id(value: Any) -> Optional[str]:
+    """Canonical transaction ID dùng thống nhất cho lưu, key và so sánh.
+
+    Provider có thể thêm khoảng trắng ở envelope khác nhau. Chỉ strip hai đầu;
+    không đổi hoa/thường hay đưa raw ID thành định danh toàn cục vì raw ID không
+    được bảo đảm duy nhất giữa provider, account hoặc shop.
+    """
+    canonical = str(value).strip() if value is not None else ""
+    return canonical or None
+
+
 def _bank_idempotency_key(gd: Any, fallback_account: Optional[str] = None) -> str:
     """Khóa retry riêng; không biến bank_txn_id thành ràng buộc unique."""
     provider = str(gd.provider or "unknown").strip().lower()
@@ -2012,8 +2101,9 @@ def _bank_idempotency_key(gd: Any, fallback_account: Optional[str] = None) -> st
         if c.isalnum()
     )
     account = account.lstrip("0") or "0"
-    if gd.txn_id and str(gd.txn_id).strip():
-        raw = f"txn|{provider}|{account}|{str(gd.txn_id).strip()}"
+    txn_id = _canonical_bank_txn_id(gd.txn_id)
+    if txn_id:
+        raw = f"txn|{provider}|{account}|{txn_id}"
     else:
         # fingerprint là hash canonical của đúng mục giao dịch từ provider.
         raw = (
@@ -2050,34 +2140,233 @@ def _classify_existing(order: models.Order) -> str:
     return "rejected"
 
 
-def _same_payment(existing: models.OrderPayment, order_id: int, gd: Any, amount: float) -> bool:
+class WebhookEventPersistenceError(RuntimeError):
+    """Event hợp lệ đã bắt đầu nhưng không thể kết thúc transaction durable."""
+
+
+class WebhookDurableStateError(RuntimeError):
+    """Durable state sau race không đủ để kết luận duplicate/collision."""
+
+
+def _commit_webhook_event(db: Session) -> None:
+    """Commit một event; commit lỗi phải rollback và nổi lên cho provider retry."""
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _same_payment(
+    existing: models.OrderPayment,
+    order_id: int,
+    gd: Any,
+    amount: Optional[float],
+) -> bool:
+    if existing.entry_type not in (ENTRY_BANK, ENTRY_BANK_UNAPPLIED):
+        return False
+    if gd.direction == "out" or amount is None:
+        return False
     if existing.order_id != order_id:
         return False
     if abs(_so_tien(existing.amount) - amount) > MONEY_EPSILON:
         return False
-    if existing.bank_txn_id and gd.txn_id:
-        return existing.bank_txn_id == str(gd.txn_id)
+    incoming_txn = _canonical_bank_txn_id(gd.txn_id)
+    existing_txn = _canonical_bank_txn_id(existing.bank_txn_id)
+    if existing_txn != incoming_txn:
+        return False
     return True
 
 
-def _duplicate_or_collision(
+def _find_existing_bank_events(
     db: Session,
+    *,
+    key: str,
+    order_id: int,
+    gd: Any,
+) -> List[models.OrderPayment]:
+    """Tìm canonical winner toàn cục và raw fallback trong đúng một order.
+
+    Canonical key (provider + account + transaction/fingerprint) là namespace
+    đủ mạnh để phát hiện cùng event bị dùng cho order khác. Raw transaction ID
+    chỉ là compatibility fallback giữa BANK_IN/BANK_UNAPPLIED của chính order;
+    provider/account/shop khác có thể hợp lệ dùng cùng mã raw.
+    """
+    rows = (
+        db.query(models.OrderPayment)
+        .filter(models.OrderPayment.idempotency_key == key)
+        .order_by(models.OrderPayment.id)
+        .all()
+    )
+    txn_id = _canonical_bank_txn_id(gd.txn_id)
+    if txn_id:
+        # Đọc bounded theo order để hỗ trợ row legacy từng lưu " TX1 " mà
+        # không quét hoặc so khớp raw transaction trên toàn hệ thống.
+        raw_candidates = (
+            db.query(models.OrderPayment)
+            .filter(
+                models.OrderPayment.order_id == order_id,
+                models.OrderPayment.entry_type.in_(
+                    (ENTRY_BANK, ENTRY_BANK_UNAPPLIED)
+                ),
+            )
+            .order_by(models.OrderPayment.id)
+            .all()
+        )
+        raw_rows = [
+            row
+            for row in raw_candidates
+            if _canonical_bank_txn_id(row.bank_txn_id) == txn_id
+        ]
+        seen = {row.id for row in rows}
+        rows.extend(row for row in raw_rows if row.id not in seen)
+    return rows
+
+
+def _collision_event_ref(gd: Any, key: str) -> str:
+    """Reference một chiều để dedupe audit mà không ghi transaction ID thô."""
+    source = _canonical_bank_txn_id(gd.txn_id) or key
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def _collision_audit_details(order_id: int, *, event_ref: str) -> str:
+    # Cố ý không chứa raw payload, account, transaction ID hay exception text.
+    return (
+        f"Order {order_id}: định danh webhook ngân hàng đã tồn tại nhưng "
+        "không tương thích order/amount/event; đã từ chối, không áp tiền "
+        f"(event {event_ref})"
+    )
+
+
+def _commit_idempotency_collision(
+    db: Session,
+    *,
+    order_id: int,
+    shop_id: int,
+    gd: Any,
+    key: str,
+) -> str:
+    """Audit collision xác định được rồi mới trả business rejection 200."""
+    details = _collision_audit_details(
+        order_id,
+        event_ref=_collision_event_ref(gd, key),
+    )
+    exists = (
+        db.query(models.SystemLog.id)
+        .filter(
+            models.SystemLog.action == "WEBHOOK_XUNG_DOT_IDEMPOTENCY",
+            models.SystemLog.details == details,
+        )
+        .first()
+    )
+    if exists is None:
+        _them_nhat_ky(
+            db,
+            None,
+            "WEBHOOK_XUNG_DOT_IDEMPOTENCY",
+            details,
+            shop_id=shop_id,
+        )
+        _commit_webhook_event(db)
+    else:
+        db.rollback()
+    return "rejected"
+
+
+def _fresh_order_outcome(db: Session, order_id: int) -> str:
+    """Rollback caller xong, phân loại Order bằng một Session sạch."""
+    fresh = Session(bind=db.get_bind())
+    try:
+        order = fresh.query(models.Order).filter(models.Order.id == order_id).first()
+        if order is None:
+            raise WebhookDurableStateError(
+                "durable order missing while classifying webhook duplicate"
+            )
+        return _classify_existing(order)
+    finally:
+        fresh.close()
+
+
+def _duplicate_or_collision_outcome(
+    db: Session,
+    *,
     order: models.Order,
     gd: Any,
-    amount: float,
-    existing: models.OrderPayment,
+    amount: Optional[float],
+    existing: List[models.OrderPayment],
+    key: str,
 ) -> str:
-    if _same_payment(existing, order.id, gd, amount):
-        return _classify_existing(order)
-    _them_nhat_ky(
-        db,
-        None,
-        "WEBHOOK_XUNG_DOT_IDEMPOTENCY",
-        f"Order {order.id}: khóa giao dịch đã tồn tại nhưng payload mới không khớp; "
-        "đã từ chối để tránh cộng sai tiền",
+    order_id = order.id
+    shop_id = order.shop_id
+    compatible = all(
+        _same_payment(payment, order_id, gd, amount) for payment in existing
     )
-    db.commit()
-    return "rejected"
+    if not compatible:
+        return _commit_idempotency_collision(
+            db,
+            order_id=order_id,
+            shop_id=shop_id,
+            gd=gd,
+            key=key,
+        )
+
+    # Không phân loại từ object đã được load trước winner. Đóng transaction đọc
+    # (và nhả write lock nếu có), rồi đọc Order bằng Session hoàn toàn sạch.
+    db.rollback()
+    outcome, collision = _fresh_duplicate_outcome(
+        db,
+        key=key,
+        order_id=order_id,
+        gd=gd,
+        amount=amount,
+    )
+    if collision:
+        return _commit_idempotency_collision(
+            db,
+            order_id=order_id,
+            shop_id=shop_id,
+            gd=gd,
+            key=key,
+        )
+    if outcome is None:
+        raise WebhookDurableStateError(
+            "durable webhook winner changed during duplicate classification"
+        )
+    return outcome
+
+
+def _fresh_duplicate_outcome(
+    db: Session,
+    *,
+    key: str,
+    order_id: int,
+    gd: Any,
+    amount: Optional[float],
+) -> Tuple[Optional[str], bool]:
+    """Trả (duplicate outcome, collision) từ durable winner trong Session mới."""
+    fresh = Session(bind=db.get_bind())
+    try:
+        existing = _find_existing_bank_events(
+            fresh,
+            key=key,
+            order_id=order_id,
+            gd=gd,
+        )
+        if not existing:
+            return None, False
+        if not all(
+            _same_payment(payment, order_id, gd, amount)
+            for payment in existing
+        ):
+            return None, True
+        order = fresh.query(models.Order).filter(models.Order.id == order_id).first()
+        if order is None:
+            raise WebhookDurableStateError(
+                "durable order missing after webhook IntegrityError"
+            )
+        return _classify_existing(order), False
+    finally:
+        fresh.close()
 
 
 def _apply_bank_transaction(
@@ -2090,41 +2379,29 @@ def _apply_bank_transaction(
 ) -> str:
     """Ghi một giao dịch vào ledger rồi suy ra trạng thái từ tổng lũy kế."""
     order_id = order.id
+    shop_id = order.shop_id
     key = _bank_idempotency_key(gd, configured_account)
-    # Cùng mã thô trên CÙNG đơn vẫn là retry kể cả provider lúc retry làm rơi
-    # mất account/provider. Cột này non-unique ở DB; đây chỉ là lớp tương thích.
-    if gd.txn_id:
-        existing_raw = (
-            db.query(models.OrderPayment)
-            .filter(
-                models.OrderPayment.order_id == order_id,
-                models.OrderPayment.bank_txn_id == str(gd.txn_id),
-                models.OrderPayment.entry_type == ENTRY_BANK,
-            )
-            .order_by(models.OrderPayment.id)
-            .first()
-        )
-        if existing_raw:
-            return _duplicate_or_collision(db, order, gd, amount, existing_raw)
-
-    existing = (
-        db.query(models.OrderPayment)
-        .filter(models.OrderPayment.idempotency_key == key)
-        .first()
-    )
-    if existing:
-        return _duplicate_or_collision(db, order, gd, amount, existing)
 
     # Tương thích dữ liệu trước khi có ledger: retry đúng mã giao dịch đã lưu
     # trên orders không được biến thành một khoản tiền mới.
     if (
-        gd.txn_id
-        and order.bank_txn_id
-        and str(gd.txn_id) == order.bank_txn_id
+        _canonical_bank_txn_id(gd.txn_id)
+        and _canonical_bank_txn_id(order.bank_txn_id)
+        and _canonical_bank_txn_id(gd.txn_id)
+        == _canonical_bank_txn_id(order.bank_txn_id)
         and order.paid_amount is not None
         and order.status != STATUS_PENDING
     ):
-        return _classify_existing(order)
+        if abs(_so_tien(order.paid_amount) - amount) > MONEY_EPSILON:
+            return _commit_idempotency_collision(
+                db,
+                order_id=order_id,
+                shop_id=shop_id,
+                gd=gd,
+                key=key,
+            )
+        db.rollback()
+        return _fresh_order_outcome(db, order_id)
 
     payment = models.OrderPayment(
         order_id=order_id,
@@ -2132,28 +2409,36 @@ def _apply_bank_transaction(
         amount=amount,
         idempotency_key=key,
         provider=str(gd.provider) if gd.provider else None,
-        bank_txn_id=str(gd.txn_id) if gd.txn_id else None,
+        bank_txn_id=_canonical_bank_txn_id(gd.txn_id),
         account_no=str(gd.account_no) if gd.account_no else None,
     )
     db.add(payment)
     try:
         db.flush()
     except IntegrityError:
-        # Hai webhook giống nhau có thể cùng vượt qua query phía trên; unique
-        # index là hàng rào cuối. Rollback rồi phân loại như một retry.
+        # Hai webhook giống nhau có thể cùng vượt qua query phía trên. Failed
+        # transaction bị bỏ hoàn toàn; chỉ Session MỚI được dùng để xác nhận
+        # row thắng race đã persist và tương thích order/amount/event.
         db.rollback()
-        fresh_order = (
-            db.query(models.Order).filter(models.Order.id == order_id).first()
+        duplicate, collision = _fresh_duplicate_outcome(
+            db,
+            key=key,
+            order_id=order_id,
+            gd=gd,
+            amount=amount,
         )
-        existing = (
-            db.query(models.OrderPayment)
-            .filter(models.OrderPayment.idempotency_key == key)
-            .first()
-        )
-        if fresh_order is not None and existing is not None:
-            return _duplicate_or_collision(
-                db, fresh_order, gd, amount, existing
+        if collision:
+            return _commit_idempotency_collision(
+                db,
+                order_id=order_id,
+                shop_id=shop_id,
+                gd=gd,
+                key=key,
             )
+        if duplicate is not None:
+            return duplicate
+        # Không có row thắng race: đây là IntegrityError khác, không được giả
+        # thành success. Nổi 5xx để provider retry và để lỗi thật được quan sát.
         raise
 
     # INSERT ledger đã lấy write lock của SQLite. Phải đọc lại trạng thái SAU
@@ -2177,7 +2462,7 @@ def _apply_bank_transaction(
         ),
         {
             "amount": amount,
-            "txn": str(gd.txn_id) if gd.txn_id else None,
+            "txn": _canonical_bank_txn_id(gd.txn_id),
             "order_id": order_id,
         },
     )
@@ -2260,7 +2545,7 @@ def _apply_bank_transaction(
 
     if result == "paid":
         _award_loyalty_paid_order(db, order, None)
-    db.commit()
+    _commit_webhook_event(db)
     return result
 
 
@@ -2273,8 +2558,60 @@ def _reset_refund_completion(order: models.Order) -> None:
     order.refund_reference = None
 
 
-def _ghi_tien_ve_chua_ghi_nhan(db: Session, order: models.Order, gd: Any) -> None:
-    """Ghi một bút toán `BANK_UNAPPLIED`: tiền đã về nhưng KHÔNG áp vào đơn.
+def _unapplied_audit_details(
+    order: models.Order,
+    *,
+    amount: float,
+    event_key: str,
+) -> str:
+    return (
+        f"Order {order.id}: đơn đang ở trạng thái {order.status}, webhook không "
+        "tự xử lý (đơn ghi nợ thu qua chức năng thu nợ); "
+        f"BANK_UNAPPLIED {amount:,.0f}đ (event {event_key})"
+    )
+
+
+def _ensure_unapplied_audit(
+    db: Session,
+    order: models.Order,
+    *,
+    amount: float,
+    event_key: str,
+) -> bool:
+    """Thêm audit của BANK_UNAPPLIED đúng một lần, chưa commit."""
+    details = _unapplied_audit_details(
+        order,
+        amount=amount,
+        event_key=event_key,
+    )
+    exists = (
+        db.query(models.SystemLog.id)
+        .filter(
+            models.SystemLog.action == "WEBHOOK_TU_CHOI",
+            models.SystemLog.details == details,
+        )
+        .first()
+    )
+    if exists:
+        return False
+    _them_nhat_ky(
+        db,
+        None,
+        "WEBHOOK_TU_CHOI",
+        details,
+        shop_id=order.shop_id,
+    )
+    return True
+
+
+def _apply_unapplied_bank_event(
+    db: Session,
+    order: models.Order,
+    gd: Any,
+    *,
+    configured_account: Optional[str],
+) -> str:
+    """Ghi BANK_UNAPPLIED + SystemLog trong đúng một transaction.
 
     Chỉ ghi khi payload có số tiền hợp lệ; tiền RA hoặc payload thiếu số tiền
     thì không có gì để báo cho người bán ngoài dòng log.
@@ -2288,47 +2625,108 @@ def _ghi_tien_ve_chua_ghi_nhan(db: Session, order: models.Order, gd: Any) -> Non
     không có thật. Dùng chung khóa thì lần gửi lại rơi vào nhánh trùng lặp và
     không có đồng nào được cộng.
     """
-    if gd.direction == "out" or gd.amount is None:
-        return
+    order_id = order.id
+    shop_id = order.shop_id
+    if gd.direction == "out":
+        _commit_webhook_rejection(
+            db,
+            order,
+            "giao dịch là tiền RA, không phải tiền vào",
+        )
+        return "rejected"
+    if gd.amount is None:
+        _commit_webhook_rejection(
+            db,
+            order,
+            "payload không có số tiền nên không xác nhận được đã thu đủ",
+        )
+        return "rejected"
     amount = float(gd.amount)
     if not math.isfinite(amount) or amount <= 0:
-        return
-
-    configured_account = (
-        db.query(models.Shop.bank_account_no)
-        .filter(models.Shop.id == order.shop_id)
-        .scalar()
-    )
-    key = _bank_idempotency_key(gd, configured_account)
-    if (
-        db.query(models.OrderPayment)
-        .filter(models.OrderPayment.idempotency_key == key)
-        .first()
-    ):
-        return          # ngân hàng gửi lại: đã có dòng rồi, đừng nhân bản
-
-    db.add(
-        models.OrderPayment(
-            order_id=order.id,
-            entry_type=ENTRY_BANK_UNAPPLIED,
-            amount=amount,
-            idempotency_key=key,
-            provider=str(gd.provider) if gd.provider else None,
-            bank_txn_id=str(gd.txn_id) if gd.txn_id else None,
-            account_no=str(gd.account_no) if gd.account_no else None,
-            note="Tiền về cho đơn ghi nợ - chưa ghi nhận, cần thu nợ thủ công",
+        _commit_webhook_rejection(
+            db,
+            order,
+            "số tiền giao dịch phải lớn hơn 0 (khác với payload thiếu số tiền)",
         )
+        return "rejected"
+
+    key = _bank_idempotency_key(gd, configured_account)
+    existing = _find_existing_bank_events(
+        db,
+        key=key,
+        order_id=order_id,
+        gd=gd,
     )
+    if existing:
+        return _duplicate_or_collision_outcome(
+            db,
+            order=order,
+            gd=gd,
+            amount=amount,
+            existing=existing,
+            key=key,
+        )
+
+    payment = models.OrderPayment(
+        order_id=order.id,
+        entry_type=ENTRY_BANK_UNAPPLIED,
+        amount=amount,
+        idempotency_key=key,
+        provider=str(gd.provider) if gd.provider else None,
+        bank_txn_id=_canonical_bank_txn_id(gd.txn_id),
+        account_no=str(gd.account_no) if gd.account_no else None,
+        note="Tiền về cho đơn ghi nợ - chưa ghi nhận, cần thu nợ thủ công",
+    )
+    db.add(payment)
     try:
         db.flush()
     except IntegrityError:
-        # Hai webhook song song cùng vượt qua query trên; unique index chặn.
-        # Không có gì phải cứu: dòng kia đã ghi đúng nội dung này rồi.
+        # Chỉ duplicate khi một Session mới thấy row thắng race đã persist và
+        # tương thích. Unknown IntegrityError/collision phải nổi 5xx.
         db.rollback()
+        duplicate, collision = _fresh_duplicate_outcome(
+            db,
+            key=key,
+            order_id=order_id,
+            gd=gd,
+            amount=amount,
+        )
+        if collision:
+            return _commit_idempotency_collision(
+                db,
+                order_id=order_id,
+                shop_id=shop_id,
+                gd=gd,
+                key=key,
+            )
+        if duplicate is None:
+            raise
+        return duplicate
+
+    _ensure_unapplied_audit(
+        db,
+        order,
+        amount=amount,
+        event_key=key,
+    )
+    _commit_webhook_event(db)
+    return "rejected"
 
 
-def _ghi_tu_choi(db: Session, order_id: int, ly_do: str) -> None:
-    log_system_action(db, None, "WEBHOOK_TU_CHOI", f"Order {order_id}: {ly_do}")
+def _commit_webhook_rejection(
+    db: Session,
+    order: models.Order,
+    ly_do: str,
+) -> None:
+    """Business rejection chỉ trả 200 sau khi audit đã durable."""
+    _them_nhat_ky(
+        db,
+        None,
+        "WEBHOOK_TU_CHOI",
+        f"Order {order.id}: {ly_do}",
+        shop_id=order.shop_id,
+    )
+    _commit_webhook_event(db)
 
 
 def _ghi_tu_choi_sai_tai_khoan(
@@ -2356,11 +2754,13 @@ def _ghi_tu_choi_sai_tai_khoan(
         .first()
     )
     if exists:
+        db.rollback()
         return
-    log_system_action(
+    _them_nhat_ky(
         db,
         None,
         "WEBHOOK_TU_CHOI",
         details,
         shop_id=order.shop_id,
     )
+    _commit_webhook_event(db)

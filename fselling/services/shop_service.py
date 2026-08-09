@@ -87,8 +87,18 @@ def create_shop(db: Session, current_user: models.User, shop: ShopCreate) -> mod
 def update_shop(
     db: Session, current_user: models.User, shop_id: int, shop: ShopCreate
 ) -> models.Shop:
-    db_shop = require_own_shop(db, shop_id, current_user)
     data = _clean_and_validate(shop)
+    # Webhook ORDER đọc account dưới đúng lock hàng Shop này. Lấy lock trước
+    # mọi read quyết định để update account và account-mismatch có một thứ tự
+    # durable duy nhất, kể cả khi chuyển sang DB hỗ trợ row lock thực sự.
+    owner_id = current_user.id
+    # Dependency xác thực đã có thể mở read snapshot. Đóng snapshot chỉ-đọc
+    # trước no-op UPDATE để SQLite không gặp BUSY_SNAPSHOT khi webhook vừa thắng;
+    # ownership và Shop đều được đọc lại sau khi đã lấy write lock.
+    db.rollback()
+    _lock_shop_for_write(db, shop_id, owner_id)
+    db_shop = require_own_shop(db, shop_id, current_user)
+    db.refresh(db_shop)
     for field, value in data.items():
         setattr(db_shop, field, value)
     db.commit()
@@ -136,8 +146,8 @@ def list_shops(db: Session, current_user: models.User) -> List[models.Shop]:
     return shops
 
 
-def _lock_shop_for_delete(db: Session, shop_id: int, owner_id: int) -> None:
-    """Tuần tự hóa nút Xóa với mọi lần ghi điểm/cấu hình cùng shop.
+def _lock_shop_for_write(db: Session, shop_id: int, owner_id: int) -> None:
+    """Tuần tự hóa update/xóa shop với mọi luồng mutation cùng shop.
 
     SQLite không có ``SELECT FOR UPDATE``. Cùng no-op UPDATE trên hàng ``shops``
     mà luồng đơn hàng dùng sẽ giữ write lock tới commit/rollback, nhờ vậy lần
@@ -214,7 +224,7 @@ def _has_subscription_history(db: Session, shop_id: int) -> bool:
 def delete_shop(db: Session, current_user: models.User, shop_id: int) -> Dict[str, str]:
     # Lấy lock trước lần đọc quyết định. Điều kiện owner_id giữ nguyên hành vi
     # 404 cho người không phải chủ mà không cần mở một read transaction trước.
-    _lock_shop_for_delete(db, shop_id, current_user.id)
+    _lock_shop_for_write(db, shop_id, current_user.id)
     db_shop = require_own_shop(db, shop_id, current_user)
     if _has_loyalty_data(db, shop_id):
         db.rollback()

@@ -214,8 +214,11 @@ Luật hiện tại:
 
 Bốn điều dễ làm sai khi sửa tiếp:
 
-**Account mismatch phải được kiểm ngay sau khi tìm thấy order, trước cả
-`WEBHOOK_PAY_FROM`.** Nếu kiểm sau nhánh trạng thái thì tiền sai account trỏ tới
+**Account mismatch phải được kiểm dưới shop write lock, trước cả
+`WEBHOOK_PAY_FROM`.** Sau khi tìm thấy order/shop, webhook lấy lock, refresh
+order rồi đọc lại `Shop.bank_account_no`; đường update account cũng lấy đúng lock
+này. Nếu dùng account đọc trước lock, một update thắng trước vẫn có thể bị quyết
+định theo cấu hình cũ. Nếu kiểm sau nhánh trạng thái thì tiền sai account trỏ tới
 đơn `DEBT` vẫn sinh `BANK_UNAPPLIED`; nếu kiểm trong `_apply_bank_transaction`
 thì ledger/refund/loyalty đã có thể đổi. So account sau khi bỏ số 0 đầu. Payload
 không có account number tạm giữ hành vi tương thích cũ; đây là residual risk,
@@ -225,15 +228,32 @@ không phải bằng chứng rằng provider đã xác nhận đúng tài khoả
 nghĩa là payload không chứa số tiền nên không có cơ sở xác nhận; `amount == 0`
 là một số tiền thật và sai. Gộp hai ca này lại là mở lại đúng lỗ hổng cũ.
 
-**Giao dịch bị từ chối vẫn trả HTTP 200.** Ngân hàng retry vô hạn khi nhận
-4xx/5xx. Lý do từ chối nằm ở `SystemLog` và khóa `rejected_order_ids`.
+**Business rejection chỉ trả HTTP 200 sau khi audit đã durable.** Compatible
+duplicate trả 200 mà không nhân ledger/audit. Canonical idempotency key gồm
+provider + account + event được tra toàn cục; cùng key nhưng khác
+order/amount/event là collision xác định được: không áp tiền, ghi
+`WEBHOOK_XUNG_DOT_IDEMPOTENCY` (không raw payload/account/transaction ID) rồi
+trả 200 với `rejected_order_ids`. Raw transaction fallback có namespace hẹp hơn:
+chỉ dùng trong chính order hiện tại để nối retry đổi envelope/provider giữa
+`BANK_IN` và `BANK_UNAPPLIED`, không dùng raw ID trùng giữa hai shop làm collision.
+Nếu audit collision không commit được, hoặc lỗi
+ledger/flush/commit/IntegrityError không có durable winner, phải rollback và trả
+5xx để provider retry; giả success ở đây là làm mất tiền.
+
+**Một bank event là một transaction.** `BANK_UNAPPLIED` và audit của nó phải
+commit cùng nhau. `BANK_IN`, tổng đã thu, status/refund, loyalty và audit cũng
+phải commit cùng nhau. Trong batch, item trước có thể đã commit rồi item sau lỗi;
+request khi đó trả 5xx, và retry toàn batch dựa vào shared idempotency để không
+nhân item đầu.
 
 **Webhook chỉ được đụng vào trạng thái trong `WEBHOOK_PAY_FROM`** (mục 25).
 
 **Đừng đặt unique index lên `bank_txn_id`.** Ngân hàng gửi lại cùng một giao
 dịch là bình thường. Khi hỗ trợ khách chuyển nhiều lần, máy trạng thái KHÔNG
 còn đủ để chống lặp: mọi khoản tiền vào/tiền mặt/hoàn tiền nằm trong ledger
-`order_payments`, và webhook dùng unique `idempotency_key` riêng. Cả ledger,
+`order_payments`, và webhook dùng unique `idempotency_key` riêng. Transaction ID
+được strip thống nhất khi tạo key, lưu và so sánh; row legacy có khoảng trắng chỉ
+được fallback trong cùng order. Cả ledger,
 tổng lũy kế, trạng thái và `SystemLog` phải commit trong cùng một transaction;
 không gọi `transition_status()` hay `log_system_action()` ở giữa vì hai hàm đó
 tự commit. `bank_txn_id` vẫn non-unique và chỉ dùng để tra cứu.
@@ -892,10 +912,17 @@ lý đúng cả `UNRECONCILED` (chuyển thêm cho đơn thiếu), `CANCELLED` (
 khi hủy → LATE_PAYMENT) và `PAID` (chuyển trùng → OVERPAID). Liệt kê thiếu là
 chặn nhầm những đường đang chạy tốt — nguy hiểm ngang việc không chặn gì.
 
-Kiểm ở vòng lặp mà không kiểm lại sau khi lấy khóa ghi là **an toàn ở đây**:
-`DEBT` chỉ được đặt lúc tạo đơn, không có đường nào đẩy một đơn đang chạy vào
-`DEBT`. `CANCELLED` thì có race thật, nhưng nó nằm trong danh sách cho phép nên
-`_apply_bank_transaction` tự xử như cũ.
+**Không được quyết định nhánh DEBT từ Order đọc trước write lock.** Thu nợ thủ
+công có thể đổi `DEBT` thành `PAID` trong lúc webhook đang chờ. `debt_payment`
+và webhook phải xếp hàng trên cùng shop write lock; sau lock webhook phải
+`refresh(order)` rồi mới chọn `BANK_UNAPPLIED` hay `BANK_IN`. Nếu không, manual
+payment thắng trước nhưng webhook vẫn ghi một reminder unapplied có timestamp
+sau — trạng thái không tương đương bất kỳ thứ tự tuần tự hợp lệ nào.
+
+**Lock order của các luồng vừa đụng shop vừa đụng két là `shop → cash_shift`.**
+`create_order`, thu nợ tiền mặt và trả hàng phải giữ cùng thứ tự. Đảo thành
+`cash_shift → shop` tạo vòng chờ với webhook/luồng shop khi chuyển sang database
+có row lock thực sự.
 
 **Tiền về cho đơn nợ phải NHÌN THẤY ĐƯỢC.** Từ chối mà chỉ ghi `SystemLog` thì
 tiền về xong không ai biết để đi thu — đổi một lỗi mất tiền lấy một lỗi mất
@@ -909,14 +936,22 @@ thái, không gắn `shift_id`. Nó nằm ngoài `CASH_PAYMENT_IN_TYPES` /
 `CASH_PAYMENT_OUT_TYPES` của `shift_service` — hai danh sách đó liệt kê tường
 minh, nên thêm nhầm `"BANK_UNAPPLIED"` vào là tiền ảo vào két và thu ngân lệch ca.
 
-**Dùng CHUNG `_bank_idempotency_key` với bút toán thật.** Đây là chỗ dễ sai
+**Dùng CHUNG `_bank_idempotency_key` với bút toán thật, và raw fallback trong
+chính order cũng phải nhìn cả `BANK_IN` lẫn `BANK_UNAPPLIED`.** Đây là chỗ dễ sai
 nhất và hậu quả là tiền: khách chuyển 100k cho đơn nợ → ghi unapplied → người
 bán thu nợ tay, đơn thành `PAID` → ngân hàng gửi lại đúng giao dịch đó (chuyện
 bình thường) → `PAID` nằm trong `WEBHOOK_PAY_FROM` nên lần này giao dịch được
 xử lý THẬT. Khóa riêng thì nó không bị coi là trùng và đơn thành `OVERPAID` với
 100k chờ hoàn không có thật. Khóa chung thì lần gửi lại rơi vào nhánh trùng lặp
 và không đồng nào được cộng. `test_gui_lai_sau_khi_da_thu_no_KHONG_cong_tien_lan_hai`
-canh đúng chuyện này — đã kiểm bằng cách tạm đổi sang khóa riêng và nó đỏ.
+canh đúng chuyện này — đã kiểm bằng cách tạm đổi sang khóa riêng và nó đỏ. Chỉ
+kiểm key vẫn chưa đủ: provider/envelope/account metadata có thể đổi làm key hash
+đổi, nên cùng raw transaction được canonicalize (strip hai đầu) và fallback trong
+**đúng order hiện tại**; cùng order+amount mới là compatible duplicate, còn cùng
+order nhưng khác amount/event là collision audit-durable rồi 200/rejected. Raw ID
+không unique giữa provider/account/shop nên tuyệt đối không fallback toàn cục.
+Canonical key vẫn được tra toàn cục để cùng provider + account + event key không
+thể áp sang order khác. Account mismatch vẫn đứng trước fallback này.
 
 **Giao diện không được hiện nó như một khoản đã thu.** Màu hổ phách, KHÔNG có
 dấu `+`, kèm câu "chưa được cộng vào đơn". Hiện `+ 250.000` xanh lá cạnh các

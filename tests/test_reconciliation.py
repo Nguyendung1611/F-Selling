@@ -273,7 +273,7 @@ def test_hai_giao_dich_cung_don_trong_mot_payload_deu_duoc_cong(
     assert len(_payments(order_id)) == 2
 
 
-def test_webhook_trung_ma_khong_cong_lai_va_xung_dot_bi_tu_choi(
+def test_webhook_trung_ma_khong_cong_lai_va_xung_dot_audit_roi_200(
     client, webhook_secret
 ):
     ctx = seller_with_shop(client)
