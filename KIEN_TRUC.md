@@ -1559,6 +1559,39 @@ RỖNG ở lần gọi đầu rồi mới nạp xong sau đó; kết luận ngay
 định "máy chưa có giọng tiếng Việt" trên đúng cái máy đang có. Nói sai về máy
 của người dùng còn tệ hơn là không nói gì.
 
+### 41. Webhook ORDER phải xác thực TRƯỚC khi chạm vào body
+
+`Request.json()` đọc hết body rồi mới parse. Vì vậy đặt nó trước bước so secret
+không chỉ tốn CPU cho request giả: request sai secret vẫn có thể ép app giữ body
+lớn trong RAM, và nếu log object vừa parse thì còn ghi nguyên email/tên/note/số
+tài khoản vào file log. Kiểm secret fail-closed bằng `compare_secret()` phải
+đứng trước mọi `request.body()`/`request.json()`/`request.stream()` và trước mọi
+log webhook.
+
+Sau xác thực, `Content-Length` chỉ được dùng để **từ chối sớm**, không phải bằng
+chứng body nhỏ. Header có thể thiếu, sai hoặc nói nhỏ hơn thật; giới hạn bắt buộc
+phải đếm từng chunk từ ASGI stream và ném 413 ngay khi tổng vượt
+`ORDER_WEBHOOK_MAX_BODY_BYTES`, trước khi parse JSON hay gọi `order_service`.
+App chỉ bắt đầu đọc/đếm stream **sau khi secret hợp lệ**. Mức 256 KiB là default
+khởi đầu cho pilot, chưa phải kích thước đã được provider xác minh; phải đo
+payload thật và theo dõi số lượng HTTP 413 trước khi điều chỉnh. Không dùng
+`await request.body()` rồi mới kiểm `len()`: lúc đó body quá lớn đã nằm trọn
+trong RAM.
+
+Log nhận webhook chỉ chứa metadata số học đã chốt sẵn (hiện là số byte body).
+Không nối raw payload, header secret, account number hoặc các field tự do vào
+route/file log như `request_log.txt`. P0.2 không đổi contract structured
+financial audit hiện có: `SystemLog WEBHOOK_TRA_TRUNG` vẫn chứa transaction ID
+để tra soát. Muốn sanitize/correlation các financial audit identifier này cần
+một policy riêng và test migration/khả năng tra cứu riêng, ngoài lát cắt này.
+
+Giới hạn trên chỉ ở tầng ứng dụng. Chưa có bằng chứng proxy/edge production của
+Fly có body limit riêng; nếu cần hai lớp bảo vệ phải cấu hình và kiểm chứng edge
+độc lập.
+
+Webhook subscription đã kiểm secret trước parse từ trước; sửa ORDER không được
+đẩy nó lùi lại. Thứ tự router vẫn là `webhooks.router` trước `orders.router`.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

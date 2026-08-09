@@ -132,6 +132,24 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    """Đọc env nguyên dương; fallback mà không cần reload module khi test."""
+    value = _int_env(name, default)
+    if value <= 0:
+        print(f"[WARN] {name} must be positive. Using default {default}.")
+        return default
+    return value
+
+
+# Trần body webhook ORDER ở TẦNG ỨNG DỤNG. 256 KiB là default khởi đầu cho
+# pilot, chưa phải kích thước đã được provider xác minh. App chỉ đọc/đếm stream
+# sau khi secret hợp lệ; giá trị cấu hình lỗi quay về default dương này.
+_ORDER_WEBHOOK_MAX_BODY_BYTES_DEFAULT = 256 * 1024
+ORDER_WEBHOOK_MAX_BODY_BYTES: int = _positive_int_env(
+    "ORDER_WEBHOOK_MAX_BODY_BYTES", _ORDER_WEBHOOK_MAX_BODY_BYTES_DEFAULT
+)
+
+
 # Tự hủy đơn PENDING quá hạn và hoàn lại tồn kho sau bao nhiêu phút.
 # 0 = TẮT (mặc định). Job này ghi lên dữ liệu thật nên phải bật có chủ ý:
 # đặt ORDER_PENDING_TIMEOUT_MINUTES=30 trong .env để bật.

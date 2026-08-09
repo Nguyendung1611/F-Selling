@@ -66,6 +66,14 @@ fly secrets set --app <ten-app> `
 - `GEMINI_API_KEY` là **tùy chọn**: không đặt thì trợ lý vẫn chạy bằng bộ nhận
   dạng nội bộ (0 đồng, không ra mạng), chỉ là không hiểu được các câu hỏi nói
   vòng vo. Đặt vào thì mỗi shop Pro được 20 lượt nhờ AI mỗi ngày.
+- `ORDER_WEBHOOK_MAX_BODY_BYTES` không phải secret. `fly.toml` đặt 262144 byte
+  (256 KiB) làm **default khởi đầu cho pilot**, không phải kích thước đã được
+  provider xác minh. App chỉ bắt đầu đọc/đếm stream sau khi secret hợp lệ, và
+  vẫn đếm khi `Content-Length` thiếu hoặc sai. Trước khi điều chỉnh phải đo
+  payload thật và theo dõi số lượng response HTTP 413 trong pilot.
+- Đây chỉ là giới hạn ở **tầng ứng dụng**. Tài liệu này không xác nhận proxy/edge
+  production của Fly đã có body limit riêng; muốn có hai lớp bảo vệ phải cấu
+  hình và kiểm chứng lớp proxy độc lập.
 
 ## 6. Deploy
 

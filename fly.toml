@@ -9,6 +9,8 @@ primary_region = "sin"  # Singapore, gần Việt Nam
   DB_PATH = "/data/fselling_v4.db"
   UPLOAD_DIR = "/data/uploads"
   ALLOWED_ORIGINS = "https://f-selling-dung.fly.dev"
+  # Default pilot ở tầng app; chưa xác minh limit của provider hay proxy/edge.
+  ORDER_WEBHOOK_MAX_BODY_BYTES = "262144"
 
 [http_service]
   internal_port = 8080
