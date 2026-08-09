@@ -81,6 +81,6 @@ def test_asset_goi_cuoc_duoc_bump_o_ca_hai_trang():
         assert "/js/locales/subscriptions.js?v=20260807-goi-cuoc-f3" in html
         assert "/js/subscriptions.js?v=20260807-goi-cuoc-f3" in html
 
-    # seller.js sang mốc L3 (Trợ Lý); ba asset gói cước ở trên KHÔNG đổi nên
+    # seller.js sang mốc L5 (Giọng nói cho Trợ Lý); ba asset gói cước ở trên KHÔNG đổi nên
     # vẫn giữ nguyên mốc cũ - bump bừa cả cụm là bắt người dùng tải lại vô ích.
-    assert "/js/seller.js?v=20260809-tro-ly-ai" in seller_html
+    assert "/js/seller.js?v=20260809-tro-ly-giong-noi" in seller_html

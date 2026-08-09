@@ -1498,6 +1498,37 @@ thứ làm lớp phòng thủ mạnh dần: mỗi mẫu thêm vào `_MAU_Y_DINH`
 câu phải gọi ra Google. Đọc log đó định kỳ, đừng để tính năng tự chạy mãi mà
 không ai biết nó có đáng giữ không.
 
+### 40. Giọng nói cho trợ lý: nút phải BIẾN MẤT khi không dùng được
+
+**Nghe** dùng Web Speech API của trình duyệt. Miễn phí, nhưng KHÔNG có ở khắp
+nơi: Firefox không hỗ trợ, webview trong Zalo/Facebook có hàm nhưng gọi là lỗi,
+và trang chạy `http://` trên IP LAN bị Chrome chặn mic (`isSecureContext` false).
+Người bán Việt Nam hay mở link từ Zalo nên đây không phải ca hiếm.
+
+Nút mic vì vậy **mặc định `display:none` trong HTML**, JS chỉ bật nó lên sau khi
+kiểm cả hai điều kiện. Cùng bài học với `confirm()` bị Chrome chặn: một cái nút
+bấm vào không ra gì còn tệ hơn là không có nút.
+
+`continuous = false` và `interimResults = false`: hỏi một câu rồi dừng. Bật
+`continuous` là micro mở suốt buổi bán hàng.
+
+**Đọc dùng lại `DocTien.noi()` của màn POS**, không viết mới. Hàm đó đã xử lý
+đúng cái khó nhất: máy có giọng Việt thì đọc tại chỗ, không có (Chrome trên
+Windows) thì nhờ `/api/tts`, chưa cấu hình server thì im lặng. Gọi thẳng
+`speechSynthesis` ở `seller.js` là đi vòng qua phần chọn giọng tiếng Việt mà
+`doc-tien.js` đã làm đúng.
+
+**Số tiền phải đổi sang CHỮ trước khi đọc** — bài học đã ghi sẵn trong
+`doc-tien.js`: bộ đọc gặp "3.740.500đ" sẽ đọc "ba chấm bảy bốn không chấm năm
+không không". Nhưng chỉ đổi cụm có đuôi `đ`: các số khác trong câu trả lời
+("còn đủ bán 0.6 ngày", "giảm 15.9%") dùng dấu chấm làm dấu THẬP PHÂN, đổi luôn
+là đọc sai theo hướng ngược lại.
+
+**Chờ `voiceschanged` rồi mới kết luận về giọng.** `getVoices()` thường trả
+RỖNG ở lần gọi đầu rồi mới nạp xong sau đó; kết luận ngay là dòng ghi chú khẳng
+định "máy chưa có giọng tiếng Việt" trên đúng cái máy đang có. Nói sai về máy
+của người dùng còn tệ hơn là không nói gì.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

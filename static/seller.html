@@ -526,10 +526,27 @@
                         style="flex:1; margin-bottom:0;"
                         data-i18n-placeholder="seller.assistant.placeholder"
                         placeholder="Ví dụ: hôm nay bán được bao nhiêu?">
+                    <!-- Nút mic: JS ẨN HẲN nút này khi trình duyệt không nghe
+                         được (Firefox, webview Zalo/Facebook, trang không chạy
+                         qua HTTPS). Để một cái nút bấm vào không ra gì còn tệ
+                         hơn là không có nút. -->
+                    <button type="button" id="assistantMic" onclick="batTatNgheTroLy()"
+                            style="display:none; white-space:nowrap;" class="btn-outline"
+                            data-i18n-title="seller.assistant.mic_hint" title="Bấm rồi nói">
+                        <i class="ph ph-microphone"></i>
+                    </button>
                     <button type="submit" id="assistantSend" style="white-space:nowrap;">
                         <i class="ph ph-paper-plane-right"></i> <span data-i18n="seller.assistant.send">Hỏi</span>
                     </button>
                 </form>
+
+                <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap; margin-top:0.6rem;">
+                    <label style="margin:0; display:flex; align-items:center; gap:0.4rem; font-size:0.85rem;">
+                        <input type="checkbox" id="assistantSpeak" onchange="doiDocTraLoi()" style="margin:0;">
+                        <span data-i18n="seller.assistant.read_aloud">Đọc câu trả lời thành tiếng</span>
+                    </label>
+                    <small id="assistantVoiceNote" style="color:#64748B; font-size:0.75rem;"></small>
+                </div>
             </div>
         </div>
 
@@ -2180,7 +2197,7 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260809-tro-ly-ai"></script>
+    <script src="/js/locales/seller.js?v=20260809-tro-ly-giong-noi"></script>
     <script src="/js/locales/subscriptions.js?v=20260807-goi-cuoc-f3"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260807-admin-nhap-hang"></script>
@@ -2188,7 +2205,7 @@
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260809-tro-ly-ai"></script>
+    <script src="/js/seller.js?v=20260809-tro-ly-giong-noi"></script>
     <script src="/js/purchasing.js?v=20260807-nha-cung-cap-ui-f9"></script>
     <!-- Nạp SAU seller.js: expenses.js dùng apiCall/showToast/showCustomConfirm
          và các helper định dạng tiền của trang. -->

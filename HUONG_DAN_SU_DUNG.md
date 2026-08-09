@@ -301,6 +301,34 @@ tuần trước, tháng này, tháng trước, 7 ngày qua…*
 
 > Trợ lý **chỉ đọc**. Nó không tạo đơn, không sửa giá, không đổi tồn kho.
 
+#### Hỏi bằng giọng nói
+
+Bấm nút **micro** cạnh ô gõ, nói câu hỏi, nói xong là nó tự hỏi luôn — không
+phải bấm thêm nút nào.
+
+Tick ô **"Đọc câu trả lời thành tiếng"** thì máy sẽ đọc to câu trả lời, tiện khi
+bạn đang bận tay bán hàng. Mặc định tắt.
+
+**Ba trường hợp micro không dùng được** (nút sẽ tự ẩn hoặc báo rõ lý do):
+
+| Tình huống | Cách xử |
+|---|---|
+| Mở link trong **Zalo hoặc Facebook** | Bấm "..." rồi chọn **Mở bằng trình duyệt** |
+| Dùng **Firefox** | Đổi sang Chrome, Edge hoặc Safari |
+| Vào web bằng **địa chỉ IP** (kiểu `192.168.1.5:8000`) | Micro chỉ chạy qua HTTPS hoặc trên chính máy đó |
+
+Nếu bạn lỡ bấm "Chặn" khi trình duyệt xin quyền micro: bấm vào **biểu tượng ổ
+khóa** trên thanh địa chỉ để bật lại.
+
+> **Về phần đọc to:** máy tính Windows chạy Chrome thường **không có sẵn giọng
+> tiếng Việt**. Nếu vậy, ngay dưới ô tick sẽ hiện dòng báo trước cho bạn biết —
+> chứ không để bạn bật lên rồi ngồi chờ trong im lặng.
+>
+> Điện thoại Android và iPhone thì gần như luôn có sẵn giọng Việt.
+>
+> Muốn máy tính đọc được thì cấu hình `TTS_PROVIDER` / `TTS_API_KEY` trong
+> `.env` (xem mục 6) — phần này có tính phí, nhưng rất rẻ.
+
 #### Cắm AI để hiểu thêm các câu hỏi lạ (tùy chọn)
 
 Mặc định trợ lý chạy **hoàn toàn trong máy chủ của bạn**: 0 đồng, không gọi ra

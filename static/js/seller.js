@@ -1687,6 +1687,131 @@ function switchWarehouseSubTab(subTab) {
 
 let troLyDangHoi = false;
 
+// ----- Giọng nói cho trợ lý -----
+//
+// NGHE: Web Speech API của trình duyệt. Miễn phí, nhưng KHÔNG có ở khắp nơi -
+// Firefox không hỗ trợ, và webview trong Zalo/Facebook thì có hàm nhưng gọi là
+// lỗi. Người bán Việt Nam hay mở link từ Zalo nên đây không phải ca hiếm.
+//
+// ĐỌC: dùng lại `DocTien.noi()` đã có sẵn cho màn POS. Nó đã xử lý đúng cái
+// khó nhất: máy có giọng Việt thì đọc tại chỗ, không có (Chrome trên Windows)
+// thì nhờ server đọc hộ, không cấu hình server thì im lặng.
+const KHOA_DOC_TRA_LOI = 'troLy.doc';
+let boNghe = null;
+let dangNghe = false;
+
+function ngheDuocKhong() {
+    // `isSecureContext` false = trang chạy qua http trên IP LAN. Chrome chặn
+    // mic ở đó, và nút mic sẽ bấm mãi không ra gì.
+    if (!window.isSecureContext) return false;
+    return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function docTraLoiDangBat() {
+    return localStorage.getItem(KHOA_DOC_TRA_LOI) === '1';
+}
+
+function doiDocTraLoi() {
+    const bat = document.getElementById('assistantSpeak')?.checked;
+    localStorage.setItem(KHOA_DOC_TRA_LOI, bat ? '1' : '0');
+    if (bat) capNhatGhiChuGiong();
+}
+
+/** Nói cho người dùng biết TRƯỚC là máy này có đọc được tiếng Việt không. */
+async function capNhatGhiChuGiong() {
+    const o = document.getElementById('assistantVoiceNote');
+    if (!o) return;
+    if (!document.getElementById('assistantSpeak')?.checked) { o.innerText = ''; return; }
+    if (window.DocTien?.giongTiengViet?.().length) { o.innerText = ''; return; }
+    // Máy không có giọng Việt: hỏi server một lần xem có đọc hộ được không.
+    const serverDoc = window.DocTien?.serverDocDuoc?.();
+    const co = serverDoc === null ? await window.DocTien?.kiemTraServer?.() : serverDoc;
+    o.innerText = co ? '' : t('seller.assistant.no_voice');
+}
+
+let daNgheDoiGiong = false;
+
+function khoiTaoGiongNoiTroLy() {
+    const nutMic = document.getElementById('assistantMic');
+    if (nutMic) nutMic.style.display = ngheDuocKhong() ? '' : 'none';
+    const oDoc = document.getElementById('assistantSpeak');
+    if (oDoc) oDoc.checked = docTraLoiDangBat();
+
+    // `getVoices()` thường trả RỖNG ở lần gọi đầu rồi mới nạp xong sau đó.
+    // Không chờ sự kiện này thì dòng ghi chú sẽ khẳng định "máy chưa có giọng
+    // tiếng Việt" trên đúng cái máy đang có - nói sai về máy của người dùng còn
+    // tệ hơn là không nói gì.
+    if (!daNgheDoiGiong && window.speechSynthesis && 'onvoiceschanged' in window.speechSynthesis) {
+        daNgheDoiGiong = true;
+        window.speechSynthesis.addEventListener('voiceschanged', capNhatGhiChuGiong);
+    }
+    capNhatGhiChuGiong();
+}
+
+function batTatNgheTroLy() {
+    if (dangNghe) { boNghe?.stop(); return; }
+    const BoNhanDang = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!BoNhanDang) { showToast(t('seller.assistant.mic_unsupported')); return; }
+
+    boNghe = new BoNhanDang();
+    boNghe.lang = 'vi-VN';
+    boNghe.continuous = false;      // hỏi một câu rồi dừng, không nghe lén
+    boNghe.interimResults = false;  // chỉ lấy kết quả cuối, khỏi nhấp nháy
+
+    const nut = document.getElementById('assistantMic');
+    boNghe.onstart = () => {
+        dangNghe = true;
+        if (nut) { nut.classList.add('btn-primary'); nut.classList.remove('btn-outline'); }
+        document.getElementById('assistantInput').placeholder = t('seller.assistant.listening');
+    };
+    const ketThuc = () => {
+        dangNghe = false;
+        if (nut) { nut.classList.remove('btn-primary'); nut.classList.add('btn-outline'); }
+        const o = document.getElementById('assistantInput');
+        if (o) o.placeholder = t('seller.assistant.placeholder');
+    };
+    boNghe.onend = ketThuc;
+    boNghe.onerror = (e) => {
+        ketThuc();
+        // 'aborted' là do chính người dùng bấm dừng - không phải lỗi, đừng la.
+        if (e.error === 'aborted') return;
+        const khoa = {
+            'not-allowed': 'seller.assistant.mic_denied',
+            'service-not-allowed': 'seller.assistant.mic_denied',
+            'no-speech': 'seller.assistant.mic_no_speech'
+        }[e.error] || 'seller.assistant.mic_failed';
+        showToast(t(khoa));
+    };
+    boNghe.onresult = (e) => {
+        const chu = e.results?.[0]?.[0]?.transcript || '';
+        if (!chu.trim()) return;
+        document.getElementById('assistantInput').value = chu;
+        guiCauHoi();       // nói xong là hỏi luôn, khỏi bắt bấm thêm nút
+    };
+
+    try {
+        boNghe.start();
+    } catch (e) {
+        ketThuc();
+        showToast(t('seller.assistant.mic_failed'));
+    }
+}
+
+/** Đổi số tiền sang CHỮ trước khi đọc.
+ *
+ *  Bộ đọc gặp "3.740.500đ" sẽ đọc thành "ba chấm bảy bốn không chấm năm không
+ *  không" - đúng bài học đã ghi trong `doc-tien.js`. CHỈ đổi cụm có đuôi "đ":
+ *  các số khác trong câu ("còn đủ bán 0.6 ngày") dùng dấu chấm làm dấu THẬP
+ *  PHÂN, đổi luôn là đọc sai theo hướng ngược lại.
+ */
+function docDuocCauTraLoi(chu) {
+    return (chu || '').replace(/(\d[\d.]*)đ/g, (nguyen, so) => {
+        const giaTri = Number(so.replace(/\./g, ''));
+        if (!Number.isFinite(giaTri) || !window.DocTien?.docSo) return nguyen;
+        return window.DocTien.docSo(giaTri) + ' đồng';
+    });
+}
+
 function moTroLy() {
     const than = document.getElementById('assistantBody');
     const chonShop = document.getElementById('assistantShopSelector');
@@ -1704,6 +1829,7 @@ function moTroLy() {
         themBongChat('may', t('seller.assistant.greeting'));
     }
     veGoiY();
+    khoiTaoGiongNoiTroLy();
 }
 
 function veGoiY(danhSach = null) {
@@ -1779,6 +1905,10 @@ async function guiCauHoi(bienCo) {
             phuChu += (phuChu ? ' · ' : '') + t('seller.assistant.via_ai');
         }
         themBongChat('may', d.tra_loi, phuChu);
+        if (docTraLoiDangBat()) {
+            // Cắt bớt cho vừa giới hạn của server đọc hộ (TTS_MAX_CHARS = 300).
+            window.DocTien?.noi?.(docDuocCauTraLoi(d.tra_loi).slice(0, 280));
+        }
         if (d.goi_y && d.goi_y.length) veGoiY(d.goi_y);
         else veGoiY();
     } catch (e) {
