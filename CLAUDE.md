@@ -117,13 +117,14 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   7 tiếng, `date.today()` đổi theo múi giờ máy deploy. Hàng còn bán được, hàng
   được phép hủy và màn cảnh báo hạn phải dùng **chung một mốc** — lệch nhau là
   có lô vừa không bán được vừa chưa hủy được. Xem bẫy 36 trong `KIEN_TRUC.md`.
-- `run_migrations()` **cố ý nuốt mọi lỗi** để chạy lặp lại được. Nên thêm unique
-  index thì phải khai vào `_REQUIRED_INDEXES`, nếu không lệnh tạo index thất bại
-  sẽ trôi qua im lặng và ràng buộc bị hổng mà không ai biết.
+- Schema production chỉ đổi qua `python -m fselling.migration.cli`. Web startup
+  chỉ verify checksum/control fingerprint/linear journal/schema; mismatch phải
+  fail-closed. Không gọi `create_all()` hay dựng lại migration broad-catch trong
+  bootstrap. Revision đã phát hành không import model/service/helper mutable.
 - `log_system_action()` gọi `commit()`, làm **expire** mọi ORM object. Còn trả
   object về client thì phải `db.refresh(obj)` sau đó.
-- Migration dọn dữ liệu (như `dedupe_product_codes`) phải chạy **trước**
-  `run_migrations()`.
+- Dedupe/backfill legacy chỉ chạy trong revision Alembic self-contained và được
+  verifier kiểm trong cùng `BEGIN IMMEDIATE`; không gọi lại helper bootstrap cũ.
 
 **Route**
 

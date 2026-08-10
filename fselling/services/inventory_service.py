@@ -316,8 +316,8 @@ def doi_chieu_ton_kho(db: Session, shop_id: int) -> List[Dict[str, Any]]:
 
     `Product.stock` là BẢN SAO của tổng lô, được ghi cùng transaction ở mọi
     đường. Nhưng "cùng transaction" là lời hứa của code, không phải ràng buộc
-    của DB - nên phải có chỗ kiểm lại, y như `verify_required_indexes()` kiểm
-    các unique index mà `run_migrations()` có thể đã nuốt lỗi.
+    của DB - nên phải có chỗ kiểm lại, cùng nguyên tắc fail-closed với I04
+    schema fingerprint kiểm chính xác các financial unique index lúc startup.
     """
     lech: List[Dict[str, Any]] = []
     products = (

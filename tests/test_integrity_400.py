@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
 from conftest import auth, seller_with_shop
-from fselling.core import bootstrap
+import legacy_bootstrap_support as bootstrap
 from fselling.services import catalog_service
 
 

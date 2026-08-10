@@ -56,6 +56,7 @@ BASELINE_ROUTES = {
 # Route được thêm CÓ CHỦ Ý sau bản refactor. Mọi route /api không nằm trong
 # BASELINE_ROUTES hoặc danh sách này đều bị coi là thêm ngoài ý muốn.
 ROUTES_BO_SUNG = {
+    ("GET", "/api/health/ready"),  # I04: readiness chỉ GO sau schema verify
     ("POST", "/api/orders/{order_id}/cancel"),  # A1d: hủy đơn + hoàn tồn kho
     ("GET", "/api/orders/{order_id}/detail"),   # B3: xem chi tiết đơn kèm dòng hàng
     ("PUT", "/api/products/{product_id}"),      # behavior fix: sửa sản phẩm từ Kho hàng

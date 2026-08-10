@@ -8,7 +8,7 @@ from sqlalchemy import text
 from conftest import auth, create_category, create_product, create_shop, new_seller, seller_with_shop
 
 from fselling import models
-from fselling.core.bootstrap import backfill_order_item_product_id
+from legacy_bootstrap_support import backfill_order_item_product_id
 from fselling.core.database import SessionLocal
 
 

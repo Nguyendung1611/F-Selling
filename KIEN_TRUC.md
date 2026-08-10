@@ -17,7 +17,7 @@ python_app/
 │   │   ├── config.py          # BASE_DIR, UPLOAD_DIR, SECRET_KEY, CORS, log_to_file
 │   │   ├── database.py        # engine / SessionLocal / Base
 │   │   ├── security.py        # bcrypt, JWT, OTP, chính sách mật khẩu, compare_digest
-│   │   └── bootstrap.py       # create_all + migration SQLite + seed admin
+│   │   └── bootstrap.py       # seed app, chỉ chạy sau schema verification
 │   ├── models/                # ORM: user, shop, catalog, order, system_log
 │   ├── schemas/               # Pydantic: auth, shop, catalog, order
 │   ├── routers/               # Chỉ xử lý HTTP, gọi service
@@ -149,13 +149,32 @@ là `async` nhưng endpoint vẫn để `def` đồng bộ: FastAPI giải depen
 event loop rồi chạy endpoint trong threadpool, nên phần gọi database đồng bộ
 không chặn event loop.
 
-### 4. `run_migrations()` nuốt lỗi, nên index bắt buộc phải được kiểm lại
+### 4. Migration I04 fail-closed; web startup tuyệt đối không sửa schema
 
-Hàm này bọc mọi câu lệnh trong `except SQLAlchemyError` để chạy lặp lại được.
-Hệ quả: một `CREATE UNIQUE INDEX` thất bại (DB đang có sẵn dữ liệu trùng) sẽ
-**trôi qua im lặng**, app vẫn khởi động, và ràng buộc trùng lặp bị hổng mà
-không ai biết. Thêm index bắt buộc thì phải khai vào `_REQUIRED_INDEXES` để
-`verify_required_indexes()` kiểm lại và in cảnh báo.
+Schema production do graph Alembic tuyến tính trong `migrations/` quản lý, còn
+`fselling/migration/` quản lý checksum, control fingerprint, UUID database,
+lease/fence, request/journal/campaign/attempt và verifier. Coordinator inject
+đúng một SQLAlchemy `Connection` vào Alembic `env.py` và giữ `BEGIN IMMEDIATE`;
+DDL, `alembic_version`, journal, verifier và attempt success commit cùng nhau.
+Lease không tự hết hạn giữa transaction đang giữ SQLite write lock; giữa các
+checkpoint đã commit phải heartbeat cùng fence, và fence mới luôn chặn owner cũ.
+`plan/check` chặn branch/merge, checksum drift, helper import và operation không
+transactional trước side effect. Attempt lỗi chỉ persist error code + SHA-256
+digest, không persist exception/path/PII thô. Với adoption, `request_id` định
+danh durable intent: lỗi transient giữ intent `RUNNING`, đóng attempt cũ ở
+`FAILED_RETRYABLE`, và retry cùng `request_id` tạo attempt số kế tiếp; intent
+`FAILED_BLOCKED` hoặc input backup/digest/request mơ hồ luôn bị chặn.
+
+Web startup chỉ gọi verifier read-only. Thiếu/sai revision, control shape hay
+financial index thì readiness 503 và mọi nghiệp vụ bị khóa; scheduler và seed
+không được chạy. Fresh DB phải `init` → `upgrade head` → `verify`; DB legacy
+9cf7106 phải backup/restore rehearsal rồi `adopt-legacy` → `upgrade head` →
+`verify`. Readiness công khai chỉ trả `ready` và revision, không trả DB path,
+UUID, fingerprint hoặc nguồn topology. Không đưa `create_all()` hay migration
+broad-catch trở lại bootstrap. Revision có thể repair checkout đã quá hạn tại
+thời điểm upgrade, nhưng startup verifier chỉ kiểm invariant bền: không dùng
+`CURRENT_TIMESTAMP` để biến một checkout runtime vừa quá hạn thành schema/data
+corruption và tự khóa readiness sau thời gian downtime.
 
 ### 5. Mã sản phẩm tự sinh phải lấy từ `id`, không lấy từ đồng hồ
 
@@ -166,9 +185,10 @@ giây đều trùng mã. Nay `create_product` gọi `db.flush()` để lấy `id
 `code`, `barcode` và `name` đều duy nhất trong phạm vi một shop
 (`ix_products_shop_code`, `ix_products_shop_barcode`, `ix_products_shop_name`)
 và đều được kiểm ở service để báo tên sản phẩm đang giữ mã.
-`dedupe_product_codes()` dọn dữ liệu cũ và **phải chạy trước
-`run_migrations()`**, nếu không lệnh tạo unique index sẽ thất bại trên DB còn mã
-trùng. Riêng `name` cố ý KHÔNG có bước dồn tự động: tên là dữ liệu người dùng
+Revision `0002_i04_operational_tables` dọn mã trống/trùng theo quy tắc `SP-<id>`
+và verifier kiểm lại trong cùng transaction; web startup không còn chạy
+`dedupe_product_codes()`/`run_migrations()`. Riêng `name` cố ý KHÔNG có bước dồn
+tự động: tên là dữ liệu người dùng
 đặt, tự đổi thành "... (2)" là quyết định không nên thay họ - DB nào còn tên
 trùng thì `verify_required_indexes()` sẽ nêu index bị thiếu để tự sửa.
 

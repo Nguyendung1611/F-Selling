@@ -14,7 +14,7 @@ from conftest import (
 )
 
 from fselling import models
-from fselling.core import bootstrap
+import legacy_bootstrap_support as bootstrap
 from fselling.core.database import SessionLocal
 
 

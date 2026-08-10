@@ -23,7 +23,7 @@ from conftest import (
 )
 
 from fselling import models
-from fselling.core import bootstrap
+import legacy_bootstrap_support as bootstrap
 from fselling.core.database import SessionLocal
 from fselling.routers import webhooks
 from fselling.services import loyalty_service, order_service

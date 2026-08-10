@@ -29,7 +29,7 @@ from conftest import (
     seller_with_shop,
 )
 from fselling import models
-from fselling.core import bootstrap
+import legacy_bootstrap_support as bootstrap
 from fselling.core.database import SessionLocal
 from fselling.core.numeric_limits import MAX_SAFE_QUANTITY, MAX_SAFE_VND
 from fselling.services import catalog_service, supplier_service
@@ -2334,36 +2334,38 @@ def test_staff_xem_nhat_ky_nhung_khong_thay_so_tien_ncc(client):
         assert str(sensitive_amount) not in details
 
 
-def test_nang_db_legacy_tao_bang_moi_nhung_khong_bia_phieu_tu_ton_cu(client, db):
-    """ADJUST_STOCK cũ không đủ thông tin để đoán NCC, hóa đơn hay đã trả tiền."""
-    ctx = seller_with_shop(client)
-    product_id = ctx["product"]["id"]
-    before = db.query(models.Product).filter(models.Product.id == product_id).one()
-    stock_before = before.stock
-    cost_before = before.cost_price
+def test_nang_db_fresh_tao_bang_moi_nhung_khong_bia_phieu_tu_ton_cu(tmp_path):
+    """Root/head tạo schema NCC nhưng không tự sinh chứng từ không có căn cứ."""
+    import sqlite3
+    from pathlib import Path
 
-    for table in (
-        "supplier_payment_allocations",
-        "supplier_payments",
-        "supplier_payable_entries",
-        "purchase_receipt_items",
-        "purchase_receipts",
-        "suppliers",
-    ):
-        db.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
-    db.commit()
+    from fselling.migration.coordinator import MigrationCoordinator
+    from fselling.migration.topology import StaticInventory
 
-    bootstrap.initialize()
-    db.expire_all()
-    after = db.query(models.Product).filter(models.Product.id == product_id).one()
-    assert after.stock == stock_before
-    assert after.cost_price == cost_before
-    assert db.query(models.Supplier).filter(
-        models.Supplier.shop_id == ctx["shop_id"]
-    ).count() == 0
-    assert db.query(models.PurchaseReceipt).filter(
-        models.PurchaseReceipt.shop_id == ctx["shop_id"]
-    ).count() == 0
+    database = tmp_path / "supplier-fresh.db"
+    project_root = Path(__file__).resolve().parent.parent
+    coordinator = MigrationCoordinator(
+        database,
+        project_root=project_root,
+        inventory_provider=StaticInventory(),
+    )
+    coordinator.init()
+    coordinator.upgrade()
+    coordinator.verify()
+
+    connection = sqlite3.connect(database)
+    try:
+        for table in (
+            "suppliers",
+            "purchase_receipts",
+            "purchase_receipt_items",
+            "supplier_payable_entries",
+            "supplier_payments",
+            "supplier_payment_allocations",
+        ):
+            assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] == 0
+    finally:
+        connection.close()
 
 
 def test_cac_bang_moi_ton_tai_va_migration_chay_lap(client, db):

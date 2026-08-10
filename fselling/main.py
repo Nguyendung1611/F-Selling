@@ -5,7 +5,7 @@ import zoneinfo
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +20,8 @@ from .core.config import (
     get_allowed_origins,
 )
 from .core.i18n import LocaleMiddleware, tr
+from .core.database import db_path
+from .migration.coordinator import verify_database_for_startup
 from .routers import (
     admin,
     assistant,
@@ -52,10 +54,6 @@ from .services.maintenance_service import (
 
 CLEANUP_INTERVAL_MINUTES = 1
 AUTO_CANCEL_INTERVAL_MINUTES = 5
-
-# Tạo bảng ngay khi import module (giữ đúng thời điểm như app.py cũ).
-bootstrap.create_tables()
-
 
 def _validation_message(error: dict) -> str:
     """Biến lỗi kỹ thuật của Pydantic thành câu ngắn theo ngôn ngữ request."""
@@ -99,7 +97,11 @@ async def localized_validation_error_handler(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    bootstrap.initialize()
+    app.state.schema_ready = False
+    report = verify_database_for_startup(db_path)
+    app.state.schema_verification = report.as_dict()
+    app.state.schema_revision = report.current_revision
+    bootstrap.initialize_application_data()
 
     scheduler = BackgroundScheduler(timezone=zoneinfo.ZoneInfo("UTC"))
     scheduler.add_job(
@@ -122,15 +124,19 @@ async def lifespan(app: FastAPI):
         )
 
     scheduler.start()
+    app.state.schema_ready = True
 
-    yield
-
-    scheduler.shutdown()
-    print("[SCHEDULER] Background cleanup task stopped")
+    try:
+        yield
+    finally:
+        app.state.schema_ready = False
+        scheduler.shutdown()
+        print("[SCHEDULER] Background cleanup task stopped")
 
 
 def create_app(lifespan_handler=lifespan) -> FastAPI:
     application = FastAPI(title="F-Selling Backend", lifespan=lifespan_handler)
+    application.state.schema_ready = False
     application.add_exception_handler(
         RequestValidationError,
         localized_validation_error_handler,
@@ -144,6 +150,27 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "Accept-Language"],
     )
     application.add_middleware(LocaleMiddleware)
+
+    @application.get("/api/health/ready", include_in_schema=False)
+    async def readiness():
+        if not application.state.schema_ready:
+            return JSONResponse(
+                status_code=503,
+                content={"ready": False, "reason": "schema_unverified"},
+            )
+        return {
+            "ready": True,
+            "revision": application.state.schema_revision,
+        }
+
+    @application.middleware("http")
+    async def chan_nghiep_vu_khi_schema_chua_xac_minh(request: Request, call_next):
+        if request.url.path != "/api/health/ready" and not application.state.schema_ready:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Schema chưa được xác minh; nghiệp vụ đang bị khóa"},
+            )
+        return await call_next(request)
 
     @application.middleware("http")
     async def khong_giu_cache_html(request, call_next):

@@ -81,8 +81,64 @@ fly secrets set --app <ten-app> `
 fly deploy --app <ten-app>
 ```
 
-Lần đầu Fly build Docker image và khởi động. DB trống trên volume sẽ được tạo tự động,
-và tài khoản `admin` được seed từ `ADMIN_INITIAL_PASSWORD`.
+Từ I04, web **không tự tạo hoặc nâng schema**. Build mới sẽ chưa ready cho tới
+khi operator chạy đúng runbook migration ở mục 6.1. Không thêm
+`release_command`: tài liệu này chưa chứng minh volume `/data` được mount vào
+release machine, nên chạy migration ở đó có thể sửa nhầm một file SQLite khác.
+
+### 6.1. Runbook maintenance cho SQLite/I04
+
+Các lệnh migration phải chạy trên đúng machine duy nhất đang gắn volume chứa
+`/data/fselling_v4.db`. Không chạy đồng thời hai machine, không rolling overlap
+old/new trong lần adoption.
+
+1. Xem inventory Fly và xác nhận đúng **một active application machine**, đúng
+   **một volume/file SQLite**. Hai assertion
+   `FSELLING_TOPOLOGY_ACTIVE_MACHINES=1` và
+   `FSELLING_TOPOLOGY_SQLITE_FILES=1` trong `fly.toml` phải khớp inventory thật;
+   chúng không thay thế việc kiểm tra.
+2. Bật maintenance/readiness 503, drain traffic, chờ request, webhook và
+   scheduler kết thúc; dừng hoàn toàn old build.
+3. Mở maintenance shell trên **chính machine có mount `/data`**. Trước mọi lệnh,
+   kiểm lại `DB_PATH=/data/fselling_v4.db` và file đó nằm trên volume dự kiến.
+4. Chạy `check` và `plan` trước side effect:
+
+   ```sh
+   python -m fselling.migration.cli --database /data/fselling_v4.db check
+   python -m fselling.migration.cli --database /data/fselling_v4.db plan head
+   ```
+
+5. Fresh database:
+
+   ```sh
+   python -m fselling.migration.cli --database /data/fselling_v4.db init
+   python -m fselling.migration.cli --database /data/fselling_v4.db upgrade head
+   python -m fselling.migration.cli --database /data/fselling_v4.db verify
+   ```
+
+6. Legacy 9cf7106: chuẩn bị một **recovery path ngoài volume chính** (ví dụ một
+   recovery volume tạm đã mount vào maintenance machine). `adopt-legacy` dùng
+   SQLite Backup API, restore sang scratch và integrity-check trước khi stamp;
+   path phải khác DB live và **chưa tồn tại** ở lần chạy đầu. Nếu crash sau khi
+   tạo file nhưng trước khi ghi durable intent, dùng path mới; không tái sử dụng
+   orphan file. Khi resume/replay, dùng lại đúng `request_id` và backup đã được
+   intent ràng buộc bằng digest; request khác hoặc backup khác sẽ fail-closed.
+
+   ```sh
+   python -m fselling.migration.cli --database /data/fselling_v4.db \
+     adopt-legacy --backup /recovery/fselling-before-i04.db \
+       --request-id adopt-i04-20260810
+   python -m fselling.migration.cli --database /data/fselling_v4.db upgrade head
+   python -m fselling.migration.cli --database /data/fselling_v4.db check
+   python -m fselling.migration.cli --database /data/fselling_v4.db verify
+   ```
+
+7. Giữ bản backup ngoài volume, khởi động đúng một machine build mới, chờ
+   `/api/health/ready` trả 200 rồi mới mở traffic. Nếu verify lỗi, giữ
+   maintenance và không chạy seed/scheduler/nghiệp vụ.
+
+Không dùng `alembic upgrade` trực tiếp: đường đó bị chặn vì không thể bảo đảm
+transaction chung cho version/journal/verifier/attempt của coordinator.
 
 ## 7. Mở web
 

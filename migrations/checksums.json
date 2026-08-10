@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "revisions": {
+    "0001_legacy_9cf7106_baseline": {
+      "down_revision": null,
+      "path": "versions/0001_legacy_9cf7106_baseline.py",
+      "sha256": "5bdcb5e297ba9eba83474c5415371129c9c3d1498280ee481e37c27fd37e7a5c"
+    },
+    "0002_i04_operational_tables": {
+      "down_revision": "0001_legacy_9cf7106_baseline",
+      "path": "versions/0002_i04_operational_tables.py",
+      "sha256": "811595d51abd3ba12d1dd10ab9602960766567310281fabd00a042be4bdb797b"
+    }
+  }
+}

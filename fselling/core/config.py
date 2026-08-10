@@ -40,7 +40,9 @@ load_dotenv()
 UPLOAD_DIR: str = os.getenv("UPLOAD_DIR") or os.path.join(BASE_DIR, "static", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-STATIC_DIR: str = "static"  # giữ nguyên đường dẫn tương đối như code cũ
+# Dùng đường dẫn tuyệt đối để operator CLI/test có thể chạy từ maintenance cwd
+# không chứa `.env`; web không được phụ thuộc current working directory.
+STATIC_DIR: str = os.path.join(BASE_DIR, "static")
 LOG_FILE: str = os.getenv("LOG_FILE") or os.path.join(BASE_DIR, "request_log.txt")
 
 # --- Đọc tiền bằng giọng nói ---

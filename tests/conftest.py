@@ -67,7 +67,20 @@ from fastapi.testclient import TestClient  # noqa: E402
 from fselling.core import bootstrap  # noqa: E402
 from fselling.core.database import SessionLocal  # noqa: E402
 from fselling.main import create_app  # noqa: E402
+from fselling.migration.coordinator import MigrationCoordinator  # noqa: E402
+from fselling.migration.topology import StaticInventory  # noqa: E402
 from fselling.services import auth_service, email_service  # noqa: E402
+
+# Schema mutation belongs to the explicit test operator setup, never to web
+# import/startup.  The target is the unique temporary DB declared above.
+_TEST_MIGRATIONS = MigrationCoordinator(
+    os.environ["DB_PATH"],
+    inventory_provider=StaticInventory(),
+)
+_TEST_MIGRATIONS.init()
+_TEST_MIGRATIONS.upgrade("head")
+_TEST_MIGRATIONS.verify()
+bootstrap.initialize_application_data()
 
 SELLER_PASSWORD = "Seller@2026"
 ADMIN_PASSWORD = os.environ["ADMIN_INITIAL_PASSWORD"]
@@ -117,8 +130,15 @@ def app():
 
     @asynccontextmanager
     async def _noop_lifespan(_app):
-        bootstrap.initialize()
-        yield
+        _app.state.schema_ready = False
+        report = _TEST_MIGRATIONS.verify()
+        _app.state.schema_verification = report.as_dict()
+        _app.state.schema_revision = report.current_revision
+        _app.state.schema_ready = True
+        try:
+            yield
+        finally:
+            _app.state.schema_ready = False
 
     return create_app(lifespan_handler=_noop_lifespan)
 

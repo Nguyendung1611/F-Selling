@@ -14,7 +14,7 @@ from conftest import (
     new_seller,
     seller_with_shop,
 )
-from fselling.core import bootstrap
+import legacy_bootstrap_support as bootstrap
 
 
 def _tao_sp(client, token, shop_id, cat_id, name, code=None, price=50000, stock=5):
