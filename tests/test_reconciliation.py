@@ -947,6 +947,7 @@ def test_backfill_legacy_chay_lap_va_chan_retry_ma_cu(
         order = session.query(models.Order).filter(models.Order.id == order_id).one()
         order.status = "PAID"
         order.paid_amount = TOTAL
+        order.legacy_paid_amount = TOTAL
         order.bank_txn_id = f"LEGACY-{order_id}"
         session.commit()
 

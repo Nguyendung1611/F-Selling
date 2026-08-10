@@ -4,6 +4,7 @@ Số dư KHÔNG được lưu thành một cột có thể ghi đè. Nó luôn �
 ``LoyaltyPointEntry`` để mọi lần cộng, dùng, hoàn và trừ lại đều còn dấu vết.
 """
 import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -18,6 +19,7 @@ from sqlalchemy import (
 )
 
 from ..core.database import Base
+from ..core.money import percentage_to_bps
 
 
 class LoyaltyProgram(Base):
@@ -35,14 +37,17 @@ class LoyaltyProgram(Base):
     enabled = Column(Boolean, nullable=False, default=False)
 
     # Chi ``earn_amount`` đồng nhận ``earn_points`` điểm.
-    earn_amount = Column(Float, nullable=True)
+    legacy_earn_amount = Column("earn_amount", Float, nullable=True)
+    earn_amount = Column("earn_amount_vnd", Integer, nullable=True)
     earn_points = Column(Integer, nullable=True)
     # Dùng ``redeem_points`` điểm giảm ``redeem_amount`` đồng.
     redeem_points = Column(Integer, nullable=True)
-    redeem_amount = Column(Float, nullable=True)
+    legacy_redeem_amount = Column("redeem_amount", Float, nullable=True)
+    redeem_amount = Column("redeem_amount_vnd", Integer, nullable=True)
 
     min_redeem_points = Column(Integer, nullable=False, default=0)
-    max_redeem_percent = Column(Float, nullable=False, default=100.0)
+    legacy_max_redeem_percent = Column("max_redeem_percent", Float, nullable=False, default=100.0)
+    max_redeem_bps = Column(Integer, nullable=False, default=10000)
     # NULL = không hết hạn; số nguyên dương = hạn của từng đợt điểm.
     expiry_days = Column(Integer, nullable=True)
 
@@ -53,6 +58,14 @@ class LoyaltyProgram(Base):
         default=datetime.datetime.utcnow,
         onupdate=datetime.datetime.utcnow,
     )
+
+    @property
+    def max_redeem_percent(self):
+        return Decimal(int(self.max_redeem_bps or 0)) / Decimal(100)
+
+    @max_redeem_percent.setter
+    def max_redeem_percent(self, value):
+        self.max_redeem_bps = percentage_to_bps(value)
 
 
 class LoyaltyPointEntry(Base):

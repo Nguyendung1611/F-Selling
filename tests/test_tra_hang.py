@@ -319,7 +319,7 @@ def test_khong_bao_gio_hoan_qua_so_khach_da_tra(client):
     assert da_hoan == tong
 
 
-def test_chenh_lam_tron_am_duoc_rai_de_khong_dong_nao_hoan_am(client):
+def test_hoan_tien_theo_phan_bo_dong_bat_bien_khong_am(client):
     """Các lần trước có thể đã dùng hết tiền hoàn dù vẫn còn hàng để trả."""
     ctx = seller_with_shop(client)
     products = [
@@ -349,8 +349,9 @@ def test_chenh_lam_tron_am_duoc_rai_de_khong_dong_nao_hoan_am(client):
     assert detail["total_amount"] == 3
     line_ids = [row["id"] for row in detail["items"]]
 
-    # 0,6đ làm tròn thành 1đ: ba phiếu đầu đã hoàn đủ 3đ khách từng trả.
-    for line_id in line_ids[:3]:
+    # Voucher 2đ chia cho năm dòng bằng largest remainder: hai immutable id
+    # đầu nhận mỗi dòng 1đ giảm, nên net/refund lần lượt là 0, 0, 1, 1, 1.
+    for line_id, expected in zip(line_ids[:3], (0, 0, 1)):
         returned = _tra(
             client,
             ctx,
@@ -358,7 +359,7 @@ def test_chenh_lam_tron_am_duoc_rai_de_khong_dong_nao_hoan_am(client):
             [{"order_item_id": line_id, "quantity": 1}],
         )
         assert returned.status_code == 200, returned.text
-        assert returned.json()["return"]["refund_amount"] == 1
+        assert returned.json()["return"]["refund_amount"] == expected
 
     final = _tra(
         client,
@@ -370,7 +371,7 @@ def test_chenh_lam_tron_am_duoc_rai_de_khong_dong_nao_hoan_am(client):
         ],
     )
     assert final.status_code == 200, final.text
-    assert final.json()["return"]["refund_amount"] == 0
+    assert final.json()["return"]["refund_amount"] == 2
 
     session = SessionLocal()
     try:
@@ -383,8 +384,8 @@ def test_chenh_lam_tron_am_duoc_rai_de_khong_dong_nao_hoan_am(client):
             .all()
         )
         assert len(rows) == 2
-        assert all(float(row.refund_amount) >= 0 for row in rows)
-        assert sum(float(row.refund_amount) for row in rows) == 0
+        assert all(int(row.refund_amount) >= 0 for row in rows)
+        assert sum(int(row.refund_amount) for row in rows) == 2
     finally:
         session.close()
 

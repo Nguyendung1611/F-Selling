@@ -166,7 +166,7 @@ def test_ban_lai_duoc_sau_khi_huy(client):
     assert res.status_code == 200, "Kho đã hoàn nên phải bán lại được"
 
 
-def test_dong_thieu_product_id_duoc_dem_rieng_khong_nuot_im_lang(client):
+def test_dong_thieu_product_id_fail_closed_khong_doi_trang_thai(client):
     """Đơn cũ trước migration A1a mà backfill không khớp được."""
     ctx, order = _tao_don(client, quantity=2)
     session = SessionLocal()
@@ -184,11 +184,16 @@ def test_dong_thieu_product_id_duoc_dem_rieng_khong_nuot_im_lang(client):
     ton_truoc = _ton_kho(ctx["product"]["id"])
     res = _huy(client, ctx, order["order_id"])
 
-    assert res.status_code == 200
-    assert res.json()["restored_items"] == 0
-    assert res.json()["unrestored_items"] == 1
+    assert res.status_code == 409
     assert _ton_kho(ctx["product"]["id"]) == ton_truoc, "Không đoán mò theo tên"
-    assert _trang_thai(order["order_id"]) == STATUS_CANCELLED
+    assert _trang_thai(order["order_id"]) == STATUS_PENDING
+    session = SessionLocal()
+    try:
+        current = session.get(models.Order, order["order_id"])
+        assert current.inventory_reversed == 0
+        assert current.items[0].returned_total_qty == 0
+    finally:
+        session.close()
 
 
 # ---------- Voucher ----------

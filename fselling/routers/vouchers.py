@@ -10,6 +10,7 @@ from ..dependencies import (
     require_staff_permission,
 )
 from ..schemas.catalog import VoucherCreate
+from ..schemas.money import ExactVND
 from ..services import subscription_service, voucher_service
 
 router = APIRouter(prefix="/api/vouchers", tags=["vouchers"])
@@ -67,7 +68,7 @@ def delete_voucher(
 @router.post("/apply/{shop_id}")
 def apply_voucher(
     shop_id: int,
-    subtotal: float = Form(...),
+    subtotal: ExactVND = Form(...),
     voucher_code: str = Form(...),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),

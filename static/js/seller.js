@@ -3015,6 +3015,7 @@ let phieuKiemKe = {};
 // Hỏi từng sản phẩm lúc quét là mỗi lượt quét một vòng mạng, giữa lúc người ta
 // đang cầm máy quét chạy dọc kệ hàng.
 let loKiemKeTheoSanPham = {};
+let deficitKiemKeTheoSanPham = {};
 
 function _kiemKeDangMo() {
     const tab = document.getElementById('kiemke');
@@ -3030,10 +3031,20 @@ async function kkNapLo() {
         const d = await apiCall(`/products/${shopId}/stocktake/batches`);
         if (currentShopId !== shopId) return;
         const bang = {};
-        (d.products || []).forEach(p => { bang[p.product_id] = p.batches || []; });
+        const deficit = {};
+        (d.products || []).forEach(p => {
+            bang[p.product_id] = p.batches || [];
+            deficit[p.product_id] = {
+                quantity: p.offline_deficit_qty || 0,
+                snapshot: p.offline_deficit_snapshot || null,
+                stock: p.stock
+            };
+        });
         loKiemKeTheoSanPham = bang;
+        deficitKiemKeTheoSanPham = deficit;
     } catch (e) {
         loKiemKeTheoSanPham = {};
+        deficitKiemKeTheoSanPham = {};
     }
 }
 
@@ -3062,7 +3073,8 @@ function kkDem(sp, soLuong) {
  *  hạn, mà cộng bừa vào một lô nào đó là ghi sai hạn của số hàng đang cầm. */
 function kkThemTheoLo(sp) {
     const lo = loKiemKeTheoSanPham[sp.id] || [];
-    if (!lo.length) {
+    const deficit = deficitKiemKeTheoSanPham[sp.id] || {};
+    if (!lo.length && !(deficit.quantity > 0)) {
         showToast(t('seller.stocktake.no_batch'));
         return;
     }
@@ -3078,7 +3090,14 @@ function kkThemTheoLo(sp) {
             expiry_date: b.expiry_date
         };
     });
-    phieuKiemKe[sp.id] = { theoLo: true, name: sp.name, lo: bang };
+    phieuKiemKe[sp.id] = {
+        theoLo: true,
+        name: sp.name,
+        lo: bang,
+        offline_deficit_qty: deficit.quantity || 0,
+        offline_deficit_snapshot: deficit.snapshot || null,
+        stock_snapshot: deficit.stock
+    };
     kkVeBang();
 }
 
@@ -3131,6 +3150,18 @@ function kkCacDong() {
             });
             return;
         }
+        if (!Object.keys(d.lo).length && d.offline_deficit_qty > 0) {
+            dong.push({
+                productId,
+                batchId: null,
+                ten: d.name,
+                han: null,
+                truoc: d.stock_snapshot,
+                dem: 0,
+                deficitOnly: true
+            });
+            return;
+        }
         Object.entries(d.lo).forEach(([batchId, l]) => {
             dong.push({
                 productId,
@@ -3143,6 +3174,58 @@ function kkCacDong() {
         });
     });
     return dong;
+}
+
+/** Tóm tắt đúng hiệu ứng mà server sẽ ghi nếu snapshot vẫn còn mới.
+ *
+ * Không được cộng các dòng `kkCacDong()` ở đây: với hàng theo lô có TON_AM,
+ * các dòng đó chỉ là tổng lô (5), còn tồn Product trước kiểm kê là 3. Server
+ * giữ chênh này làm evidence và, khi kiểm kê đủ lô, thêm một dòng reconciliation
+ * tổng hợp để Product.stock đi từ 3 lên tổng lô. Preview phải nhìn theo sản
+ * phẩm để phần chênh ấy xuất hiện đúng MỘT lần.
+ */
+function kkTomTatPreview() {
+    const sanPham = Object.entries(phieuKiemKe).map(([id, d]) => {
+        const productId = parseInt(id, 10);
+        if (!d.theoLo) {
+            const truoc = Number(d.stock_snapshot);
+            const sau = Number(d.counted);
+            return {
+                productId,
+                truoc,
+                sau,
+                lech: sau - truoc,
+                // Hàng thường có đúng một dòng response khi số đếm đổi.
+                soDongLech: truoc === sau ? 0 : 1
+            };
+        }
+
+        const cacLo = Object.values(d.lo);
+        const truoc = Number(d.stock_snapshot);
+        // Server rebuild Product.stock từ tổng batch counted, kể cả khi không
+        // còn lô dương nào (deficit-only).
+        const sau = cacLo.reduce((tong, lo) => tong + Number(lo.counted), 0);
+        const soLoLech = cacLo.filter(
+            lo => Number(lo.counted) !== Number(lo.quantity_snapshot)
+        ).length;
+        const coReconcileOffline = Number(d.offline_deficit_qty || 0) > 0;
+        return {
+            productId,
+            truoc,
+            sau,
+            lech: sau - truoc,
+            // Response có một dòng cho mỗi lô thực sự đổi, và đúng một dòng
+            // synthetic khi evidence TON_AM được đóng thành công.
+            soDongLech: soLoLech + (coReconcileOffline ? 1 : 0)
+        };
+    });
+
+    return {
+        sanPham,
+        tongTon: sanPham.reduce((tong, dong) => tong + dong.truoc, 0),
+        tongDem: sanPham.reduce((tong, dong) => tong + dong.sau, 0),
+        soDongLech: sanPham.reduce((tong, dong) => tong + dong.soDongLech, 0)
+    };
 }
 
 function kkVeBang() {
@@ -3165,12 +3248,13 @@ function kkVeBang() {
         const doiSo = d.batchId === null
             ? `kkDatSo(${d.productId}, this.value)`
             : `kkDatSoLo(${d.productId}, ${d.batchId}, this.value)`;
+        const disabled = d.deficitOnly ? ' disabled' : '';
         // Nút xóa gỡ cả sản phẩm: bỏ lẻ một lô rồi giữ các lô còn lại là chuyện
         // chưa gặp trong thực tế, mà thêm nút riêng thì bảng chật thêm.
         tbody.innerHTML += `<tr>
             <td>${oTen}</td>
             <td>${dinhDangSoSeller(d.truoc)}</td>
-            <td><input type="number" min="0" value="${d.dem}" onchange="${doiSo}"
+            <td><input type="number" min="0" value="${d.dem}" onchange="${doiSo}"${disabled}
                        style="width:80px; padding:0.3rem; border-radius:6px; border:1px solid #334155; background:#0F172A; color:#F8FAFC;"></td>
             <td style="color:${mau}; font-weight:600;">${lech > 0 ? '+' : ''}${lech}</td>
             <td><button class="btn-outline" onclick="kkBo(${d.productId})" style="padding:0.2rem 0.5rem; color:#ef4444;"><i class="ph ph-x"></i></button></td>
@@ -3223,6 +3307,7 @@ async function kkApDung() {
         d.theoLo
             ? {
                 product_id: parseInt(id, 10),
+                offline_deficit_snapshot: d.offline_deficit_snapshot,
                 batches: Object.entries(d.lo).map(([batchId, l]) => ({
                     batch_id: parseInt(batchId, 10),
                     counted: l.counted,
@@ -3238,15 +3323,15 @@ async function kkApDung() {
     if (!items.length) return;
 
     const cacDong = kkCacDong();
-    const soLech = cacDong.filter(d => d.dem !== d.truoc).length;
+    const preview = kkTomTatPreview();
 
     // Nêu thẳng mức thay đổi của TỔNG tồn kho. Chỉ nói "N sản phẩm bị lệch" là
     // không đủ: quét thử mỗi món một lần rồi bấm Áp dụng sẽ đặt tồn về 1 cho
     // tất cả, tổng tồn có thể tụt từ vài trăm xuống vài đơn vị mà con số đó
     // không hiện ra ở đâu cả. Với hàng theo lô còn nguy hơn: quét xong mà chưa
     // điền ô nào thì mọi lô của nó đang là 0.
-    const tongTon = cacDong.reduce((s, d) => s + d.truoc, 0);
-    const tongDem = cacDong.reduce((s, d) => s + d.dem, 0);
+    const tongTon = preview.tongTon;
+    const tongDem = preview.tongDem;
     const chenh = tongDem - tongTon;
     const moTaChenh = chenh === 0
         ? t('seller.stocktake.no_change')
@@ -3263,7 +3348,7 @@ async function kkApDung() {
             stock: dinhDangSoSeller(tongTon),
             counted: dinhDangSoSeller(tongDem),
             change: moTaChenh,
-            different: dinhDangSoSeller(soLech)
+            different: dinhDangSoSeller(preview.soDongLech)
         }),
         async () => {
             if (

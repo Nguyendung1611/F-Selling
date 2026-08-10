@@ -122,7 +122,10 @@ def test_fresh_root_to_head_and_restart_noop(tmp_path):
     assert coordinator.check().classification == "MISSING"
     assert coordinator.init() == ["0001_legacy_9cf7106_baseline"]
     assert coordinator.status().current_revision == "0001_legacy_9cf7106_baseline"
-    assert coordinator.upgrade("head") == ["0002_i04_operational_tables"]
+    assert coordinator.upgrade("head") == [
+        "0002_i04_operational_tables",
+        "0003_i05_integer_vnd_cost_basis",
+    ]
     report = coordinator.verify()
     assert report.current_revision == report.head_revision
 
@@ -200,7 +203,7 @@ def test_startup_verify_ignores_runtime_expiry_of_open_checkouts(tmp_path):
     report = verify_database_for_startup(
         database, inventory_provider=StaticInventory()
     )
-    assert report.current_revision == "0002_i04_operational_tables"
+    assert report.current_revision == "0003_i05_integer_vnd_cost_basis"
     connection = sqlite3.connect(database)
     try:
         assert connection.execute(
@@ -319,7 +322,10 @@ def test_exact_legacy_9cf7106_adoption_requires_backup_then_upgrades(tmp_path):
     assert result.path == backup
     assert result.size > 0 and len(result.sha256) == 64
     assert coordinator.status().current_revision == "0001_legacy_9cf7106_baseline"
-    assert coordinator.upgrade() == ["0002_i04_operational_tables"]
+    assert coordinator.upgrade() == [
+        "0002_i04_operational_tables",
+        "0003_i05_integer_vnd_cost_basis",
+    ]
     coordinator.verify()
 
 
@@ -434,7 +440,7 @@ def test_revision_campaign_and_attempt_state_are_independent(tmp_path):
     connection = sqlite3.connect(database)
     try:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == (
-            "0002_i04_operational_tables"
+            "0003_i05_integer_vnd_cost_basis"
         )
         assert connection.execute(
             "SELECT phase, phase_version FROM fs_migration_campaigns WHERE campaign_key='i04-test'"
@@ -464,9 +470,10 @@ def test_linear_graph_and_checksum_manifest(tmp_path):
     assert [item.down_revision for item in graph.revisions] == [
         None,
         "0001_legacy_9cf7106_baseline",
+        "0002_i04_operational_tables",
     ]
     assert graph.root.revision == "0001_legacy_9cf7106_baseline"
-    assert graph.head.revision == "0002_i04_operational_tables"
+    assert graph.head.revision == "0003_i05_integer_vnd_cost_basis"
 
     copied = _copy_graph(tmp_path)
     revision = copied / "migrations/versions/0002_i04_operational_tables.py"
@@ -566,7 +573,10 @@ def test_crash_after_commit_before_cli_response_reruns_noop(tmp_path):
 
     coordinator = _coordinator(database)
     assert coordinator.init(request_id="request-1") == []
-    assert coordinator.upgrade() == ["0002_i04_operational_tables"]
+    assert coordinator.upgrade() == [
+        "0002_i04_operational_tables",
+        "0003_i05_integer_vnd_cost_basis",
+    ]
     coordinator.verify()
 
 
@@ -711,8 +721,8 @@ def test_verified_web_startup_runs_seed_and_scheduler_after_verify(monkeypatch):
 
     events = []
     report = Mock()
-    report.as_dict.return_value = {"current_revision": "0002_i04_operational_tables"}
-    report.current_revision = "0002_i04_operational_tables"
+    report.as_dict.return_value = {"current_revision": "0003_i05_integer_vnd_cost_basis"}
+    report.current_revision = "0003_i05_integer_vnd_cost_basis"
 
     def verify(_path):
         events.append("verify")
@@ -790,7 +800,8 @@ def test_real_alembic_receives_external_transaction_and_owns_version(tmp_path, m
     coordinator.upgrade()
 
     assert [item[0] for item in observed if not str(item[0]).endswith("baseline")] == [
-        "0002_i04_operational_tables"
+        "0002_i04_operational_tables",
+        "0003_i05_integer_vnd_cost_basis",
     ]
     assert all(item[1] == "Connection" and item[2] and item[3] for item in observed)
     source = (PROJECT_ROOT / "fselling/migration/coordinator.py").read_text(encoding="utf-8")
@@ -1065,26 +1076,33 @@ def _insert_legacy_invariant_rows(database: Path, *, ambiguous: bool = False) ->
         )
         connection.execute(
             """INSERT INTO orders (
-                   id, shop_id, total_amount, payment_method, status, created_at,
+                   id, shop_id, total_amount, discount_amount,
+                   payment_method, status, created_at,
                    cash_paid_amount, refunded_amount, refund_due_amount,
                    loyalty_points_redeemed, loyalty_discount_amount,
                    loyalty_points_earned, reconciliation_reason
-               ) VALUES (2, 1, 10, 'bank', 'UNRECONCILED', '2026-01-01',
+               ) VALUES (2, 1, 10, 0, 'bank', 'UNRECONCILED', '2026-01-01',
                          0, 0, 0, 0, 0, 0, NULL)"""
         )
         connection.execute(
             """INSERT INTO orders (
-                   id, shop_id, total_amount, payment_method, status, created_at,
+                   id, shop_id, total_amount, discount_amount,
+                   payment_method, status, created_at,
                    paid_amount, bank_txn_id, cash_paid_amount, refunded_amount,
                    refund_due_amount, loyalty_points_redeemed,
                    loyalty_discount_amount, loyalty_points_earned
-               ) VALUES (1, 1, 10, 'bank', 'PAID', '2026-01-01', 10, 'txn-1',
+               ) VALUES (1, 1, 10, 0, 'bank', 'PAID', '2026-01-01', 10, 'txn-1',
                          0, 0, 0, 0, 0, 0)"""
         )
         connection.execute(
             """INSERT INTO order_items
                (id, order_id, product_id, product_name, price, quantity)
                VALUES (1, 1, NULL, 'P', 10, 1)"""
+        )
+        connection.execute(
+            """INSERT INTO order_items
+               (id, order_id, product_id, product_name, price, quantity)
+               VALUES (2, 2, NULL, 'P', 10, 1)"""
         )
         activated_at = "not-a-date" if ambiguous else "2026-01-01 00:00:00"
         connection.execute(
@@ -1223,7 +1241,7 @@ def test_public_readiness_payload_is_minimal(monkeypatch):
 
     application = main_module.create_app()
     application.state.schema_ready = True
-    application.state.schema_revision = "0002_i04_operational_tables"
+    application.state.schema_revision = "0003_i05_integer_vnd_cost_basis"
     application.state.schema_verification = {
         "database_path": "C:/secret/customer.db",
         "database_uuid": "private-uuid",
@@ -1234,7 +1252,7 @@ def test_public_readiness_payload_is_minimal(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {
         "ready": True,
-        "revision": "0002_i04_operational_tables",
+        "revision": "0003_i05_integer_vnd_cost_basis",
     }
 
 
@@ -1251,6 +1269,7 @@ def test_request_id_spans_multi_revision_and_errors_are_digest_only(tmp_path):
     assert coordinator.upgrade(request_id="multi-revision-request") == [
         "0001_legacy_9cf7106_baseline",
         "0002_i04_operational_tables",
+        "0003_i05_integer_vnd_cost_basis",
     ]
     assert coordinator.upgrade(request_id="multi-revision-request") == []
 
@@ -1264,6 +1283,7 @@ def test_request_id_spans_multi_revision_and_errors_are_digest_only(tmp_path):
         assert rows == [
             ("0001_legacy_9cf7106_baseline", "multi-revision-request", "SUCCEEDED"),
             ("0002_i04_operational_tables", "multi-revision-request", "SUCCEEDED"),
+            ("0003_i05_integer_vnd_cost_basis", "multi-revision-request", "SUCCEEDED"),
         ]
         assert connection.execute(
             "SELECT state FROM fs_migration_requests WHERE request_id=?",
@@ -1289,7 +1309,10 @@ def test_request_id_spans_multi_revision_and_errors_are_digest_only(tmp_path):
         ).upgrade(request_id="multi-resume-request")
     assert _coordinator(resume_database).upgrade(
         request_id="multi-resume-request"
-    ) == ["0002_i04_operational_tables"]
+    ) == [
+        "0002_i04_operational_tables",
+        "0003_i05_integer_vnd_cost_basis",
+    ]
 
     error_database = tmp_path / "sanitized-error.db"
     private_text = f"{tmp_path / 'customer-secret.db'} owner@example.test"

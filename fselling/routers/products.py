@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..dependencies import get_current_user, get_db, require_shop_access
 from ..schemas.catalog import StockAdjust, StocktakeApply, WriteOffCreate
+from ..schemas.money import SignedExactVND
 from ..services import catalog_service, subscription_service, write_off_service
 
 router = APIRouter(prefix="/api/products", tags=["products"])
@@ -75,11 +76,11 @@ def create_product(
     code: Optional[str] = Form(None),
     barcode: Optional[str] = Form(None),
     name: str = Form(...),
-    price: float = Form(...),
+    price: SignedExactVND = Form(...),
     stock: int = Form(...),
     category_id: int = Form(...),
     image: UploadFile = File(None),
-    cost_price: Optional[float] = Form(None),
+    cost_price: Optional[SignedExactVND] = Form(None),
     track_batches: bool = Form(False),
     # Khai ô này thì `name` được hiểu là tên NHÓM, và tên lưu vào DB là tên
     # ghép. Ở đây `Form(None)` là đủ (không dính bẫy #3) vì lúc tạo mới thì
@@ -155,7 +156,7 @@ def update_product(
     code: Optional[str] = Form(None),
     barcode: Optional[str] = Depends(barcode_field),
     name: str = Form(...),
-    price: float = Form(...),
+    price: SignedExactVND = Form(...),
     # `stock` được chấp nhận để không phá form cũ nhưng KHÔNG dùng: đổi tồn kho
     # đi qua POST /{product_id}/stock (nhập/xuất theo delta, cập nhật nguyên tử).
     stock: Optional[int] = Form(None),

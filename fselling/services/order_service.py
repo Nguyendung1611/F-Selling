@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..core.i18n import tr
+from ..core.money import checked_add, checked_vnd, exact_vnd, largest_remainder_allocate
 from ..dependencies import (
     PERMISSION_RECONCILIATION,
     PERMISSION_SALE,
@@ -110,7 +110,7 @@ ENTRY_CASH = "CASH_TOPUP"
 ENTRY_REFUND_CASH = "REFUND_CASH"
 ENTRY_REFUND_TRANSFER = "REFUND_TRANSFER"
 
-MONEY_EPSILON = 0.001
+MONEY_EPSILON = 0
 
 _UPDATE_STATUS = (
     text(
@@ -120,9 +120,9 @@ _UPDATE_STATUS = (
 )
 
 
-def _so_tien(value: Any) -> float:
+def _so_tien(value: Any) -> int:
     """Giá trị tiền an toàn cho dữ liệu cũ có thể NULL."""
-    return float(value or 0)
+    return int(value or 0)
 
 
 def payment_summary(order: models.Order) -> Dict[str, Any]:
@@ -369,7 +369,7 @@ def _existing_operation_order(
     return _create_order_response(db, shop, existing)
 
 
-def cong_no_cua_khach(db: Session, customer_id: int) -> float:
+def cong_no_cua_khach(db: Session, customer_id: int) -> int:
     """Tổng tiền khách còn nợ: phần chưa trả của mọi đơn đang ở trạng thái DEBT.
 
     Tính từ chính các đơn chứ không giữ một cột "tổng nợ" trên `customers`: cột
@@ -384,15 +384,15 @@ def cong_no_cua_khach(db: Session, customer_id: int) -> float:
         )
         .all()
     )
-    tong = 0.0
+    tong = 0
     for o in don_no:
         da_tra = _so_tien(o.paid_amount) + _so_tien(o.cash_paid_amount)
-        tong += max(_so_tien(o.total_amount) - da_tra, 0.0)
+        tong = checked_add(tong, max(_so_tien(o.total_amount) - da_tra, 0))
     return tong
 
 
 def _kiem_ban_ghi_no(
-    db: Session, khach: Optional[models.Customer], tong_don: float
+    db: Session, khach: Optional[models.Customer], tong_don: int
 ) -> None:
     """Hai điều kiện để được ghi nợ, kiểm ngay trước khi tạo đơn."""
     if khach is None:
@@ -581,7 +581,7 @@ def create_order(
 
     loyalty_program = loyalty_service.get_program_model(db, shop_id)
     loyalty_points = 0
-    loyalty_discount = 0.0
+    loyalty_discount = 0
     # Cùng một mốc cho cả kiểm số dư và bút toán dùng điểm. Nếu gọi utcnow hai
     # lần, một lô có thể hết hạn ở giữa: khách vẫn được giảm tiền nhưng ledger
     # lại coi số điểm đó đã hết hạn và biến thành nợ âm.
@@ -616,7 +616,10 @@ def create_order(
         loyalty_points = int(redeemed["applied_points"])
         loyalty_discount = _so_tien(redeemed["discount"])
 
-    total = max(amount_after_voucher - loyalty_discount, 0)
+    try:
+        total = checked_vnd(max(amount_after_voucher - loyalty_discount, 0))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=tr("Tổng tiền đơn vượt giới hạn"))
 
     ghi_no = order.payment_method == PAYMENT_METHOD_DEBT
     if ghi_no:
@@ -644,7 +647,7 @@ def create_order(
         # Đơn được giảm về 0đ không có giao dịch ngân hàng dương để chờ.
         status=(
             STATUS_PAID
-            if total <= MONEY_EPSILON
+            if total == 0
             else (STATUS_DEBT if ghi_no else STATUS_PENDING)
         ),
     )
@@ -684,13 +687,10 @@ def create_order(
     # được dòng.
     lo_da_lay = inventory_service.deduct_stock(db, resolved_items)
 
+    created_lines = []
     for prod, qty in resolved_items:
         da_lay = lo_da_lay.get(prod.id) or []
-        gia_von_dong = (
-            inventory_service.gia_von_binh_quan_da_lay(da_lay)
-            if da_lay
-            else prod.cost_price
-        )
+        known_qty, unknown_qty, cost_basis_vnd = inventory_service.allocation_totals(da_lay)
         dong = models.OrderItem(
                 order_id=new_order.id,
                 # Ghi kèm product_id để hoàn tồn kho chính xác khi hủy đơn (A1d).
@@ -708,23 +708,51 @@ def create_order(
                 # giá vốn bình quân của sản phẩm như trước.
                 # NULL = chưa khai giá vốn; báo cáo đếm riêng, không tính thành
                 # lãi bằng cả giá bán.
-                cost_price=gia_von_dong,
                 quantity=qty,
+                cost_known_qty=known_qty,
+                cost_unknown_qty=unknown_qty,
+                cost_basis_vnd=cost_basis_vnd,
         )
         db.add(dong)
-        if da_lay:
+        db.flush()      # immutable destination id for allocations/tie-break
+        created_lines.append((dong, int(prod.price) * qty))
+        if prod.track_batches:
             # Vết lô đã xuất: không có nó thì lúc trả hàng không biết nhập lại
             # vào lô nào, và đoán bừa là hỏng cả hạn sử dụng lẫn giá vốn.
-            db.flush()      # lấy id của dòng đơn
-            for lo, so_luong in da_lay:
+            for allocation in da_lay:
+                lo = allocation.batch
+                if lo is None:
+                    raise HTTPException(status_code=409, detail=tr("Thiếu nguồn lô của giá vốn"))
                 db.add(
                     models.OrderItemBatch(
                         order_item_id=dong.id,
                         batch_id=lo.id,
-                        quantity=so_luong,
-                        cost_price=lo.cost_price,
+                        quantity=allocation.quantity,
+                        cost_known_qty=allocation.known_qty,
+                        cost_unknown_qty=allocation.unknown_qty,
+                        cost_basis_vnd=allocation.cost_basis_vnd,
                     )
                 )
+
+    voucher_allocations = dict(
+        largest_remainder_allocate(
+            int(discount_amount),
+            [(line.id, gross, line.id) for line, gross in created_lines],
+        )
+    )
+    after_voucher = [
+        (line.id, gross - voucher_allocations[line.id], line.id)
+        for line, gross in created_lines
+    ]
+    loyalty_allocations = dict(
+        largest_remainder_allocate(int(loyalty_discount), after_voucher)
+    )
+    for line, gross in created_lines:
+        line.discount_vnd = voucher_allocations[line.id]
+        line.loyalty_discount_vnd = loyalty_allocations[line.id]
+        line.net_amount_vnd = gross - line.discount_vnd - line.loyalty_discount_vnd
+    if sum(line.net_amount_vnd for line, _ in created_lines) != total:
+        raise HTTPException(status_code=409, detail=tr("Phân bổ tổng tiền theo dòng không khớp"))
 
     if applied_voucher is not None:
         applied_voucher.usage_count = (applied_voucher.usage_count or 0) + 1
@@ -820,9 +848,9 @@ def pay_order(
 
     total_amount = _so_tien(order.total_amount)
     tendered_amount = (
-        total_amount if request is None else float(request.tendered_amount)
+        total_amount if request is None else int(request.tendered_amount)
     )
-    if not math.isfinite(tendered_amount) or tendered_amount < total_amount:
+    if tendered_amount < total_amount:
         raise HTTPException(
             status_code=400,
             detail=tr(
@@ -865,11 +893,11 @@ def pay_order(
 
     db.execute(
         text(
-            "UPDATE orders SET cash_paid_amount = :amount, "
-            "cash_tendered_amount = :tendered, "
-            "cash_change_amount = :change, "
+            "UPDATE orders SET cash_paid_vnd = :amount, "
+            "cash_tendered_vnd = :tendered, "
+            "cash_change_vnd = :change, "
             "shift_id = :shift_id, "
-            "reconciliation_reason = NULL, refund_due_amount = 0 "
+            "reconciliation_reason = NULL, refund_due_vnd = 0 "
             "WHERE id = :order_id"
         ),
         {
@@ -911,7 +939,7 @@ def pay_order(
     }
 
 
-def _cash_topup_amount(order: models.Order, request: CashTopup) -> float:
+def _cash_topup_amount(order: models.Order, request: CashTopup) -> int:
     """Kiểm trạng thái và trả đúng số tiền mặt còn thiếu của đơn."""
     if (
         order.status != STATUS_UNRECONCILED
@@ -929,11 +957,8 @@ def _cash_topup_amount(order: models.Order, request: CashTopup) -> float:
     if remaining <= MONEY_EPSILON:
         raise HTTPException(status_code=409, detail=tr("Đơn không còn thiếu tiền"))
     if request.amount is not None:
-        requested_amount = float(request.amount)
-        if (
-            not math.isfinite(requested_amount)
-            or abs(requested_amount - remaining) > MONEY_EPSILON
-        ):
+        requested_amount = int(request.amount)
+        if requested_amount != remaining:
             raise HTTPException(
                 status_code=400,
                 detail=tr(
@@ -942,7 +967,7 @@ def _cash_topup_amount(order: models.Order, request: CashTopup) -> float:
                 ),
             )
     amount = remaining
-    if not math.isfinite(amount) or amount <= MONEY_EPSILON:
+    if amount <= MONEY_EPSILON:
         raise HTTPException(
             status_code=400,
             detail=tr("Số tiền bù phải lớn hơn 0"),
@@ -987,28 +1012,27 @@ def cash_topup(
         text(
             """
             UPDATE orders
-            SET cash_paid_amount = COALESCE(cash_paid_amount, 0) + :amount,
+            SET cash_paid_vnd = COALESCE(cash_paid_vnd, 0) + :amount,
                 status = CASE
-                    WHEN COALESCE(paid_amount, 0)
-                       + COALESCE(cash_paid_amount, 0) + :amount
-                         >= total_amount - :epsilon
+                    WHEN COALESCE(paid_vnd, 0)
+                       + COALESCE(cash_paid_vnd, 0) + :amount
+                         >= total_vnd
                     THEN :paid ELSE :unreconciled END,
                 reconciliation_reason = CASE
-                    WHEN COALESCE(paid_amount, 0)
-                       + COALESCE(cash_paid_amount, 0) + :amount
-                         >= total_amount - :epsilon
+                    WHEN COALESCE(paid_vnd, 0)
+                       + COALESCE(cash_paid_vnd, 0) + :amount
+                         >= total_vnd
                     THEN NULL ELSE :underpaid END
             WHERE id = :order_id
               AND status = :unreconciled
               AND reconciliation_reason = :underpaid
-              AND COALESCE(paid_amount, 0)
-                + COALESCE(cash_paid_amount, 0) + :amount
-                  <= total_amount + :epsilon
+              AND COALESCE(paid_vnd, 0)
+                + COALESCE(cash_paid_vnd, 0) + :amount
+                  <= total_vnd
             """
         ),
         {
             "amount": amount,
-            "epsilon": MONEY_EPSILON,
             "paid": STATUS_PAID,
             "unreconciled": STATUS_UNRECONCILED,
             "underpaid": RECON_UNDERPAID,
@@ -1094,8 +1118,8 @@ def debt_payment(
         "debt:" + hashlib.sha256(operation_id.encode("utf-8")).hexdigest()
     )
 
-    so_tien = float(request.amount or 0)
-    if not math.isfinite(so_tien) or so_tien <= MONEY_EPSILON:
+    so_tien = int(request.amount or 0)
+    if so_tien <= MONEY_EPSILON:
         raise HTTPException(
             status_code=400,
             detail=tr("Số tiền thu phải lớn hơn 0"),
@@ -1177,7 +1201,7 @@ def debt_payment(
         )
 
     da_tra = _so_tien(order.paid_amount) + _so_tien(order.cash_paid_amount)
-    con_thieu = max(_so_tien(order.total_amount) - da_tra, 0.0)
+    con_thieu = max(_so_tien(order.total_amount) - da_tra, 0)
     if con_thieu <= MONEY_EPSILON:
         db.rollback()
         raise HTTPException(status_code=409, detail=tr("Đơn này không còn nợ"))
@@ -1228,19 +1252,18 @@ def debt_payment(
 
     # Cộng dồn vào đúng cột mà `payment_summary` đang đọc, thay vì dựng thêm một
     # bộ đếm riêng: hai nguồn số liệu về cùng một khoản tiền là chỉ chờ ngày lệch.
-    cot = "cash_paid_amount" if tien_mat else "paid_amount"
+    cot = "cash_paid_vnd" if tien_mat else "paid_vnd"
     ket_qua = db.execute(
         text(
             f"UPDATE orders SET {cot} = COALESCE({cot}, 0) + :so_tien "
             "WHERE id = :order_id AND status = :dang_no "
-            f"AND COALESCE(paid_amount, 0) + COALESCE(cash_paid_amount, 0) "
-            "+ :so_tien <= total_amount + :epsilon"
+            f"AND COALESCE(paid_vnd, 0) + COALESCE(cash_paid_vnd, 0) "
+            "+ :so_tien <= total_vnd"
         ),
         {
             "so_tien": so_tien,
             "order_id": order_id,
             "dang_no": STATUS_DEBT,
-            "epsilon": MONEY_EPSILON,
         },
     )
     if ket_qua.rowcount != 1:
@@ -1255,7 +1278,7 @@ def debt_payment(
         _so_tien(order.total_amount)
         - _so_tien(order.paid_amount)
         - _so_tien(order.cash_paid_amount),
-        0.0,
+        0,
     )
     tra_het = con_thieu_moi <= MONEY_EPSILON
     if tra_het and not apply_transition(db, order_id, DEBT_PAY_FROM, STATUS_PAID):
@@ -1509,8 +1532,8 @@ def complete_refund(
         text(
             """
             UPDATE orders
-            SET refunded_amount = COALESCE(refunded_amount, 0) + :due,
-                refund_due_amount = 0,
+            SET refunded_vnd = COALESCE(refunded_vnd, 0) + :due,
+                refund_due_vnd = 0,
                 refund_completed_at = :completed_at,
                 refund_completed_by = :user_id,
                 refund_method = :method,
@@ -1518,8 +1541,8 @@ def complete_refund(
                 refund_reference = :reference,
                 status = :target_status
             WHERE id = :order_id
-              AND refund_due_amount > :epsilon
-              AND ABS(refund_due_amount - :due) <= :epsilon
+              AND refund_due_vnd = :due
+              AND refund_due_vnd > 0
               AND refund_completed_at IS NULL
               AND reconciliation_reason IN (:overpaid, :late_payment)
             """
@@ -1533,7 +1556,6 @@ def complete_refund(
             "reference": reference,
             "target_status": target_status,
             "order_id": order_id,
-            "epsilon": MONEY_EPSILON,
             "overpaid": RECON_OVERPAID,
             "late_payment": RECON_LATE_PAYMENT,
         },
@@ -1690,6 +1712,23 @@ def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[
         require_shop_access(db, order.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_SALE)
 
+    # Use the same shop write barrier as sale/return/webhook before deciding
+    # whether this unpaid order can be reversed.  Legacy orphan orders have no
+    # Shop row; ADMIN keeps the historical recovery path and the conditional
+    # order transition still acquires SQLite's writer lock for that case.
+    locked_shop_id = int(order.shop_id)
+    shop_exists = (
+        db.query(models.Shop.id).filter(models.Shop.id == locked_shop_id).scalar()
+        is not None
+    )
+    if shop_exists:
+        db.rollback()
+        inventory_service.lock_shop_for_inventory(db, locked_shop_id)
+        order = db.query(models.Order).filter(models.Order.id == order_id).first()
+        if order is None:
+            db.rollback()
+            raise HTTPException(status_code=404, detail=tr("Không tìm thấy đơn hàng"))
+
     if order.status == STATUS_CANCELLED:
         return _ket_qua_huy(
             order_id,
@@ -1714,6 +1753,22 @@ def cancel_order(db: Session, current_user: models.User, order_id: int) -> Dict[
                     amount=f"{da_thu:,.0f}đ",
                 ),
             )
+
+    if order.status not in CANCEL_FROM:
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Không thể hủy đơn ở trạng thái {status}",
+                status=order.status,
+            ),
+        )
+
+    if int(order.inventory_reversed or 0) and order.status != STATUS_CANCELLED:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Dấu hoàn kho của đơn không khớp trạng thái"))
+    if any(int(item.returned_total_qty or 0) for item in order.items):
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Đơn đã có trả hàng nên không thể hủy"))
 
     # Giữ lại trước khi commit vì commit sẽ expire ORM object.
     shop_id = order.shop_id
@@ -1831,7 +1886,7 @@ def _hoan_lai(
     order_id: int,
     shop_id: int,
     voucher_code: Optional[str],
-    discount_amount: Optional[float],
+    discount_amount: Optional[int],
 ) -> Tuple[int, int, bool]:
     """Hoàn kho + trả lượt voucher rồi commit. Chỉ gọi sau khi apply_transition thắng."""
     restored, unrestored = inventory_service.restore_stock(db, order_id)
@@ -1867,8 +1922,14 @@ def cancel_expired_order(db: Session, order: models.Order) -> bool:
     hoàn kho, nên job chạy trùng lúc khách vừa thanh toán sẽ thua và không
     hoàn kho cho đơn đã PAID.
     """
-    order_id = order.id
-    shop_id = order.shop_id
+    order_id = int(order.id)
+    shop_id = int(order.shop_id)
+    db.rollback()
+    inventory_service.lock_shop_for_inventory(db, shop_id)
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if order is None:
+        db.rollback()
+        return False
     voucher_code = order.voucher_code
     discount_amount = order.discount_amount
 
@@ -2071,12 +2132,15 @@ def _apply_one_webhook_event(db: Session, gd: Any) -> Optional[str]:
     )
 
 
-def _valid_webhook_amount(gd: Any) -> Optional[float]:
-    """Trả số tiền dương/hữu hạn; None cho payload thiếu hoặc amount sai."""
-    if gd.amount is None:
+def _valid_webhook_amount(gd: Any) -> Optional[int]:
+    """Return an exact positive integer VND amount, never a rounded value."""
+    if gd.amount is None or bool(getattr(gd, "amount_invalid", False)):
         return None
-    amount = float(gd.amount)
-    if not math.isfinite(amount) or amount <= 0:
+    try:
+        amount = exact_vnd(gd.amount)
+    except ValueError:
+        return None
+    if amount <= 0:
         return None
     return amount
 
@@ -2161,7 +2225,7 @@ def _same_payment(
     existing: models.OrderPayment,
     order_id: int,
     gd: Any,
-    amount: Optional[float],
+    amount: Optional[int],
 ) -> bool:
     if existing.entry_type not in (ENTRY_BANK, ENTRY_BANK_UNAPPLIED):
         return False
@@ -2169,7 +2233,7 @@ def _same_payment(
         return False
     if existing.order_id != order_id:
         return False
-    if abs(_so_tien(existing.amount) - amount) > MONEY_EPSILON:
+    if _so_tien(existing.amount) != amount:
         return False
     incoming_txn = _canonical_bank_txn_id(gd.txn_id)
     existing_txn = _canonical_bank_txn_id(existing.bank_txn_id)
@@ -2292,7 +2356,7 @@ def _duplicate_or_collision_outcome(
     *,
     order: models.Order,
     gd: Any,
-    amount: Optional[float],
+    amount: Optional[int],
     existing: List[models.OrderPayment],
     key: str,
 ) -> str:
@@ -2341,7 +2405,7 @@ def _fresh_duplicate_outcome(
     key: str,
     order_id: int,
     gd: Any,
-    amount: Optional[float],
+    amount: Optional[int],
 ) -> Tuple[Optional[str], bool]:
     """Trả (duplicate outcome, collision) từ durable winner trong Session mới."""
     fresh = Session(bind=db.get_bind())
@@ -2373,7 +2437,7 @@ def _apply_bank_transaction(
     db: Session,
     order: models.Order,
     gd: Any,
-    amount: float,
+    amount: int,
     *,
     configured_account: Optional[str],
 ) -> str:
@@ -2392,7 +2456,7 @@ def _apply_bank_transaction(
         and order.paid_amount is not None
         and order.status != STATUS_PENDING
     ):
-        if abs(_so_tien(order.paid_amount) - amount) > MONEY_EPSILON:
+        if _so_tien(order.paid_amount) != amount:
             return _commit_idempotency_collision(
                 db,
                 order_id=order_id,
@@ -2454,7 +2518,7 @@ def _apply_bank_transaction(
         text(
             """
             UPDATE orders
-            SET paid_amount = COALESCE(paid_amount, 0) + :amount,
+            SET paid_vnd = COALESCE(paid_vnd, 0) + :amount,
                 bank_txn_id = CASE
                     WHEN :txn IS NULL THEN bank_txn_id ELSE :txn END
             WHERE id = :order_id
@@ -2561,7 +2625,7 @@ def _reset_refund_completion(order: models.Order) -> None:
 def _unapplied_audit_details(
     order: models.Order,
     *,
-    amount: float,
+    amount: int,
     event_key: str,
 ) -> str:
     return (
@@ -2575,7 +2639,7 @@ def _ensure_unapplied_audit(
     db: Session,
     order: models.Order,
     *,
-    amount: float,
+    amount: int,
     event_key: str,
 ) -> bool:
     """Thêm audit của BANK_UNAPPLIED đúng một lần, chưa commit."""
@@ -2641,8 +2705,8 @@ def _apply_unapplied_bank_event(
             "payload không có số tiền nên không xác nhận được đã thu đủ",
         )
         return "rejected"
-    amount = float(gd.amount)
-    if not math.isfinite(amount) or amount <= 0:
+    amount = _valid_webhook_amount(gd)
+    if amount is None:
         _commit_webhook_rejection(
             db,
             order,

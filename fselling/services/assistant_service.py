@@ -34,6 +34,7 @@ import re
 import time
 import unicodedata
 from datetime import date, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
@@ -337,12 +338,23 @@ def _doan_y_dinh(cau_khong_dau: str) -> Optional[str]:
     return None
 
 
-def _tien(so: float) -> str:
-    return f"{round(so):,.0f}đ".replace(",", ".")
+def _so_nguyen_hien_thi(so: Any) -> int:
+    """Format exact integers/Decimal ratios without a binary-float detour."""
+    if isinstance(so, Decimal):
+        value = so
+    elif isinstance(so, int):
+        value = Decimal(so)
+    else:
+        value = Decimal(str(so or 0))
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
-def _so(so: float) -> str:
-    return f"{round(so):,.0f}".replace(",", ".")
+def _tien(so: Any) -> str:
+    return f"{_so_nguyen_hien_thi(so):,.0f}đ".replace(",", ".")
+
+
+def _so(so: Any) -> str:
+    return f"{_so_nguyen_hien_thi(so):,.0f}".replace(",", ".")
 
 
 # --- Từng ý định ---
@@ -352,7 +364,7 @@ def _tra_loi_doanh_thu(db, user, shop_id, cau, chi_dem_don=False) -> Dict[str, A
         db, user, shop_id, tu_ngay=tu.isoformat(), den_ngay=den.isoformat()
     )
     don = int(so_lieu.get("total_orders") or 0)
-    tien = float(so_lieu.get("total_revenue") or 0)
+    tien = int(so_lieu.get("total_revenue") or 0)
     # `total_orders` đếm MỌI đơn, còn `total_revenue` chỉ đếm đơn ĐÃ THANH TOÁN.
     # Màn Thống Kê để hai con số ở hai ô riêng nên người xem thấy ngay chúng
     # khác nhau; một câu văn dán liền hai số lại thì mất mất điều đó và đọc ra
@@ -397,8 +409,8 @@ def _tra_loi_so_sanh_tuan(db, user, shop_id, cau) -> Dict[str, Any]:
         tu_ngay=dau_tuan_truoc.isoformat(),
         den_ngay=(dau_tuan_nay - timedelta(days=1)).isoformat(),
     )
-    a = float(nay.get("total_revenue") or 0)
-    b = float(truoc.get("total_revenue") or 0)
+    a = int(nay.get("total_revenue") or 0)
+    b = int(truoc.get("total_revenue") or 0)
 
     if b <= 0:
         loi = (
@@ -406,7 +418,7 @@ def _tra_loi_so_sanh_tuan(db, user, shop_id, cau) -> Dict[str, Any]:
             "chưa so sánh được."
         )
     else:
-        chenh = (a - b) / b * 100
+        chenh = Decimal(a - b) * Decimal(100) / Decimal(b)
         huong = "tăng" if a >= b else "giảm"
         loi = (
             f"Tuần này thu {_tien(a)}, tuần trước {_tien(b)} — "
@@ -501,7 +513,7 @@ def _tra_loi_hang_e(db, user, shop_id, cau) -> Dict[str, Any]:
 
 def _tra_loi_cong_no(db, user, shop_id, cau) -> Dict[str, Any]:
     so_lieu = report_service.shop_stats(db, user, shop_id)
-    no = float(so_lieu.get("receivable_amount") or 0)
+    no = int(so_lieu.get("receivable_amount") or 0)
     loi = (
         f"Khách đang nợ tổng cộng {_tien(no)}."
         if no > 0
@@ -522,7 +534,7 @@ def _tra_loi_lai(db, user, shop_id, cau) -> Dict[str, Any]:
             status_code=403,
             detail=tr("Chỉ chủ cửa hàng mới xem được giá vốn và lãi"),
         )
-    lai = float(so_lieu.get("gross_profit") or 0)
+    lai = int(so_lieu.get("gross_profit") or 0)
     thieu = int(so_lieu.get("orders_missing_cost") or 0)
     loi = f"Lãi gộp {nhan} khoảng {_tien(lai)}."
     if thieu:
@@ -545,7 +557,7 @@ def _tra_loi_tong_quan(db, user, shop_id, cau) -> Dict[str, Any]:
         db, user, shop_id, tu_ngay=tu.isoformat(), den_ngay=den.isoformat()
     )
     don = int(so_lieu.get("total_orders") or 0)
-    tien = float(so_lieu.get("total_revenue") or 0)
+    tien = int(so_lieu.get("total_revenue") or 0)
 
     dong = []
     if don:
@@ -556,7 +568,7 @@ def _tra_loi_tong_quan(db, user, shop_id, cau) -> Dict[str, Any]:
     # Lãi chỉ nói với người được xem giá vốn. Thiếu khóa = không có quyền, và ở
     # đây bỏ qua trong im lặng thay vì báo lỗi: họ vẫn xứng đáng nhận phần còn lại.
     if "gross_profit" in so_lieu:
-        dong.append(f"Lãi gộp khoảng {_tien(float(so_lieu['gross_profit'] or 0))}.")
+        dong.append(f"Lãi gộp khoảng {_tien(int(so_lieu['gross_profit'] or 0))}.")
 
     # So với kỳ trước liền kề, cùng độ dài - đó mới là so sánh công bằng.
     so_ngay = (den - tu).days + 1
@@ -566,9 +578,9 @@ def _tra_loi_tong_quan(db, user, shop_id, cau) -> Dict[str, Any]:
         db, user, shop_id,
         tu_ngay=truoc_tu.isoformat(), den_ngay=truoc_den.isoformat(),
     )
-    tien_truoc = float(truoc.get("total_revenue") or 0)
+    tien_truoc = int(truoc.get("total_revenue") or 0)
     if tien_truoc > 0:
-        chenh = (tien - tien_truoc) / tien_truoc * 100
+        chenh = Decimal(tien - tien_truoc) * Decimal(100) / Decimal(tien_truoc)
         dong.append(
             f"{'Tăng' if tien >= tien_truoc else 'Giảm'} {abs(chenh):.0f}% "
             f"so với {so_ngay} ngày trước đó ({_tien(tien_truoc)})."
@@ -586,7 +598,7 @@ def _tra_loi_tong_quan(db, user, shop_id, cau) -> Dict[str, Any]:
             viec.append(f"{len(gap)} mặt hàng sắp cháy hàng (gấp nhất: {gap[0]['ten']})")
     except HTTPException:
         pass
-    no = float(so_lieu.get("receivable_amount") or 0)
+    no = int(so_lieu.get("receivable_amount") or 0)
     if no > 0:
         viec.append(f"khách còn nợ {_tien(no)}")
     if viec:
@@ -623,9 +635,9 @@ def _tra_loi_gia_ton(db, user, shop_id, cau) -> Dict[str, Any]:
 
     if prod is not None:
         ton = inventory_service.ton_kha_dung(db, prod)
-        loi = f"{prod.name} đang bán {_tien(float(prod.price or 0))}, còn {_so(ton)} trong kho."
+        loi = f"{prod.name} đang bán {_tien(prod.price or 0)}, còn {_so(ton)} trong kho."
         if has_cost_visibility(shop, user) and prod.cost_price is not None:
-            loi += f" Giá vốn {_tien(float(prod.cost_price))}."
+            loi += f" Giá vốn {_tien(prod.cost_price)}."
         return {"tra_loi": loi, "nguon": "Kho hàng",
                 "chi_tiet": {"product_id": prod.id, "gia": prod.price, "ton": ton}}
 
@@ -644,7 +656,7 @@ def _tra_loi_gia_ton(db, user, shop_id, cau) -> Dict[str, Any]:
     return {
         "tra_loi": (
             f"Hàng {'rẻ' if re_nhat else 'đắt'} nhất là {dau.name}, "
-            f"{_tien(float(dau.price or 0))}."
+            f"{_tien(dau.price or 0)}."
         ),
         "bang": [{"ten": p.name, "gia": p.price} for p in ds],
         "nguon": "Kho hàng",
@@ -656,8 +668,8 @@ def _tra_loi_chi_phi(db, user, shop_id, cau) -> Dict[str, Any]:
     d = report_service.net_cashflow_report(
         db, user, shop_id, tu_ngay=tu.isoformat(), den_ngay=den.isoformat()
     )
-    chi = float(d.get("operating_expense_total") or 0)
-    rong = float(d.get("net_profit") or 0)
+    chi = int(d.get("operating_expense_total") or 0)
+    rong = int(d.get("net_profit") or 0)
     loi = f"Chi phí vận hành {nhan} là {_tien(chi)}, lãi ròng {_tien(rong)}."
     if rong < 0:
         # Số âm phải đổi thành TỪ. "Bạn lãi -3.881.347đ" là câu không ai đọc được.
@@ -705,7 +717,7 @@ def _tra_loi_ca_tien(db, user, shop_id, cau) -> Dict[str, Any]:
     du_kien = ca.get("expected_cash_amount")
     loi = "Ca của bạn đang mở"
     if du_kien is not None:
-        loi += f", trong két dự kiến có {_tien(float(du_kien))}"
+        loi += f", trong két dự kiến có {_tien(du_kien)}"
     loi += "."
     return {"tra_loi": loi, "nguon": "Ca bán hàng", "chi_tiet": ca}
 

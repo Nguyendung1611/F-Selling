@@ -5,6 +5,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, StrictInt, field_validator
 
 from ..core.numeric_limits import MAX_SAFE_QUANTITY, MAX_SAFE_VND
+from .money import ExactVND
 
 
 class SupplierCreate(BaseModel):
@@ -13,7 +14,7 @@ class SupplierCreate(BaseModel):
     tax_code: Optional[str] = Field(default=None, max_length=64)
     address: Optional[str] = Field(default=None, max_length=500)
     note: Optional[str] = Field(default=None, max_length=500)
-    opening_balance: StrictInt = Field(default=0, ge=0, le=MAX_SAFE_VND)
+    opening_balance: ExactVND = Field(default=0, ge=0, le=MAX_SAFE_VND)
     opening_date: Optional[str] = Field(default=None, max_length=10)
     opening_due_date: Optional[str] = Field(default=None, max_length=10)
     opening_note: Optional[str] = Field(default=None, max_length=500)
@@ -35,7 +36,7 @@ class SupplierStatusUpdate(BaseModel):
 class PurchaseReceiptItemInput(BaseModel):
     product_id: StrictInt = Field(gt=0)
     quantity: StrictInt = Field(gt=0, le=MAX_SAFE_QUANTITY)
-    unit_cost: StrictInt = Field(ge=0, le=MAX_SAFE_VND)
+    unit_cost: ExactVND = Field(ge=0, le=MAX_SAFE_VND)
     expiry_date: Optional[str] = Field(default=None, max_length=10)
 
     @field_validator("expiry_date")
@@ -80,14 +81,14 @@ class PurchaseReceiptConfirm(BaseModel):
     )
     # Không mặc định 0: đây là quyết định tiền bạc, client phải gửi rõ người
     # dùng đã chọn trả 0 / một phần / toàn bộ.
-    paid_amount: StrictInt = Field(ge=0, le=MAX_SAFE_VND)
+    paid_amount: ExactVND = Field(ge=0, le=MAX_SAFE_VND)
     method: Optional[Literal["CASH_SHIFT", "TRANSFER", "OUTSIDE"]] = None
     note: Optional[str] = Field(default=None, max_length=500)
     reference: Optional[str] = Field(default=None, max_length=128)
 
 
 class SupplierPaymentCreate(BaseModel):
-    amount: StrictInt = Field(gt=0, le=MAX_SAFE_VND)
+    amount: ExactVND = Field(gt=0, le=MAX_SAFE_VND)
     method: Literal["CASH_SHIFT", "TRANSFER", "OUTSIDE"]
     note: Optional[str] = Field(default=None, max_length=500)
     reference: Optional[str] = Field(default=None, max_length=128)

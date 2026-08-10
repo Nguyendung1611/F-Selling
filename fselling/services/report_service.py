@@ -3,18 +3,20 @@ from __future__ import annotations
 
 import io
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 import openpyxl
 from fastapi import HTTPException
-from sqlalchemy import and_, distinct, func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from .. import models
 from ..core import thoi_gian
 from ..core.config import log_to_file
 from ..core.i18n import tr
+from ..core.money import json_safe_integer
 from ..dependencies import (
     PERMISSION_REPORT,
     has_cost_visibility,
@@ -41,17 +43,49 @@ def _today_vietnam():
     return thoi_gian.hom_nay_vn()
 
 
-def _paid_revenue(db: Session, shop_id: int) -> float:
-    return (
-        db.query(func.sum(models.Order.total_amount))
+def _sum_python(values) -> int:
+    total = 0
+    for value in values:
+        total += int(value or 0)
+    return total
+
+
+def _paid_revenue(db: Session, shop_id: int) -> int:
+    values = (
+        db.query(models.Order.total_amount)
         .filter(models.Order.shop_id == shop_id, models.Order.status == "PAID")
-        .scalar()
-        or 0
+        .all()
     )
+    return _sum_python(value for (value,) in values)
 
 
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
+
+
+def _versioned_report_contract(result: Dict[str, Any], contract_version: int) -> Dict[str, Any]:
+    """V2 protects every unsafe JSON integer with an exact decimal string."""
+    if contract_version == 1:
+        return result
+    if contract_version != 2:
+        raise HTTPException(status_code=400, detail=tr("Phiên bản contract báo cáo không hợp lệ"))
+
+    def convert(value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return json_safe_integer(value)
+        if isinstance(value, list):
+            return [convert(item) for item in value]
+        if isinstance(value, tuple):
+            return [convert(item) for item in value]
+        if isinstance(value, dict):
+            return {key: convert(item) for key, item in value.items()}
+        return value
+
+    converted = convert(result)
+    converted["contract_version"] = 2
+    return converted
 
 
 def _parse_ngay(chuoi: Optional[str], ten_truong: str) -> Optional[date]:
@@ -132,7 +166,7 @@ def _limit_free_report_range(
     return tu_ngay or cutoff.isoformat(), den_ngay
 
 
-def _cong_no_phai_thu(db: Session, shop_id: int) -> float:
+def _cong_no_phai_thu(db: Session, shop_id: int) -> int:
     """Tổng tiền khách còn nợ shop, tại thời điểm hiện tại."""
     rows = (
         db.query(
@@ -147,7 +181,7 @@ def _cong_no_phai_thu(db: Session, shop_id: int) -> float:
         .all()
     )
     return sum(
-        max(float(tong or 0) - float(bank or 0) - float(tien_mat or 0), 0.0)
+        max(int(tong or 0) - int(bank or 0) - int(tien_mat or 0), 0)
         for tong, bank, tien_mat in rows
     )
 
@@ -194,7 +228,7 @@ def _huy_hang_anh_huong_lai(
     if not phieu:
         return {
             "written_off_quantity": 0,
-            "write_off_loss": 0.0,
+            "write_off_loss": 0,
             "write_offs_missing_cost": 0,
         }
 
@@ -207,14 +241,14 @@ def _huy_hang_anh_huong_lai(
     ):
         dong_theo_phieu.setdefault(d.write_off_id, []).append(d)
 
-    lo = 0.0
+    lo = 0
     thieu_gia_von = 0
     for p in phieu:
         dong = dong_theo_phieu.get(p.id, [])
-        if any(d.cost_price is None for d in dong):
+        if any(int(d.cost_unknown_qty or 0) > 0 for d in dong):
             thieu_gia_von += 1
             continue
-        lo += sum(float(d.cost_price) * int(d.quantity or 0) for d in dong)
+        lo += sum(int(d.cost_basis_vnd or 0) for d in dong)
 
     return {
         # Số lượng thì đếm ĐỦ mọi phiếu, kể cả phiếu thiếu giá vốn: "đã bỏ đi
@@ -241,11 +275,11 @@ def _tra_hang_anh_huong_lai(
     điều chỉnh và đếm riêng - cùng nguyên tắc "không đoán NULL là 0" ở `_lai_gop`.
     """
     phieu = _phieu_tra_trong_ky(db, shop_id, tu_ngay, den_ngay).all()
-    tong_hoan = sum(float(p.refund_amount or 0) for p in phieu)
+    tong_hoan = sum(int(p.refund_amount or 0) for p in phieu)
     if not phieu:
         return {
-            "returned_amount": 0.0,
-            "profit_reduction": 0.0,
+            "returned_amount": 0,
+            "profit_reduction": 0,
             "returns_missing_cost": 0,
         }
 
@@ -258,21 +292,21 @@ def _tra_hang_anh_huong_lai(
     ):
         dong_theo_phieu.setdefault(d.return_id, []).append(d)
 
-    giam_lai = 0.0
+    giam_lai = 0
     thieu_gia_von = 0
     for p in phieu:
         dong = dong_theo_phieu.get(p.id, [])
         # Chỉ dòng nhập lại kho mới cần biết giá vốn; dòng bỏ đi thì mất trắng,
         # không phải tra giá vốn làm gì.
-        if any(d.restocked and d.cost_price is None for d in dong):
+        if any(d.restocked and int(d.cost_unknown_qty or 0) > 0 for d in dong):
             thieu_gia_von += 1
             continue
         von_thu_hoi = sum(
-            float(d.cost_price or 0) * int(d.quantity or 0)
+            int(d.cost_basis_vnd or 0)
             for d in dong
             if d.restocked
         )
-        giam_lai += float(p.refund_amount or 0) - von_thu_hoi
+        giam_lai += int(p.refund_amount or 0) - von_thu_hoi
 
     return {
         "returned_amount": tong_hoan,
@@ -299,50 +333,29 @@ def _lai_gop(db: Session, paid_orders_subquery) -> Dict[str, Any]:
     con số (`orders_missing_cost`, `revenue_missing_cost`) để giao diện nói ra
     báo cáo đang thiếu bao nhiêu, thay vì im lặng.
     """
-    don_thieu_gia_von = db.query(distinct(models.OrderItem.order_id)).filter(
-        models.OrderItem.order_id.in_(paid_orders_subquery),
-        models.OrderItem.cost_price.is_(None),
+    paid_ids = [int(order_id) for (order_id,) in paid_orders_subquery.all()]
+    orders = (
+        db.query(models.Order)
+        .options(joinedload(models.Order.items))
+        .filter(models.Order.id.in_(paid_ids))
+        .all()
+        if paid_ids
+        else []
     )
-
-    def _tinh_duoc(query):
-        """Giới hạn về các đơn đủ giá vốn."""
-        return query.filter(~models.Order.id.in_(don_thieu_gia_von))
-
-    doanh_thu_tinh_duoc = (
-        _tinh_duoc(
-            db.query(func.sum(models.Order.total_amount)).filter(
-                models.Order.id.in_(paid_orders_subquery)
-            )
-        ).scalar()
-        or 0
-    )
-    tong_gia_von = (
-        db.query(func.sum(models.OrderItem.cost_price * models.OrderItem.quantity))
-        .filter(
-            models.OrderItem.order_id.in_(paid_orders_subquery),
-            ~models.OrderItem.order_id.in_(don_thieu_gia_von),
+    doanh_thu_tinh_duoc = 0
+    doanh_thu_bi_loai = 0
+    tong_gia_von = 0
+    so_don_thieu = 0
+    for order in orders:
+        missing = not order.items or any(
+            int(item.cost_unknown_qty or 0) > 0 for item in order.items
         )
-        .scalar()
-        or 0
-    )
-    so_don_thieu = (
-        db.query(func.count(models.Order.id))
-        .filter(
-            models.Order.id.in_(paid_orders_subquery),
-            models.Order.id.in_(don_thieu_gia_von),
-        )
-        .scalar()
-        or 0
-    )
-    doanh_thu_bi_loai = (
-        db.query(func.sum(models.Order.total_amount))
-        .filter(
-            models.Order.id.in_(paid_orders_subquery),
-            models.Order.id.in_(don_thieu_gia_von),
-        )
-        .scalar()
-        or 0
-    )
+        if missing:
+            so_don_thieu += 1
+            doanh_thu_bi_loai += int(order.total_amount or 0)
+            continue
+        doanh_thu_tinh_duoc += int(order.total_amount or 0)
+        tong_gia_von += sum(int(item.cost_basis_vnd or 0) for item in order.items)
 
     lai = doanh_thu_tinh_duoc - tong_gia_von
     return {
@@ -352,7 +365,9 @@ def _lai_gop(db: Session, paid_orders_subquery) -> Dict[str, Any]:
         # Doanh thu 0 thì tỷ suất không xác định, không phải 0%. Trả None để
         # giao diện hiện "--" thay vì một con số bịa.
         "gross_margin": (
-            (lai / doanh_thu_tinh_duoc * 100) if doanh_thu_tinh_duoc else None
+            (Decimal(lai) * Decimal(100) / Decimal(doanh_thu_tinh_duoc))
+            if doanh_thu_tinh_duoc
+            else None
         ),
         "orders_missing_cost": so_don_thieu,
         "revenue_missing_cost": doanh_thu_bi_loai,
@@ -413,6 +428,7 @@ def seller_dashboard(
     tu_ngay: Optional[str] = None,
     den_ngay: Optional[str] = None,
     reconciliation_only: bool = False,
+    contract_version: int = 1,
 ) -> Dict[str, Any]:
     """Danh sách đơn của shop, phân trang và lọc theo khoảng ngày.
 
@@ -472,29 +488,28 @@ def seller_dashboard(
         # Chế độ Đối Soát được phép nhìn các giao dịch cũ đang cần xử lý, nhưng
         # không vì thế mà biến thành cửa hậu đọc tổng doanh thu toàn lịch sử của
         # gói Pro. Chỉ cộng đúng các dòng PAID đang nằm trong tập đối soát mở.
-        doanh_thu = (
-            base.with_entities(func.sum(models.Order.total_amount))
+        revenue_rows = (
+            base.with_entities(models.Order.total_amount)
             .filter(models.Order.status == "PAID")
-            .scalar()
-            or 0
+            .all()
         )
     else:
-        doanh_thu = (
+        revenue_rows = (
             _loc_khoang_ngay(
-                db.query(func.sum(models.Order.total_amount)).filter(
+                db.query(models.Order.total_amount).filter(
                     models.Order.shop_id == shop_id, models.Order.status == "PAID"
                 ),
                 tu_ngay,
                 den_ngay,
-            ).scalar()
-            or 0
+            ).all()
         )
+    doanh_thu = _sum_python(value for (value,) in revenue_rows)
 
     # Chỉ hỏi tiền-về-chưa-ghi-nhận cho ĐÚNG các đơn của trang này, không quét
     # cả shop: màn Đối Soát phân trang, mà số đơn thì lớn dần theo thời gian.
     tien_ve = _tien_ve_chua_ghi_nhan_theo_don(db, [o.id for o in orders])
 
-    return {
+    return _versioned_report_contract({
         "total_revenue": doanh_thu,
         "orders": [_dashboard_order(o, tien_ve.get(o.id)) for o in orders],
         "page": page,
@@ -502,33 +517,32 @@ def seller_dashboard(
         "total_orders": tong_don,
         "has_more": page * per_page < tong_don,
         "reconciliation_count": reconciliation_count,
-    }
+    }, contract_version)
 
 
 def _tien_ve_chua_ghi_nhan_theo_don(
     db: Session, order_ids: List[int]
-) -> Dict[int, float]:
+) -> Dict[int, int]:
     """Tổng tiền `BANK_UNAPPLIED` của từng đơn trong danh sách."""
     if not order_ids:
         return {}
     hang = (
-        db.query(
-            models.OrderPayment.order_id,
-            func.sum(models.OrderPayment.amount),
-        )
+        db.query(models.OrderPayment.order_id, models.OrderPayment.amount)
         .filter(
             models.OrderPayment.order_id.in_(order_ids),
             models.OrderPayment.entry_type
             == order_service.ENTRY_BANK_UNAPPLIED,
         )
-        .group_by(models.OrderPayment.order_id)
         .all()
     )
-    return {order_id: float(tong or 0) for order_id, tong in hang}
+    result: Dict[int, int] = {}
+    for order_id, amount in hang:
+        result[int(order_id)] = result.get(int(order_id), 0) + int(amount or 0)
+    return result
 
 
 def _dashboard_order(
-    order: models.Order, tien_ve_chua_ghi_nhan: Optional[float] = None
+    order: models.Order, tien_ve_chua_ghi_nhan: Optional[int] = None
 ) -> Dict[str, Any]:
     result = {
         "id": order.id,
@@ -540,7 +554,7 @@ def _dashboard_order(
         # F6: tiền đã về tài khoản cho đơn này nhưng webhook KHÔNG áp vào đơn.
         # 0 nghĩa là không có, chứ không phải "chưa biết" - đây là tổng của một
         # tập bút toán đếm được.
-        "unapplied_transfer_amount": float(tien_ve_chua_ghi_nhan or 0),
+        "unapplied_transfer_amount": int(tien_ve_chua_ghi_nhan or 0),
     }
     result.update(order_service.payment_summary(order))
     return result
@@ -560,6 +574,7 @@ def shop_stats(
     shop_id: int,
     tu_ngay: Optional[str] = None,
     den_ngay: Optional[str] = None,
+    contract_version: int = 1,
 ) -> Dict[str, Any]:
     """Thống kê của shop. Không truyền ngày -> toàn bộ lịch sử + xu hướng 7 ngày
     (đúng như trước). Truyền ngày -> mọi con số và biểu đồ đều theo khoảng đó."""
@@ -570,16 +585,14 @@ def shop_stats(
     )
     co_loc_ngay = bool((tu_ngay or "").strip() or (den_ngay or "").strip())
 
-    total_rev = (
-        _loc_khoang_ngay(
-            db.query(func.sum(models.Order.total_amount)).filter(
+    total_rev_rows = _loc_khoang_ngay(
+            db.query(models.Order.total_amount).filter(
                 models.Order.shop_id == shop_id, models.Order.status == "PAID"
             ),
             tu_ngay,
             den_ngay,
-        ).scalar()
-        or 0
-    )
+        ).all()
+    total_rev = _sum_python(value for (value,) in total_rev_rows)
     total_orders = _loc_khoang_ngay(
         db.query(models.Order).filter(models.Order.shop_id == shop_id), tu_ngay, den_ngay
     ).count()
@@ -591,12 +604,12 @@ def shop_stats(
         tu_ngay,
         den_ngay,
     )
-    total_sold = (
-        db.query(func.sum(models.OrderItem.quantity))
+    sold_rows = (
+        db.query(models.OrderItem.quantity)
         .filter(models.OrderItem.order_id.in_(paid_orders_subquery))
-        .scalar()
-        or 0
+        .all()
     )
+    total_sold = _sum_python(value for (value,) in sold_rows)
 
     # Gộp các biến thể của cùng một nhóm thành MỘT dòng. Không gộp thì một cái
     # áo có 4 size chiếm 4 trong 5 chỗ của bảng "bán chạy nhất", đẩy hết mặt
@@ -608,33 +621,33 @@ def shop_stats(
     # vì "áo thun bán được bao nhiêu" là câu hỏi về danh mục hôm nay, không phải
     # về cái tên hồi tháng trước. Dòng đơn hàng cũ không có `product_id`
     # (trước migration A1a) rơi về `product_name` nhờ COALESCE.
-    _ten_gom = func.coalesce(
-        models.Product.variant_group, models.OrderItem.product_name
-    )
-    top_products_query = (
+    top_product_rows = (
         db.query(
-            _ten_gom.label("ten"),
-            func.sum(models.OrderItem.quantity).label("so_luong"),
-            func.count(distinct(models.OrderItem.product_id)).label("so_bien_the"),
-            # NULL = mọi dòng trong cụm này đều là hàng đơn lẻ.
-            func.max(models.Product.variant_group).label("nhom"),
+            models.OrderItem.product_name,
+            models.OrderItem.product_id,
+            models.OrderItem.quantity,
+            models.Product.variant_group,
         )
         .outerjoin(models.Product, models.Product.id == models.OrderItem.product_id)
         .filter(models.OrderItem.order_id.in_(paid_orders_subquery))
-        .group_by(_ten_gom)
-        .order_by(func.sum(models.OrderItem.quantity).desc())
-        .limit(5)
         .all()
     )
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for product_name, product_id, quantity, variant_group in top_product_rows:
+        name = variant_group or product_name
+        row = grouped.setdefault(name, {"name": name, "qty": 0, "variant_ids": set(), "grouped": bool(variant_group)})
+        row["qty"] += int(quantity or 0)
+        if variant_group and product_id is not None:
+            row["variant_ids"].add(int(product_id))
     top_products = [
         {
-            "name": r.ten,
-            "qty": r.so_luong,
+            "name": r["name"],
+            "qty": r["qty"],
             # 0 = hàng đơn lẻ. Giao diện chỉ ghi "(N loại)" khi > 0, nếu không
             # mọi món trong tiệm đều bị dán thêm "(1 loại)" vô nghĩa.
-            "variants": r.so_bien_the if r.nhom else 0,
+            "variants": len(r["variant_ids"]) if r["grouped"] else 0,
         }
-        for r in top_products_query
+        for r in sorted(grouped.values(), key=lambda item: (-item["qty"], item["name"]))[:5]
     ]
 
     if co_loc_ngay:
@@ -703,7 +716,7 @@ def shop_stats(
                 db, shop_id, paid_orders_subquery, tu_ngay, den_ngay, tra_hang
             )
         )
-    return ket_qua
+    return _versioned_report_contract(ket_qua, contract_version)
 
 
 def _lai_gop_da_dieu_chinh(
@@ -783,14 +796,14 @@ def _ngay_vn(cot):
     return func.date(cot, "+7 hours")
 
 
-def _cong_don_theo_ngay(dich: Dict[str, float], hang) -> float:
+def _cong_don_theo_ngay(dich: Dict[str, int], hang) -> int:
     """Cộng kết quả (ngày, số tiền) vào một dict, trả về tổng vừa cộng."""
-    tong = 0.0
+    tong = 0
     for ngay, tien in hang:
         if not ngay:
             continue
-        so = float(tien or 0)
-        dich[ngay] = dich.get(ngay, 0.0) + so
+        so = int(tien or 0)
+        dich[ngay] = dich.get(ngay, 0) + so
         tong += so
     return tong
 
@@ -857,21 +870,21 @@ def _dong_tien(
     CỐ Ý không có tiền gói Pro ở đây (bẫy 33): đó là tiền nền tảng, đi qua
     `SubscriptionPayment` và tài khoản riêng, không phải tiền của cửa hàng.
     """
-    vao: Dict[str, Dict[str, float]] = {}
-    ra: Dict[str, Dict[str, float]] = {}
-    tong_vao: Dict[str, float] = {}
-    tong_ra: Dict[str, float] = {}
+    vao: Dict[str, Dict[str, int]] = {}
+    ra: Dict[str, Dict[str, int]] = {}
+    tong_vao: Dict[str, int] = {}
+    tong_ra: Dict[str, int] = {}
 
     don_cua_shop = db.query(models.Order.id).filter(
         models.Order.shop_id == shop_id
     )
 
     for khoa, _nhan, entries in _CASHFLOW_IN_GROUPS:
-        theo_ngay: Dict[str, float] = {}
+        theo_ngay: Dict[str, int] = {}
         hang = _loc_khoang_ngay(
             db.query(
                 _ngay_vn(models.OrderPayment.created_at),
-                func.sum(models.OrderPayment.amount),
+                models.OrderPayment.amount,
             ).filter(
                 models.OrderPayment.order_id.in_(don_cua_shop),
                 models.OrderPayment.entry_type.in_(entries),
@@ -879,18 +892,18 @@ def _dong_tien(
             tu_ngay,
             den_ngay,
             cot=models.OrderPayment.created_at,
-        ).group_by(_ngay_vn(models.OrderPayment.created_at)).all()
+        ).all()
         tong_vao[khoa] = _cong_don_theo_ngay(theo_ngay, hang)
         vao[khoa] = theo_ngay
 
     # Hoàn tiền khách (chuyển thừa + trả hàng).
-    hoan: Dict[str, float] = {}
+    hoan: Dict[str, int] = {}
     tong_ra["refund"] = _cong_don_theo_ngay(
         hoan,
         _loc_khoang_ngay(
             db.query(
                 _ngay_vn(models.OrderPayment.created_at),
-                func.sum(models.OrderPayment.amount),
+                models.OrderPayment.amount,
             ).filter(
                 models.OrderPayment.order_id.in_(don_cua_shop),
                 models.OrderPayment.entry_type.in_(_CASHFLOW_OUT_ORDER_ENTRIES),
@@ -898,32 +911,32 @@ def _dong_tien(
             tu_ngay,
             den_ngay,
             cot=models.OrderPayment.created_at,
-        ).group_by(_ngay_vn(models.OrderPayment.created_at)).all(),
+        ).all(),
     )
     ra["refund"] = hoan
 
     # Trả nhà cung cấp. Đếm CHỨNG TỪ chứ không đếm chuyển động két, và mọi
     # phương thức đều là tiền ra khỏi túi chủ shop (kể cả `OUTSIDE`).
-    ncc: Dict[str, float] = {}
+    ncc: Dict[str, int] = {}
     tong_ra["supplier"] = _cong_don_theo_ngay(
         ncc,
         _loc_khoang_ngay(
             db.query(
                 _ngay_vn(models.SupplierPayment.created_at),
-                func.sum(models.SupplierPayment.amount),
+                models.SupplierPayment.amount,
             ).filter(models.SupplierPayment.shop_id == shop_id),
             tu_ngay,
             den_ngay,
             cot=models.SupplierPayment.created_at,
-        ).group_by(_ngay_vn(models.SupplierPayment.created_at)).all(),
+        ).all(),
     )
     ra["supplier"] = ncc
 
     # Chi phí vận hành: lấy nguyên số đã trả vào đúng NGÀY CHI, không phân bổ.
     # Trả trước 30 triệu tiền nhà thì dòng tiền phải thấy đủ 30 triệu ra hôm đó.
     chi_phi = expense_service.tien_chi_theo_ngay(db, shop_id, tu_ngay, den_ngay)
-    ra["expense"] = {k: float(v) for k, v in chi_phi["by_date"].items()}
-    tong_ra["expense"] = float(chi_phi["total"])
+    ra["expense"] = {k: int(v) for k, v in chi_phi["by_date"].items()}
+    tong_ra["expense"] = int(chi_phi["total"])
 
     # Thu/chi tay trong ca, sau khi loại các dòng đã thuộc chứng từ ở trên.
     tu_ncc, tu_chi_phi = _cash_movement_da_thuoc_chung_tu(db, shop_id)
@@ -934,13 +947,13 @@ def _dong_tien(
         ("cash_topup", shift_service.DIRECTION_IN),
         ("cash_withdraw", shift_service.DIRECTION_OUT),
     ):
-        theo_ngay: Dict[str, float] = {}
+        theo_ngay: Dict[str, int] = {}
         tong = _cong_don_theo_ngay(
             theo_ngay,
             _loc_khoang_ngay(
                 db.query(
                     _ngay_vn(models.CashMovement.created_at),
-                    func.sum(models.CashMovement.amount),
+                    models.CashMovement.amount,
                 ).filter(
                     models.CashMovement.shift_id.in_(ca_cua_shop),
                     models.CashMovement.direction == huong,
@@ -950,7 +963,7 @@ def _dong_tien(
                 tu_ngay,
                 den_ngay,
                 cot=models.CashMovement.created_at,
-            ).group_by(_ngay_vn(models.CashMovement.created_at)).all(),
+            ).all(),
         )
         if huong == shift_service.DIRECTION_IN:
             vao[khoa] = theo_ngay
@@ -978,18 +991,18 @@ def _dong_tien(
     nhan = _nhan_bieu_do(moi_ngay, tu_ngay, den_ngay)
 
     chuoi_vao = [
-        round(sum(nhom.get(ngay, 0.0) for nhom in vao.values()), 2)
+        sum(nhom.get(ngay, 0) for nhom in vao.values())
         for ngay in nhan
     ]
     chuoi_ra = [
-        round(sum(nhom.get(ngay, 0.0) for nhom in ra.values()), 2)
+        sum(nhom.get(ngay, 0) for nhom in ra.values())
         for ngay in nhan
     ]
-    cong_don: List[float] = []
-    chay = 0.0
+    cong_don: List[int] = []
+    chay = 0
     for i in range(len(nhan)):
         chay += chuoi_vao[i] - chuoi_ra[i]
-        cong_don.append(round(chay, 2))
+        cong_don.append(chay)
 
     return {
         "cash_in_total": sum(tong_vao.values()),
@@ -1014,7 +1027,7 @@ def _dong_tien(
             # đường này thành "tiền tôi đang có".
             "cumulative": cong_don,
         },
-        "supplier_payment_total": tong_ra.get("supplier", 0.0),
+        "supplier_payment_total": tong_ra.get("supplier", 0),
     }
 
 
@@ -1024,6 +1037,7 @@ def net_cashflow_report(
     shop_id: int,
     tu_ngay: Optional[str] = None,
     den_ngay: Optional[str] = None,
+    contract_version: int = 1,
 ) -> Dict[str, Any]:
     """Màn Dòng Tiền: lợi nhuận ròng, dòng tiền thực và lý do chúng khác nhau.
 
@@ -1037,16 +1051,14 @@ def net_cashflow_report(
     # hơn mới cần Pro, đúng cùng chính sách với báo cáo hiện có.
     tu_ngay, den_ngay = _limit_free_report_range(db, shop_id, tu_ngay, den_ngay)
 
-    doanh_thu = (
-        _loc_khoang_ngay(
-            db.query(func.sum(models.Order.total_amount)).filter(
+    revenue_rows = _loc_khoang_ngay(
+            db.query(models.Order.total_amount).filter(
                 models.Order.shop_id == shop_id, models.Order.status == "PAID"
             ),
             tu_ngay,
             den_ngay,
-        ).scalar()
-        or 0
-    )
+        ).all()
+    doanh_thu = _sum_python(value for (value,) in revenue_rows)
     paid_orders_subquery = _loc_khoang_ngay(
         db.query(models.Order.id).filter(
             models.Order.shop_id == shop_id, models.Order.status == "PAID"
@@ -1079,14 +1091,14 @@ def net_cashflow_report(
         },
         {
             "key": "prepaid",
-            "amount": float(chi_phi["prepaid_remaining"]),
+            "amount": int(chi_phi["prepaid_remaining"]),
             "label": tr(
                 "tiền đã trả trước cho các tháng sau, chưa tính vào lãi tháng này"
             ),
         },
         {
             "key": "receivable",
-            "amount": float(cong_no),
+            "amount": int(cong_no),
             "label": tr("khách còn nợ, đã bán nhưng chưa cầm được tiền"),
         },
     ]
@@ -1106,7 +1118,7 @@ def net_cashflow_report(
     ket_qua.update(lai)
     ket_qua.update(chi_phi)
     ket_qua.update(tien)
-    return ket_qua
+    return _versioned_report_contract(ket_qua, contract_version)
 
 
 def _workbook_to_stream(wb: "openpyxl.Workbook") -> io.BytesIO:
@@ -1126,7 +1138,7 @@ def admin_excel(db: Session) -> io.BytesIO:
     return _workbook_to_stream(wb)
 
 
-def _gia_von_don(order: models.Order) -> Optional[float]:
+def _gia_von_don(order: models.Order) -> Optional[int]:
     """Tổng giá vốn của một đơn, hoặc None nếu còn dòng chưa khai giá vốn.
 
     Thiếu một dòng là cả đơn không tính được: cộng phần đã biết rồi so với
@@ -1134,11 +1146,11 @@ def _gia_von_don(order: models.Order) -> Optional[float]:
     """
     if not order.items:
         return None
-    tong = 0.0
+    tong = 0
     for item in order.items:
-        if item.cost_price is None:
+        if int(item.cost_unknown_qty or 0) > 0:
             return None
-        tong += item.cost_price * item.quantity
+        tong += int(item.cost_basis_vnd or 0)
     return tong
 
 
@@ -1172,8 +1184,8 @@ def seller_excel(db: Session, current_user: models.User, shop_id: int) -> io.Byt
         .all()
     )
     total_rev = 0
-    tong_gia_von = 0.0
-    tong_lai = 0.0
+    tong_gia_von = 0
+    tong_lai = 0
     don_thieu_gia_von = 0
     for o in orders:
         dong = [
@@ -1283,17 +1295,23 @@ def _them_sheet_hang_huy(db: Session, wb, shop_id: int) -> None:
     }
 
     tong_so_luong = 0
-    tong_lo = 0.0
+    tong_lo = 0
     phieu_thieu_gia_von = 0
     for p in phieu:
         dong = dong_theo_phieu.get(p.id, [])
-        thieu = any(d.cost_price is None for d in dong)
+        thieu = any(int(d.cost_unknown_qty or 0) > 0 for d in dong)
         if thieu:
             phieu_thieu_gia_von += 1
         for d in dong:
             # Ô TRỐNG chứ không phải 0 khi chưa khai giá vốn: 0 trong cột tiền
             # đọc ra là "hàng này không đáng đồng nào", khác hẳn "chưa ai khai".
-            co_gia = d.cost_price is not None
+            co_gia = int(d.cost_unknown_qty or 0) == 0
+            known = int(d.cost_known_qty or 0)
+            unit_cost = (
+                Decimal(int(d.cost_basis_vnd or 0)) / Decimal(known)
+                if co_gia and known
+                else None
+            )
             ws.append([
                 p.id,
                 str(p.created_at),
@@ -1301,17 +1319,15 @@ def _them_sheet_hang_huy(db: Session, wb, shop_id: int) -> None:
                 d.product_name or "",
                 d.expiry_date or "",
                 d.quantity,
-                d.cost_price if co_gia else "",
-                (float(d.cost_price) * int(d.quantity or 0)) if co_gia else
+                unit_cost if unit_cost is not None else "",
+                int(d.cost_basis_vnd or 0) if co_gia else
                 tr("Chưa khai giá vốn"),
                 ten_nguoi.get(p.created_by_user_id, ""),
                 p.note or "",
             ])
         tong_so_luong += int(p.total_quantity or 0)
         if not thieu:
-            tong_lo += sum(
-                float(d.cost_price) * int(d.quantity or 0) for d in dong
-            )
+            tong_lo += sum(int(d.cost_basis_vnd or 0) for d in dong)
 
     ws.append([])
     ws.append([tr("Tổng số lượng đã hủy"), tong_so_luong])

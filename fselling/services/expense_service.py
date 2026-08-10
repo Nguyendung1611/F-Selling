@@ -623,9 +623,10 @@ def list_expenses(
         )
 
     tong = query.count()
-    tong_tien = query.with_entities(
-        func.coalesce(func.sum(models.OperatingExpense.amount), 0)
-    ).scalar()
+    tong_tien = sum(
+        int(amount or 0)
+        for (amount,) in query.with_entities(models.OperatingExpense.amount).all()
+    )
     rows = (
         query.order_by(
             models.OperatingExpense.expense_date.desc(),
@@ -922,20 +923,22 @@ def reminders(
     if not mau:
         return {"month": dau_thang[:7], "items": [], "total_missing": 0}
 
-    da_ghi = dict(
+    paid_rows = (
         _expense_query(db, shop_id)
         .with_entities(
             models.OperatingExpense.template_id,
-            func.coalesce(func.sum(models.OperatingExpense.amount), 0),
+            models.OperatingExpense.amount,
         )
         .filter(
             models.OperatingExpense.template_id.in_([m.id for m in mau]),
             models.OperatingExpense.expense_date >= dau_thang,
             models.OperatingExpense.expense_date <= cuoi_thang,
         )
-        .group_by(models.OperatingExpense.template_id)
         .all()
     )
+    da_ghi: Dict[int, int] = {}
+    for template_id, amount in paid_rows:
+        da_ghi[int(template_id)] = da_ghi.get(int(template_id), 0) + int(amount or 0)
     ten_loai = _ten_loai_theo_id(db, shop_id)
 
     items: List[Dict[str, Any]] = []
@@ -1093,12 +1096,13 @@ def tien_chi_theo_ngay(
     rows = (
         query.with_entities(
             models.OperatingExpense.expense_date,
-            func.coalesce(func.sum(models.OperatingExpense.amount), 0),
+            models.OperatingExpense.amount,
         )
-        .group_by(models.OperatingExpense.expense_date)
         .all()
     )
-    theo_ngay = {ngay: int(tien or 0) for ngay, tien in rows}
+    theo_ngay: Dict[str, int] = {}
+    for ngay, tien in rows:
+        theo_ngay[ngay] = theo_ngay.get(ngay, 0) + int(tien or 0)
     return {"total": sum(theo_ngay.values()), "by_date": theo_ngay}
 
 

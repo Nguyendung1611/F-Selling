@@ -12,9 +12,17 @@ from __future__ import annotations
 import uuid as _uuid
 from datetime import datetime, timedelta
 
-from conftest import auth, create_product, new_staff, seller_with_shop
+from conftest import (
+    _TEST_MIGRATIONS,
+    _unique,
+    auth,
+    create_product,
+    new_staff,
+    seller_with_shop,
+)
 
 from fselling import models
+from fselling.core import thoi_gian
 from fselling.core.database import SessionLocal
 
 
@@ -180,6 +188,339 @@ def test_khong_du_ton_van_ghi_don_va_cho_ton_am(client):
     assert res.status_code == 200, res.text
     assert "TON_AM" in res.json()["issues"]
     assert _ton_kho(sp["id"]) == -3
+
+
+def test_stocktake_reconcile_tracked_ton_am_reports_product_delta_not_batch_delta(client):
+    """Contract cho preview UI: batch 5 không đổi nhưng Product 3 -> 5.
+
+    Sau một TON_AM source-less tail, nhập thêm đúng một lô làm Product và tổng
+    batch cùng tăng 5: chênh durable 2 vẫn còn. Kiểm kê batch vẫn là 5 phải trả
+    riêng synthetic reconciliation +2; đây là giá trị modal cần báo trước.
+    """
+    ctx = seller_with_shop(client)
+    created = client.post(
+        "/api/products",
+        params={"shop_id": ctx["shop_id"]},
+        data={
+            "name": _unique("Offline preview reconciliation"),
+            "price": 100,
+            "stock": 0,
+            "category_id": ctx["category_id"],
+            "track_batches": "true",
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert created.status_code == 200, created.text
+    product = created.json()
+    expiry = (thoi_gian.hom_nay_vn() + timedelta(days=30)).isoformat()
+    seeded = client.post(
+        f"/api/products/{product['id']}/stock",
+        json={"delta": 5, "expiry_date": expiry, "reason": "preview seed"},
+        headers=auth(ctx["token"]),
+    )
+    assert seeded.status_code == 200, seeded.text
+    _mo_ca(client, ctx)
+    sold = _gui(client, ctx, _phieu(product, so_luong=7))
+    assert sold.status_code == 200, sold.text
+    assert "TON_AM" in sold.json()["issues"]
+    replenished = client.post(
+        f"/api/products/{product['id']}/stock",
+        json={"delta": 5, "expiry_date": expiry, "reason": "preview replenishment"},
+        headers=auth(ctx["token"]),
+    )
+    assert replenished.status_code == 200, replenished.text
+
+    snapshot = client.get(
+        f"/api/products/{ctx['shop_id']}/stocktake/batches",
+        headers=auth(ctx["token"]),
+    )
+    assert snapshot.status_code == 200, snapshot.text
+    row = next(item for item in snapshot.json()["products"] if item["product_id"] == product["id"])
+    assert row["stock"] == 3
+    assert row["offline_deficit_qty"] == 2
+    assert [batch["quantity"] for batch in row["batches"]] == [5]
+
+    applied = client.post(
+        f"/api/products/{ctx['shop_id']}/stocktake",
+        json={"items": [{
+            "product_id": product["id"],
+            "offline_deficit_snapshot": row["offline_deficit_snapshot"],
+            "batches": [{
+                "batch_id": row["batches"][0]["batch_id"],
+                "quantity_snapshot": 5,
+                "counted": 5,
+            }],
+        }]},
+        headers=auth(ctx["token"]),
+    )
+    assert applied.status_code == 200, applied.text
+    body = applied.json()
+    assert body["tong_lech"] == 2
+    assert body["da_dieu_chinh"] == [{
+        "product_id": product["id"],
+        "batch_id": None,
+        "name": product["name"],
+        "expiry_date": None,
+        "truoc": 3,
+        "sau": 5,
+        "lech": 2,
+        "offline_deficit_reconciled": True,
+    }]
+    assert _ton_kho(product["id"]) == 5
+    _TEST_MIGRATIONS.verify()
+
+
+def test_tracked_ton_am_evidence_restart_stocktake_aba_return_cancel(client):
+    ctx = seller_with_shop(client)
+    response = client.post(
+        "/api/products",
+        params={"shop_id": ctx["shop_id"]},
+        data={
+            "name": _unique("Offline tracked evidence"),
+            "price": 100,
+            "stock": 0,
+            "category_id": ctx["category_id"],
+            "track_batches": "true",
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert response.status_code == 200, response.text
+    product = response.json()
+    expiry = (thoi_gian.hom_nay_vn() + timedelta(days=30)).isoformat()
+    response = client.post(
+        f"/api/products/{product['id']}/stock",
+        json={
+            "delta": 2,
+            "expiry_date": expiry,
+            "reason": "offline deficit regression",
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert response.status_code == 200, response.text
+    _mo_ca(client, ctx)
+
+    first_payload = _phieu(product, so_luong=3)
+    first = _gui(client, ctx, first_payload)
+    assert first.status_code == 200, first.text
+    assert "TON_AM" in first.json()["issues"]
+
+    session = SessionLocal()
+    try:
+        first_order = (
+            session.query(models.Order)
+            .filter(models.Order.offline_uuid == first_payload["offline_uuid"])
+            .one()
+        )
+        first_line = (
+            session.query(models.OrderItem)
+            .filter(models.OrderItem.order_id == first_order.id)
+            .one()
+        )
+        evidence = (
+            session.query(models.OfflineBatchStockDeficit)
+            .filter(
+                models.OfflineBatchStockDeficit.order_item_id == first_line.id
+            )
+            .one()
+        )
+        assert (
+            evidence.product_id,
+            evidence.deficit_quantity,
+            evidence.remaining_quantity,
+            evidence.resolution_kind,
+            evidence.state_version,
+        ) == (product["id"], 1, 1, None, 0)
+        assert sum(
+            row.quantity
+            for row in session.query(models.OrderItemBatch)
+            .filter(models.OrderItemBatch.order_item_id == first_line.id)
+            .all()
+        ) == 2
+        assert session.get(models.Product, product["id"]).stock == -1
+        assert sum(
+            row.quantity
+            for row in session.query(models.ProductBatch)
+            .filter(models.ProductBatch.product_id == product["id"])
+            .all()
+        ) == 0
+    finally:
+        session.close()
+    _TEST_MIGRATIONS.verify()
+
+    snapshot_response = client.get(
+        f"/api/products/{ctx['shop_id']}/stocktake/batches",
+        headers=auth(ctx["token"]),
+    )
+    assert snapshot_response.status_code == 200, snapshot_response.text
+    snapshot_row = next(
+        row
+        for row in snapshot_response.json()["products"]
+        if row["product_id"] == product["id"]
+    )
+    assert snapshot_row["batches"] == []
+    assert snapshot_row["offline_deficit_qty"] == 1
+    stale_token = snapshot_row["offline_deficit_snapshot"]
+
+    second_payload = _phieu(product, so_luong=1)
+    second = _gui(client, ctx, second_payload)
+    assert second.status_code == 200, second.text
+    assert "TON_AM" in second.json()["issues"]
+
+    stale_apply = client.post(
+        f"/api/products/{ctx['shop_id']}/stocktake",
+        json={
+            "items": [
+                {
+                    "product_id": product["id"],
+                    "batches": [],
+                    "offline_deficit_snapshot": stale_token,
+                }
+            ]
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert stale_apply.status_code == 409, stale_apply.text
+
+    session = SessionLocal()
+    try:
+        assert session.get(models.Product, product["id"]).stock == -2
+        assert sum(
+            row.remaining_quantity
+            for row in session.query(models.OfflineBatchStockDeficit)
+            .filter(models.OfflineBatchStockDeficit.product_id == product["id"])
+            .all()
+        ) == 2
+    finally:
+        session.close()
+    _TEST_MIGRATIONS.verify()
+
+    fresh_response = client.get(
+        f"/api/products/{ctx['shop_id']}/stocktake/batches",
+        headers=auth(ctx["token"]),
+    )
+    fresh_row = next(
+        row
+        for row in fresh_response.json()["products"]
+        if row["product_id"] == product["id"]
+    )
+    assert fresh_row["offline_deficit_qty"] == 2
+    reconciled = client.post(
+        f"/api/products/{ctx['shop_id']}/stocktake",
+        json={
+            "items": [
+                {
+                    "product_id": product["id"],
+                    "batches": [],
+                    "offline_deficit_snapshot": fresh_row[
+                        "offline_deficit_snapshot"
+                    ],
+                }
+            ]
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert reconciled.status_code == 200, reconciled.text
+
+    session = SessionLocal()
+    try:
+        second_order = (
+            session.query(models.Order)
+            .filter(models.Order.offline_uuid == second_payload["offline_uuid"])
+            .one()
+        )
+        second_line = (
+            session.query(models.OrderItem)
+            .filter(models.OrderItem.order_id == second_order.id)
+            .one()
+        )
+        assert (
+            session.query(models.OrderItemBatch)
+            .filter(models.OrderItemBatch.order_item_id == second_line.id)
+            .count()
+            == 0
+        )
+        closed = (
+            session.query(models.OfflineBatchStockDeficit)
+            .filter(models.OfflineBatchStockDeficit.product_id == product["id"])
+            .order_by(models.OfflineBatchStockDeficit.id)
+            .all()
+        )
+        assert all(
+            row.remaining_quantity == 0
+            and row.resolution_kind == "STOCKTAKE"
+            and row.state_version == 1
+            for row in closed
+        )
+        assert session.get(models.Product, product["id"]).stock == 0
+        before_payments = (
+            session.query(models.OrderPayment)
+            .filter(models.OrderPayment.order_id == second_order.id)
+            .count()
+        )
+        second_order_id = second_order.id
+        second_line_id = second_line.id
+    finally:
+        session.close()
+    _TEST_MIGRATIONS.verify()
+
+    for restock in (False, True):
+        failed_return = client.post(
+            f"/api/orders/{second_order_id}/returns",
+            json={
+                "items": [
+                    {
+                        "order_item_id": second_line_id,
+                        "quantity": 1,
+                        "restock": restock,
+                    }
+                ],
+                "method": "transfer",
+                "operation_id": "offline-missing-source-" + _uuid.uuid4().hex,
+            },
+            headers=auth(ctx["token"]),
+        )
+        assert failed_return.status_code == 409, failed_return.text
+
+    session = SessionLocal()
+    try:
+        order = session.get(models.Order, second_order_id)
+        order.status = "PENDING_PAYMENT"
+        session.commit()
+    finally:
+        session.close()
+    failed_cancel = client.post(
+        f"/api/orders/{second_order_id}/cancel",
+        headers=auth(ctx["token"]),
+    )
+    assert failed_cancel.status_code == 409, failed_cancel.text
+
+    session = SessionLocal()
+    try:
+        order = session.get(models.Order, second_order_id)
+        line = session.get(models.OrderItem, second_line_id)
+        assert (
+            order.status,
+            order.inventory_reversed,
+            line.inventory_reversed,
+            line.returned_total_qty,
+            line.cost_return_version,
+        ) == ("PENDING_PAYMENT", 0, 0, 0, 0)
+        assert (
+            session.query(models.OrderReturn)
+            .filter(models.OrderReturn.order_id == second_order_id)
+            .count()
+            == 0
+        )
+        assert (
+            session.query(models.OrderPayment)
+            .filter(models.OrderPayment.order_id == second_order_id)
+            .count()
+            == before_payments
+        )
+        assert session.get(models.Product, product["id"]).stock == 0
+    finally:
+        session.close()
+    _TEST_MIGRATIONS.verify()
 
 
 def test_du_ton_thi_khong_gan_co_ton_am(client):

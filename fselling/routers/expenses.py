@@ -158,10 +158,12 @@ def bao_cao_dong_tien(
     shop_id: int,
     tu_ngay: Optional[str] = Query(None, description="Lọc từ ngày (YYYY-MM-DD)"),
     den_ngay: Optional[str] = Query(None, description="Lọc đến ngày (YYYY-MM-DD)"),
+    contract_version: int = Query(1, ge=1, le=2),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
     """Lợi nhuận ròng + dòng tiền thực + lý do hai con số đó khác nhau."""
     return report_service.net_cashflow_report(
-        db, current_user, shop_id, tu_ngay=tu_ngay, den_ngay=den_ngay
+        db, current_user, shop_id, tu_ngay=tu_ngay, den_ngay=den_ngay,
+        contract_version=contract_version,
     )

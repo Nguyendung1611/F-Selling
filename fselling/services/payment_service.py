@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from .. import models
+from ..core.money import ExactMoneyError, exact_vnd
 
 ORDER_CODE_RE = re.compile(r"ORDER(\d+)", re.IGNORECASE)
 # Mã thanh toán gói là một namespace riêng, không bao giờ suy từ ORDER hay từ
@@ -34,7 +35,8 @@ class GiaoDich:
     """
 
     order_id: int
-    amount: Optional[float] = None
+    amount: Optional[int] = None
+    amount_invalid: bool = False
     direction: Optional[str] = None
     txn_id: Optional[str] = None
     account_no: Optional[str] = None
@@ -55,7 +57,8 @@ class GiaoDichThueBao:
     """
 
     reference_code: Optional[str] = None
-    amount: Optional[float] = None
+    amount: Optional[int] = None
+    amount_invalid: bool = False
     direction: Optional[str] = None
     txn_id: Optional[str] = None
     account_no: Optional[str] = None
@@ -63,11 +66,16 @@ class GiaoDichThueBao:
     payload_fingerprint: Optional[str] = None
 
 
-def build_qr_url(shop: models.Shop, total: float, order_id: int) -> str:
+def build_qr_url(shop: models.Shop, total: int, order_id: int) -> str:
     """Link ảnh VietQR. Nội dung chuyển khoản chứa ORDER<id> để webhook đối soát."""
+    # Keep the QR contract on the same exact compatibility boundary as the
+    # order and webhook.  In particular, an integral legacy ``150000.0`` may
+    # be accepted, but the emitted QR amount is always the canonical decimal
+    # integer representation and a fractional VND can never leak into it.
+    amount_vnd = exact_vnd(total)
     return (
         f"https://img.vietqr.io/image/{shop.bank_code}-{shop.bank_account_no}-compact2.png"
-        f"?amount={int(total)}&addInfo=ORDER{order_id}&accountName={shop.bank_account_name}"
+        f"?amount={amount_vnd}&addInfo=ORDER{order_id}&accountName={shop.bank_account_name}"
     )
 
 
@@ -113,7 +121,7 @@ def extract_order_ids(request_data: Dict[str, Any]) -> List[int]:
     return order_ids
 
 
-def _so_tien(*ung_vien: Any) -> Optional[float]:
+def _so_tien(*ung_vien: Any) -> tuple[Optional[int], bool]:
     """Lấy số tiền đầu tiên đọc được. None khi không trường nào có giá trị.
 
     Chuỗi rỗng và None đều coi như không có. Số 0 thì GIỮ - đó là một số tiền
@@ -123,13 +131,13 @@ def _so_tien(*ung_vien: Any) -> Optional[float]:
         if v is None or v == "":
             continue
         try:
-            return float(v)
-        except (TypeError, ValueError):
-            continue
-    return None
+            return exact_vnd(v, allow_negative=True), False
+        except (ExactMoneyError, TypeError, ValueError):
+            return None, True
+    return None, False
 
 
-def _chieu_tien(item: Dict[str, Any], amount: Optional[float]) -> Optional[str]:
+def _chieu_tien(item: Dict[str, Any], amount: Optional[int]) -> Optional[str]:
     """Xác định tiền vào hay tiền ra.
 
     SePay nói thẳng bằng `transferType`. Casso không có trường đó nhưng dùng
@@ -182,7 +190,7 @@ def _transaction_fields(item: Dict[str, Any], provider: str) -> Dict[str, Any]:
     `amount` được đổi sang trị tuyệt đối sau khi chiều tiền đã được suy ra từ
     giá trị thô. Nhờ vậy tiền âm vẫn là ``direction='out'`` như contract cũ.
     """
-    raw_amount = _so_tien(
+    raw_amount, amount_invalid = _so_tien(
         item.get("transferAmount"),
         item.get("amount"),
         item.get("value"),
@@ -190,6 +198,7 @@ def _transaction_fields(item: Dict[str, Any], provider: str) -> Dict[str, Any]:
     )
     return {
         "amount": abs(raw_amount) if raw_amount is not None else None,
+        "amount_invalid": amount_invalid,
         "direction": _chieu_tien(item, raw_amount),
         "txn_id": _txn_id(item),
         "account_no": _tai_khoan(item),

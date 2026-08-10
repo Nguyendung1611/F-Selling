@@ -187,7 +187,7 @@ class MigrationCoordinator:
         config.attributes["before_statement"] = before_statement
         return config
 
-    def _expected_fingerprints(self, graph: RevisionGraph) -> tuple[str, str]:
+    def _expected_fingerprints(self, graph: RevisionGraph) -> tuple[str, str, str]:
         engine = self._new_engine(memory=True)
         try:
             with engine.connect() as connection:
@@ -195,15 +195,16 @@ class MigrationCoordinator:
                 config = self._alembic_config(connection)
                 command.upgrade(config, graph.root.revision)
                 graph.root.module.verify(connection)
-                business = schema_fingerprint(_raw(connection), business_only=True)
+                root_business = schema_fingerprint(_raw(connection), business_only=True)
                 command.upgrade(config, graph.head.revision)
                 for revision in graph.revisions[1:]:
                     revision.module.verify(connection)
+                head_business = schema_fingerprint(_raw(connection), business_only=True)
                 operational = schema_fingerprint(
                     _raw(connection), include_names=OPERATIONAL_TABLES
                 )
                 connection.rollback()
-                return business, operational
+                return root_business, head_business, operational
         finally:
             engine.dispose()
 
@@ -751,7 +752,7 @@ class MigrationCoordinator:
             )
         if not self.database_path.is_file():
             raise SchemaMismatchError("Legacy database does not exist")
-        expected_business, _ = self._expected_fingerprints(graph)
+        expected_business, _, _ = self._expected_fingerprints(graph)
         connection = _readonly(self.database_path)
         current = None
         intent = None
@@ -919,7 +920,7 @@ class MigrationCoordinator:
         graph, topology_source = self._preflight()
         if not self.database_path.is_file():
             raise SchemaMismatchError("Database does not exist")
-        expected_business, expected_operational = self._expected_fingerprints(graph)
+        _, expected_business, expected_operational = self._expected_fingerprints(graph)
         connection = _readonly(self.database_path)
         try:
             database_uuid, control_fingerprint = verify_control_schema(connection)
@@ -956,7 +957,7 @@ class MigrationCoordinator:
                     return DatabaseStatus("FRESH", None, graph.head.revision,
                                           tuple(r.revision for r in graph.revisions),
                                           "Run init, upgrade head, verify")
-                expected_business, _ = self._expected_fingerprints(graph)
+                expected_business, _, _ = self._expected_fingerprints(graph)
                 assert_fingerprint(connection, expected_business, business_only=True,
                                    label="legacy 9cf7106")
                 self._verify_legacy_data(connection, graph)

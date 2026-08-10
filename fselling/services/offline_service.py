@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..core.i18n import tr
+from ..core.money import checked_add, checked_multiply, exact_vnd
 from ..dependencies import (
     PERMISSION_SALE,
     require_shop_access,
@@ -61,11 +62,11 @@ ISSUE_GIA_DOI = "GIA_DOI"            # giá trên phiếu khác giá hiện tạ
 # két của ca. ĐỪNG thêm `CashMovement` kèm theo — sẽ cộng két hai lần.
 ENTRY_SALE_CASH = "SALE_CASH"
 
-MONEY_EPSILON = 0.01
+MONEY_EPSILON = 0
 
 
-def _tien(x: Any) -> float:
-    return float(x or 0)
+def _tien(x: Any) -> int:
+    return exact_vnd(x or 0)
 
 
 def _phan_hoi(order: models.Order, moi: bool) -> Dict[str, Any]:
@@ -127,7 +128,7 @@ def _ca_phu_gio_ban(
 
 def _tru_ton_chiu_thieu(
     db: Session, prod: models.Product, so_luong: int
-) -> Tuple[List[Tuple[models.ProductBatch, int]], int]:
+) -> Tuple[List[inventory_service.CostAllocation], int]:
     """Trừ tồn kho, KHÔNG chặn khi thiếu. Trả về (lô đã lấy, số còn thiếu).
 
     Khác `inventory_service.deduct_stock` ở đúng một điểm: hàm kia ném 400 khi
@@ -141,20 +142,24 @@ def _tru_ton_chiu_thieu(
     """
     if not prod.track_batches:
         con_truoc = int(prod.stock or 0)
+        allocation = inventory_service.consume_cost_pool(
+            prod, so_luong, allow_deficit=True
+        )
         prod.stock = con_truoc - so_luong
-        return [], max(so_luong - max(con_truoc, 0), 0)
+        return [allocation], max(so_luong - max(con_truoc, 0), 0)
 
     con_lai = so_luong
-    da_lay: List[Tuple[models.ProductBatch, int]] = []
+    da_lay: List[inventory_service.CostAllocation] = []
     for lo in inventory_service.lo_con_ban_duoc(db, prod.id):
         if con_lai <= 0:
             break
         lay = min(int(lo.quantity or 0), con_lai)
         if lay <= 0:
             continue
+        allocation = inventory_service.consume_cost_pool(lo, lay)
         lo.quantity = int(lo.quantity or 0) - lay
         con_lai -= lay
-        da_lay.append((lo, lay))
+        da_lay.append(allocation)
     prod.stock = int(prod.stock or 0) - so_luong
     return da_lay, con_lai
 
@@ -199,7 +204,7 @@ def dong_bo_phieu(
     van_de: List[str] = []
 
     # ---- Dựng các dòng hàng theo GIÁ TRÊN PHIẾU ----
-    tong = 0.0
+    tong = 0
     dong_hang: List[Dict[str, Any]] = []
     for mh in phieu.items:
         # Lọc kèm shop_id: thiếu điều kiện đó thì đoán product_id là bán được
@@ -212,8 +217,11 @@ def dong_bo_phieu(
             )
             .first()
         )
-        tien_dong = _tien(mh.unit_price) * mh.quantity
-        tong += tien_dong
+        try:
+            tien_dong = checked_multiply(mh.quantity, _tien(mh.unit_price))
+            tong = checked_add(tong, tien_dong)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=tr("Tổng tiền phiếu vượt giới hạn"))
         dong_hang.append({"prod": prod, "mh": mh})
 
         if prod is None:
@@ -221,11 +229,11 @@ def dong_bo_phieu(
             # tên đã chụp, để khoản tiền trong két còn tra được về đâu.
             if ISSUE_SP_KHONG_CON not in van_de:
                 van_de.append(ISSUE_SP_KHONG_CON)
-        elif abs(_tien(prod.price) - _tien(mh.unit_price)) > MONEY_EPSILON:
+        elif _tien(prod.price) != _tien(mh.unit_price):
             if ISSUE_GIA_DOI not in van_de:
                 van_de.append(ISSUE_GIA_DOI)
 
-    if _tien(phieu.cash_tendered) + MONEY_EPSILON < tong:
+    if _tien(phieu.cash_tendered) < tong:
         # Tiền khách đưa ít hơn tổng đơn là phiếu sai, không phải xung đột dữ
         # liệu. Nhận vào là ghi một khoản thu không có thật.
         raise HTTPException(
@@ -255,7 +263,7 @@ def dong_bo_phieu(
         status=order_service.STATUS_PAID,
         cash_paid_amount=tong,
         cash_tendered_amount=_tien(phieu.cash_tendered),
-        cash_change_amount=max(_tien(phieu.cash_tendered) - tong, 0.0),
+        cash_change_amount=max(_tien(phieu.cash_tendered) - tong, 0),
         # created_at = GIỜ BÁN. Báo cáo theo ngày phải xếp đơn vào ngày nó được
         # bán, không phải ngày máy tình cờ có mạng trở lại.
         created_at=luc_ban,
@@ -270,20 +278,25 @@ def dong_bo_phieu(
         prod: Optional[models.Product] = cap["prod"]
         mh = cap["mh"]
 
-        gia_von: Optional[float] = None
-        # Khởi tạo ngay ở đầu vòng lặp: để nó chỉ được gán trong nhánh
-        # `prod is not None` thì một dòng sản phẩm-đã-xóa đứng giữa hai dòng
-        # bình thường sẽ khiến biến này mang giá trị của dòng TRƯỚC.
-        da_lay: List[Tuple[models.ProductBatch, int]] = []
+        da_lay: List[inventory_service.CostAllocation] = []
+        thieu = mh.quantity if prod is None else 0
         if prod is not None:
             da_lay, thieu = _tru_ton_chiu_thieu(db, prod, mh.quantity)
             if thieu > 0 and ISSUE_TON_AM not in van_de:
                 van_de.append(ISSUE_TON_AM)
-            gia_von = (
-                inventory_service.gia_von_binh_quan_da_lay(da_lay)
-                if prod.track_batches
-                else (None if prod.cost_price is None else _tien(prod.cost_price))
-            )
+
+        known_qty, allocated_unknown_qty, cost_basis = (
+            inventory_service.allocation_totals(da_lay)
+        )
+        # A non-batch deficit allocation already spans the full sold quantity
+        # (the uncovered part is canonical unknown cost).  Batch allocations
+        # span only physical source batches, so only their unallocated tail is
+        # added here.  Adding ``thieu`` blindly counted a non-batch deficit
+        # twice and persisted K+U > quantity.
+        allocated_qty = sum(a.quantity for a in da_lay)
+        unallocated_qty = max(int(mh.quantity) - allocated_qty, 0)
+        unknown_qty = allocated_unknown_qty + unallocated_qty
+        line_total = checked_multiply(mh.quantity, _tien(mh.unit_price))
 
         dong = models.OrderItem(
             order_id=don.id,
@@ -291,21 +304,45 @@ def dong_bo_phieu(
             product_name=mh.product_name.strip(),
             price=_tien(mh.unit_price),
             quantity=mh.quantity,
-            cost_price=gia_von,
+            discount_vnd=0,
+            loyalty_discount_vnd=0,
+            net_amount_vnd=line_total,
+            cost_known_qty=known_qty,
+            cost_unknown_qty=unknown_qty,
+            cost_basis_vnd=cost_basis,
         )
         db.add(dong)
         db.flush()
 
+        if prod is not None and prod.track_batches and unallocated_qty > 0:
+            # Do not invent a batch for goods that had already left the shop.
+            # This row is the durable, per-product/exact-quantity evidence that
+            # makes the deliberate Product.stock < SUM(batch.quantity) gap
+            # restart-verifiable until a batch stocktake reconciles it.
+            db.add(
+                models.OfflineBatchStockDeficit(
+                    order_item_id=dong.id,
+                    product_id=prod.id,
+                    deficit_quantity=unallocated_qty,
+                    remaining_quantity=unallocated_qty,
+                    resolution_kind=None,
+                    state_version=0,
+                )
+            )
+
         if prod is not None and prod.track_batches:
-            for lo, sl in da_lay:
+            for allocation in da_lay:
+                lo = allocation.batch
+                if lo is None:
+                    raise HTTPException(status_code=409, detail=tr("Thiếu provenance lô offline"))
                 db.add(
                     models.OrderItemBatch(
                         order_item_id=dong.id,
                         batch_id=lo.id,
-                        quantity=sl,
-                        # Chốt giá vốn của ĐÚNG lô đã xuất: lúc khách trả hàng
-                        # phải hoàn về đúng lô với đúng giá vốn đó (bẫy 21).
-                        cost_price=lo.cost_price,
+                        quantity=allocation.quantity,
+                        cost_known_qty=allocation.known_qty,
+                        cost_unknown_qty=allocation.unknown_qty,
+                        cost_basis_vnd=allocation.cost_basis_vnd,
                     )
                 )
 

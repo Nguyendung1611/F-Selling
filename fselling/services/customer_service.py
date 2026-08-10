@@ -24,7 +24,7 @@ from .log_service import log_system_action
 
 def _to_out(
     c: models.Customer,
-    cong_no: Optional[float] = None,
+    cong_no: Optional[int] = None,
     diem: Optional[int] = None,
 ) -> Dict:
     ket_qua = {
@@ -45,7 +45,7 @@ def _to_out(
     return ket_qua
 
 
-def _kiem_han_muc(gia_tri: Optional[float]) -> Optional[float]:
+def _kiem_han_muc(gia_tri: Optional[int]) -> Optional[int]:
     if gia_tri is None:
         return None
     if gia_tri < 0:
@@ -53,7 +53,7 @@ def _kiem_han_muc(gia_tri: Optional[float]) -> Optional[float]:
             status_code=400,
             detail=tr("Hạn mức nợ không được âm"),
         )
-    return float(gia_tri)
+    return int(gia_tri)
 
 
 def _clean(name: str, phone: str) -> tuple:
@@ -134,14 +134,14 @@ def list_customers(
     return [
         _to_out(
             c,
-            no_theo_khach.get(c.id, 0.0),
+            no_theo_khach.get(c.id, 0),
             diem_theo_khach.get(c.id, 0),
         )
         for c in khs
     ]
 
 
-def _no_theo_khach(db: Session, customer_ids: List[int]) -> Dict[int, float]:
+def _no_theo_khach(db: Session, customer_ids: List[int]) -> Dict[int, int]:
     """Công nợ hiện tại của nhiều khách cùng lúc."""
     if not customer_ids:
         return {}
@@ -160,10 +160,10 @@ def _no_theo_khach(db: Session, customer_ids: List[int]) -> Dict[int, float]:
         )
         .all()
     )
-    ket_qua: Dict[int, float] = {}
+    ket_qua: Dict[int, int] = {}
     for customer_id, tong, bank, tien_mat in rows:
-        con_no = max(float(tong or 0) - float(bank or 0) - float(tien_mat or 0), 0.0)
-        ket_qua[customer_id] = ket_qua.get(customer_id, 0.0) + con_no
+        con_no = max(int(tong or 0) - int(bank or 0) - int(tien_mat or 0), 0)
+        ket_qua[customer_id] = ket_qua.get(customer_id, 0) + con_no
     return ket_qua
 
 
@@ -182,7 +182,7 @@ def get_customer(db: Session, current_user: models.User, customer_id: int) -> Di
     kh = _get_owned_customer(db, current_user, customer_id)
     return _to_out(
         kh,
-        _no_theo_khach(db, [kh.id]).get(kh.id, 0.0),
+        _no_theo_khach(db, [kh.id]).get(kh.id, 0),
         loyalty_service.balance_for_customer(db, kh.id, shop_id=kh.shop_id),
     )
 
@@ -237,7 +237,7 @@ def customer_history(db: Session, current_user: models.User, customer_id: int) -
         .all()
     )
     tong_da_chi = sum(o.total_amount or 0 for o in orders if o.status == "PAID")
-    cong_no = _no_theo_khach(db, [kh.id]).get(kh.id, 0.0)
+    cong_no = _no_theo_khach(db, [kh.id]).get(kh.id, 0)
     return {
         "customer": _to_out(
             kh,
@@ -258,13 +258,13 @@ def customer_history(db: Session, current_user: models.User, customer_id: int) -
                 "date": o.created_at,
                 # Đơn nợ cần biết còn thiếu bao nhiêu để thu; đơn khác thì 0.
                 "remaining": max(
-                    float(o.total_amount or 0)
-                    - float(o.paid_amount or 0)
-                    - float(o.cash_paid_amount or 0),
-                    0.0,
+                    int(o.total_amount or 0)
+                    - int(o.paid_amount or 0)
+                    - int(o.cash_paid_amount or 0),
+                    0,
                 )
                 if o.status == "DEBT"
-                else 0.0,
+                else 0,
             }
             for o in orders
         ],
@@ -323,6 +323,6 @@ def update_customer_status(
     )
     return _to_out(
         kh,
-        _no_theo_khach(db, [kh.id]).get(kh.id, 0.0),
+        _no_theo_khach(db, [kh.id]).get(kh.id, 0),
         loyalty_service.balance_for_customer(db, kh.id, shop_id=kh.shop_id),
     )

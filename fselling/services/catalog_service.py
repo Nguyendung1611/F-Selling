@@ -22,6 +22,7 @@ from ..core.config import (
     UPLOAD_DIR,
 )
 from ..core.i18n import tr
+from ..core.money import ExactMoneyError, checked_multiply, exact_vnd
 from ..core.numeric_limits import MAX_SAFE_QUANTITY
 from ..dependencies import (
     PERMISSION_CATALOG_READ,
@@ -302,7 +303,7 @@ def _require_shop_operator_403(
 _KHONG_DOI_GIA_VON = object()
 
 
-def _so_tien_tu_form(raw: Optional[str], ten_truong: str) -> Optional[float]:
+def _so_tien_tu_form(raw: Optional[str], ten_truong: str) -> Optional[int]:
     """Chuỗi thô từ form -> số tiền. Rỗng = None (xóa), chữ rác = 400.
 
     Không dùng kiểu số của FastAPI vì cần giữ được sự khác biệt giữa "không
@@ -314,22 +315,22 @@ def _so_tien_tu_form(raw: Optional[str], ten_truong: str) -> Optional[float]:
     if not chuoi:
         return None
     try:
-        return float(chuoi)
-    except ValueError:
+        return exact_vnd(chuoi)
+    except ExactMoneyError:
         raise HTTPException(
             status_code=400,
-            detail=tr("{field} phải là một con số", field=ten_truong),
+            detail=tr("{field} phải là số VND nguyên, không có phần lẻ", field=ten_truong),
         )
 
 
-def _mo_ta_gia_von(gia_von: Optional[float]) -> str:
+def _mo_ta_gia_von(gia_von: Optional[int]) -> str:
     """Giá vốn cho dòng log. NULL phải đọc ra được là "chưa khai", không phải 0."""
     if gia_von is None:
         return "chưa khai"
     return f"{gia_von:,.0f}đ"
 
 
-def _kiem_gia_von(gia_von: Optional[float]) -> Optional[float]:
+def _kiem_gia_von(gia_von: Optional[int]) -> Optional[int]:
     """Kiểm giá vốn nhận từ client. `None` đi thẳng qua - caller tự hiểu.
 
     Cho phép 0: hàng khuyến mãi/hàng tặng có giá vốn bằng 0 thật. Chỉ chặn số
@@ -337,12 +338,13 @@ def _kiem_gia_von(gia_von: Optional[float]) -> Optional[float]:
     """
     if gia_von is None:
         return None
-    if gia_von < 0:
+    try:
+        return exact_vnd(gia_von)
+    except ExactMoneyError:
         raise HTTPException(
             status_code=400,
-            detail=tr("Giá vốn không được âm"),
+            detail=tr("Giá vốn phải là số VND nguyên trong giới hạn"),
         )
-    return float(gia_von)
 
 
 # --- Categories ---
@@ -525,17 +527,21 @@ def create_product(
     current_user: models.User,
     shop_id: int,
     name: str,
-    price: float,
+    price: int,
     stock: int,
     category_id: int,
     code: Optional[str] = None,
     barcode: Optional[str] = None,
     image: Optional[UploadFile] = None,
-    cost_price: Optional[float] = None,
+    cost_price: Optional[int] = None,
     track_batches: bool = False,
     variant_name: Optional[str] = None,
 ) -> models.Product:
     shop = _require_shop_operator_403(db, shop_id, current_user)
+    try:
+        price = exact_vnd(price)
+    except ExactMoneyError:
+        raise HTTPException(status_code=400, detail=tr("Giá sản phẩm phải là số VND nguyên"))
     if cost_price is not None:
         require_cost_visibility(shop, current_user)
         cost_price = _kiem_gia_von(cost_price)
@@ -573,6 +579,13 @@ def create_product(
             status_code=400,
             detail=tr("Số lượng tồn kho không được âm"),
         )
+    if stock > MAX_SAFE_QUANTITY:
+        raise HTTPException(status_code=400, detail=tr("Số lượng tồn kho vượt giới hạn"))
+    if track_batches and stock:
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Sản phẩm theo dõi lô phải nhập tồn ban đầu qua phiếu nhập có lô"),
+        )
 
     barcode_value = normalize_barcode(barcode)
     _ensure_barcode_unique(db, shop_id, barcode_value)
@@ -591,9 +604,13 @@ def create_product(
         variant_group=variant_group,
         variant_name=variant_name,
         price=price,
-        cost_price=cost_price,
         track_batches=bool(track_batches),
         stock=stock,
+        cost_known_qty=stock if cost_price is not None else 0,
+        cost_unknown_qty=stock if cost_price is None else 0,
+        cost_basis_vnd=checked_multiply(stock, cost_price or 0),
+        cost_deficit_qty=0,
+        cost_state_version=1 if stock else 0,
         image_url=image_url,
         category_id=category_id,
         shop_id=shop_id,
@@ -687,7 +704,16 @@ def list_product_costs(
     )
     return {
         "costs": [
-            {"product_id": p.id, "cost_price": p.cost_price} for p in products
+            {
+                "product_id": p.id,
+                "cost_price": p.cost_price,
+                "known_qty": p.cost_known_qty,
+                "unknown_qty": p.cost_unknown_qty,
+                "cost_basis_vnd": p.cost_basis_vnd,
+                "deficit_qty": p.cost_deficit_qty,
+                "version": p.cost_state_version,
+            }
+            for p in products
         ],
         "chua_khai": sum(1 for p in products if p.cost_price is None),
     }
@@ -734,8 +760,8 @@ def danh_sach_lo(
 
     da_het_han: List[Dict[str, Any]] = []
     sap_het_han: List[Dict[str, Any]] = []
-    gia_tri_het_han = 0.0
-    gia_tri_sap_het = 0.0
+    gia_tri_het_han = 0
+    gia_tri_sap_het = 0
 
     for b in lo:
         if b.expiry_date is None:
@@ -747,19 +773,17 @@ def danh_sach_lo(
             "expiry_date": b.expiry_date,
             "quantity": b.quantity,
         }
-        gia_tri = (
-            float(b.cost_price) * b.quantity if b.cost_price is not None else None
-        )
+        gia_tri = int(b.cost_basis_vnd) if int(b.cost_unknown_qty or 0) == 0 else None
         if xem_gia_von:
             ban_ghi["cost_price"] = b.cost_price
             ban_ghi["stock_value"] = gia_tri
 
         if b.expiry_date < hom_nay_str:
             da_het_han.append(ban_ghi)
-            gia_tri_het_han += gia_tri or 0.0
+            gia_tri_het_han += gia_tri or 0
         elif b.expiry_date <= moc_canh_bao:
             sap_het_han.append(ban_ghi)
-            gia_tri_sap_het += gia_tri or 0.0
+            gia_tri_sap_het += gia_tri or 0
 
     da_het_han.sort(key=lambda r: r["expiry_date"])
     sap_het_han.sort(key=lambda r: r["expiry_date"])
@@ -782,7 +806,7 @@ def update_product(
     current_user: models.User,
     product_id: int,
     name: str,
-    price: float,
+    price: int,
     category_id: int,
     code: Optional[str] = None,
     barcode: Optional[str] = None,
@@ -819,6 +843,10 @@ def update_product(
         raise HTTPException(status_code=404, detail=tr("Sản phẩm không tồn tại"))
     shop = require_shop_access(db, prod.shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_INVENTORY)
+    try:
+        price = exact_vnd(price)
+    except ExactMoneyError:
+        raise HTTPException(status_code=400, detail=tr("Giá sản phẩm phải là số VND nguyên"))
 
     gia_von_moi = _KHONG_DOI_GIA_VON
     if cost_price is not None:
@@ -886,8 +914,29 @@ def update_product(
     prod.category_id = category_id
     ghi_chu_gia_von = ""
     if gia_von_moi is not _KHONG_DOI_GIA_VON:
+        if prod.track_batches:
+            raise HTTPException(
+                status_code=400,
+                detail=tr("Giá vốn sản phẩm theo lô chỉ được khai trên từng lô nhập"),
+            )
         gia_von_cu = prod.cost_price
-        prod.cost_price = gia_von_moi
+        ton = int(prod.stock or 0)
+        if ton < 0:
+            prod.cost_known_qty = 0
+            prod.cost_unknown_qty = 0
+            prod.cost_basis_vnd = 0
+            prod.cost_deficit_qty = -ton
+        elif gia_von_moi is None:
+            prod.cost_known_qty = 0
+            prod.cost_unknown_qty = ton
+            prod.cost_basis_vnd = 0
+            prod.cost_deficit_qty = 0
+        else:
+            prod.cost_known_qty = ton
+            prod.cost_unknown_qty = 0
+            prod.cost_basis_vnd = checked_multiply(ton, gia_von_moi)
+            prod.cost_deficit_qty = 0
+        prod.cost_state_version = int(prod.cost_state_version or 0) + 1
         if gia_von_cu != gia_von_moi:
             ghi_chu_gia_von = (
                 f", Giá vốn: {_mo_ta_gia_von(gia_von_cu)}"
@@ -946,12 +995,19 @@ def lo_de_kiem_ke(
             .all()
         ):
             lo_theo_sp.setdefault(b.product_id, []).append(b)
+    deficit_states = {
+        p.id: inventory_service.offline_batch_deficit_state(db, p.id)
+        for p in san_pham
+    }
 
     return {
         "products": [
             {
                 "product_id": p.id,
                 "name": p.name,
+                "stock": p.stock,
+                "offline_deficit_qty": deficit_states[p.id]["open_quantity"],
+                "offline_deficit_snapshot": deficit_states[p.id]["snapshot"],
                 "batches": [
                     {
                         "batch_id": b.id,
@@ -966,9 +1022,14 @@ def lo_de_kiem_ke(
     }
 
 
-def _kiem_dinh_dang_dong_lo(prod: models.Product, batches: List[Any]) -> None:
+def _kiem_dinh_dang_dong_lo(
+    prod: models.Product,
+    batches: List[Any],
+    *,
+    allow_empty_reconciliation: bool = False,
+) -> None:
     """Kiểm dạng của phần đếm theo lô, trước khi ghi bất cứ gì."""
-    if not batches:
+    if not batches and not allow_empty_reconciliation:
         raise HTTPException(
             status_code=400,
             detail=tr(
@@ -985,14 +1046,22 @@ def _kiem_dinh_dang_dong_lo(prod: models.Product, batches: List[Any]) -> None:
             ),
         )
     for b in batches:
-        if b.counted < 0:
+        if (
+            b.counted < 0
+            or b.quantity_snapshot < 0
+            or b.counted > MAX_SAFE_QUANTITY
+            or b.quantity_snapshot > MAX_SAFE_QUANTITY
+        ):
             raise HTTPException(
-                status_code=400, detail=tr("Số đếm không được âm")
+                status_code=400, detail=tr("Số đếm lô nằm ngoài giới hạn")
             )
 
 
 def _kiem_ke_theo_lo(
-    db: Session, prod: models.Product, batches: List[Any]
+    db: Session,
+    prod: models.Product,
+    batches: List[Any],
+    offline_deficit_snapshot: Optional[str],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Đặt số lượng của TỪNG LÔ bằng số đếm thực tế, rồi dựng lại `Product.stock`.
 
@@ -1020,6 +1089,34 @@ def _kiem_ke_theo_lo(
         .filter(models.ProductBatch.product_id == prod.id)
         .all()
     }
+    batch_total_before = sum(int(batch.quantity or 0) for batch in lo_cua_sp.values())
+    product_stock_before = int(prod.stock or 0)
+    deficit_state = inventory_service.offline_batch_deficit_state(db, prod.id)
+    offline_deficit_before = int(deficit_state["open_quantity"])
+    if (
+        offline_deficit_snapshot is not None
+        and offline_deficit_snapshot != deficit_state["snapshot"]
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Evidence tồn âm offline đã đổi trong lúc kiểm kê; "
+                "vui lòng bắt đầu lại dòng này"
+            ),
+        )
+    if offline_deficit_before > 0 and offline_deficit_snapshot is None:
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Phiếu kiểm kê thiếu snapshot evidence tồn âm offline"),
+        )
+    if batch_total_before - product_stock_before != offline_deficit_before:
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Chênh lệch tồn theo lô không khớp evidence offline; "
+                "chưa thể kiểm kê tự động"
+            ),
+        )
 
     la = [b.batch_id for b in batches if b.batch_id not in lo_cua_sp]
     if la:
@@ -1052,6 +1149,11 @@ def _kiem_ke_theo_lo(
             continue
         if hien_tai == dem.counted:
             continue
+        lech = int(dem.counted) - hien_tai
+        if lech > 0:
+            inventory_service.add_cost_pool(lo, lech, None)
+        else:
+            inventory_service.consume_cost_pool(lo, -lech)
         lo.quantity = dem.counted
         dieu_chinh.append({
             "product_id": prod.id,
@@ -1063,8 +1165,71 @@ def _kiem_ke_theo_lo(
             "lech": dem.counted - hien_tai,
         })
 
-    if dieu_chinh:
-        prod.stock = sum(int(b.quantity or 0) for b in lo_cua_sp.values())
+    submitted_ids = {row.batch_id for row in batches}
+    positive_ids_before = {
+        batch_id
+        for batch_id, batch in lo_cua_sp.items()
+        if int(batch.quantity or 0) > 0
+    }
+    full_positive_coverage = positive_ids_before.issubset(submitted_ids)
+    if offline_deficit_before > 0 and not full_positive_coverage:
+        bo_qua.append({
+            "product_id": prod.id,
+            "batch_id": None,
+            "name": prod.name,
+            "ly_do": (
+                "Danh sách lô dương đã đổi trong lúc kiểm kê. "
+                "Vui lòng tải lại và đếm đủ các lô còn hàng."
+            ),
+        })
+    batch_delta = sum(int(row["lech"]) for row in dieu_chinh)
+    reconcile_offline = (
+        offline_deficit_before > 0
+        and not bo_qua
+        and full_positive_coverage
+    )
+    if reconcile_offline:
+        rebuilt_stock = sum(int(b.quantity or 0) for b in lo_cua_sp.values())
+        if rebuilt_stock > MAX_SAFE_QUANTITY:
+            raise HTTPException(
+                status_code=409,
+                detail=tr("Tổng tồn lô sau kiểm kê vượt giới hạn"),
+            )
+        prod.stock = rebuilt_stock
+        if offline_deficit_before > 0:
+            closed = inventory_service.close_offline_batch_deficits_after_stocktake(
+                db, prod.id
+            )
+            if closed != offline_deficit_before:
+                raise HTTPException(
+                    status_code=409,
+                    detail=tr("Evidence tồn âm offline đổi trong lúc kiểm kê"),
+                )
+            # Batch rows report their own count deltas. This synthetic row is
+            # the independent Product.stock correction that closes the
+            # deliberate offline deficit, so response/log conservation remains
+            # exact even when every batch count itself was unchanged.
+            dieu_chinh.append({
+                "product_id": prod.id,
+                "batch_id": None,
+                "name": prod.name,
+                "expiry_date": None,
+                "truoc": product_stock_before + batch_delta,
+                "sau": product_stock_before + batch_delta + offline_deficit_before,
+                "lech": offline_deficit_before,
+                "offline_deficit_reconciled": True,
+            })
+    elif batch_delta:
+        new_stock = product_stock_before + batch_delta
+        if new_stock < -MAX_SAFE_QUANTITY or new_stock > MAX_SAFE_QUANTITY:
+            raise HTTPException(
+                status_code=409,
+                detail=tr("Tồn kho sau kiểm kê vượt giới hạn"),
+            )
+        # A partial/stale sheet may adjust accepted batches, but it must not
+        # erase an unresolved offline mismatch. Move Product.stock by the same
+        # delta so SUM(batch)-stock remains exactly the durable deficit.
+        prod.stock = new_stock
     return dieu_chinh, bo_qua
 
 
@@ -1142,7 +1307,29 @@ def apply_stocktake(
                         name=prod.name,
                     ),
                 )
-            _kiem_dinh_dang_dong_lo(prod, it.batches)
+            allow_empty_reconciliation = False
+            if not it.batches:
+                has_positive_batches = (
+                    db.query(models.ProductBatch.id)
+                    .filter(
+                        models.ProductBatch.product_id == prod.id,
+                        models.ProductBatch.quantity > 0,
+                    )
+                    .first()
+                    is not None
+                )
+                allow_empty_reconciliation = (
+                    not has_positive_batches
+                    and inventory_service.open_offline_batch_deficit_qty(
+                        db, prod.id
+                    )
+                    > 0
+                )
+            _kiem_dinh_dang_dong_lo(
+                prod,
+                it.batches,
+                allow_empty_reconciliation=allow_empty_reconciliation,
+            )
         else:
             if it.batches:
                 raise HTTPException(
@@ -1160,9 +1347,14 @@ def apply_stocktake(
                         "Sản phẩm '{name}' thiếu số đếm", name=prod.name
                     ),
                 )
-            if it.counted < 0:
+            if (
+                it.counted < 0
+                or it.stock_snapshot < 0
+                or it.counted > MAX_SAFE_QUANTITY
+                or it.stock_snapshot > MAX_SAFE_QUANTITY
+            ):
                 raise HTTPException(
-                    status_code=400, detail=tr("Số đếm không được âm")
+                    status_code=400, detail=tr("Số đếm nằm ngoài giới hạn")
                 )
 
     da_dieu_chinh: List[Dict[str, Any]] = []
@@ -1180,7 +1372,12 @@ def apply_stocktake(
             continue
 
         if prod.track_batches:
-            dieu_chinh, bo = _kiem_ke_theo_lo(db, prod, it.batches)
+            dieu_chinh, bo = _kiem_ke_theo_lo(
+                db,
+                prod,
+                it.batches,
+                it.offline_deficit_snapshot,
+            )
             da_dieu_chinh.extend(dieu_chinh)
             bo_qua.extend(bo)
             if not dieu_chinh and not bo:
@@ -1204,6 +1401,10 @@ def apply_stocktake(
             continue
 
         lech = it.counted - ton_hien_tai
+        if lech > 0:
+            inventory_service.add_cost_pool(prod, lech, None)
+        else:
+            inventory_service.consume_cost_pool(prod, -lech)
         prod.stock = it.counted
         da_dieu_chinh.append({
             "product_id": prod.id,
@@ -1242,30 +1443,6 @@ def apply_stocktake(
         "khong_doi": khong_doi,
         "tong_lech": sum(d["lech"] for d in da_dieu_chinh),
     }
-
-
-# Giá vốn bình quân gia quyền được tính NGAY TRONG câu UPDATE nguyên tử, không
-# tách ra đọc-rồi-ghi: tách ra là mở lại đúng khe hở mà `stock = stock + delta`
-# sinh ra để bịt.
-#
-# SQLite đánh giá MỌI vế phải của SET theo giá trị CŨ của hàng, nên `stock`
-# trong biểu thức tính giá vốn vẫn là tồn trước khi nhập, bất kể thứ tự các
-# mệnh đề SET. MySQL thì ngược lại (đánh giá lần lượt, vế sau thấy giá trị đã
-# cập nhật) - đổi sang database khác là phải viết lại câu này.
-_ADJUST_STOCK = text(
-    "UPDATE products SET "
-    "cost_price = CASE "
-    # Không gửi đơn giá, hoặc là lệnh xuất kho -> giữ nguyên giá vốn.
-    # Xuất hàng đi không làm thay đổi đơn giá bình quân của số còn lại.
-    "  WHEN :unit_cost IS NULL OR :delta <= 0 THEN cost_price "
-    # Chưa khai giá vốn, hoặc kho đang trống: không có gì để bình quân với.
-    "  WHEN cost_price IS NULL OR stock <= 0 THEN :unit_cost "
-    "  ELSE (stock * cost_price + :delta * :unit_cost) / (stock + :delta) "
-    "END, "
-    "stock = stock + :delta "
-    "WHERE id = :product_id AND stock + :delta >= 0 "
-    "AND (:max_stock IS NULL OR stock + :delta <= :max_stock)"
-)
 
 
 _NGAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -1337,30 +1514,16 @@ def add_purchase_stock(
             shop_id=prod.shop_id,
             expiry_date=han,
             quantity=quantity,
-            cost_price=float(unit_cost),
+            cost_known_qty=quantity,
+            cost_unknown_qty=0,
+            cost_basis_vnd=checked_multiply(quantity, unit_cost),
+            cost_deficit_qty=0,
+            cost_state_version=1,
             note=(batch_note or "").strip()[:200] or None,
         )
         db.add(batch)
         db.flush()
-        # Cộng nguyên tử; Product.stock vẫn là bản sao của tổng lô và nằm cùng
-        # transaction với INSERT lô phía trên.
-        result = db.execute(
-            text(
-                "UPDATE products SET stock = stock + :delta "
-                "WHERE id = :product_id AND stock + :delta <= :max_stock"
-            ),
-            {
-                "delta": quantity,
-                "product_id": prod.id,
-                "max_stock": MAX_SAFE_QUANTITY,
-            },
-        )
-        if result.rowcount != 1:
-            raise HTTPException(
-                status_code=409,
-                detail=tr("Tồn kho vừa thay đổi; vui lòng thử lại"),
-            )
-        db.refresh(prod)
+        prod.stock = current_stock + quantity
         return batch
 
     if expiry_date is not None and str(expiry_date).strip():
@@ -1371,18 +1534,8 @@ def add_purchase_stock(
                 name=prod.name,
             ),
         )
-    result = db.execute(
-        _ADJUST_STOCK,
-        {
-            "delta": quantity,
-            "product_id": prod.id,
-            "unit_cost": float(unit_cost),
-            "max_stock": MAX_SAFE_QUANTITY,
-        },
-    )
-    if result.rowcount != 1:
-        raise HTTPException(status_code=409, detail=tr("Tồn kho vừa thay đổi; vui lòng thử lại"))
-    db.refresh(prod)
+    inventory_service.add_cost_pool(prod, quantity, unit_cost)
+    prod.stock = current_stock + quantity
     return None
 
 
@@ -1391,7 +1544,7 @@ def _dieu_chinh_ton_theo_lo(
     current_user: models.User,
     prod: models.Product,
     delta: int,
-    unit_cost: Optional[float],
+    unit_cost: Optional[int],
     expiry_date: Optional[str],
     reason: str,
 ) -> Dict[str, Any]:
@@ -1412,15 +1565,18 @@ def _dieu_chinh_ton_theo_lo(
                     name=prod.name,
                 ),
             )
-        db.add(
-            models.ProductBatch(
+        batch = models.ProductBatch(
                 product_id=prod.id,
                 shop_id=prod.shop_id,
                 expiry_date=han,
                 quantity=delta,
-                cost_price=unit_cost,
+                cost_known_qty=delta if unit_cost is not None else 0,
+                cost_unknown_qty=delta if unit_cost is None else 0,
+                cost_basis_vnd=checked_multiply(delta, unit_cost or 0),
+                cost_deficit_qty=0,
+                cost_state_version=1,
             )
-        )
+        db.add(batch)
         prod.stock = int(prod.stock or 0) + delta
         mo_ta = f"Nhập lô HSD {han} x{delta}"
     else:
@@ -1444,6 +1600,7 @@ def _dieu_chinh_ton_theo_lo(
             if con_lai <= 0:
                 break
             lay = min(lo.quantity, con_lai)
+            inventory_service.consume_cost_pool(lo, lay)
             lo.quantity -= lay
             con_lai -= lay
         prod.stock = int(prod.stock or 0) - can_tru
@@ -1475,7 +1632,7 @@ def adjust_stock(
     current_user: models.User,
     product_id: int,
     delta: int,
-    unit_cost: Optional[float] = None,
+    unit_cost: Optional[int] = None,
     expiry_date: Optional[str] = None,
     reason: str = "",
 ) -> Dict[str, Any]:
@@ -1522,42 +1679,32 @@ def adjust_stock(
                 detail=tr("Phiếu xuất kho không nhận đơn giá nhập"),
             )
 
-    if prod.track_batches:
-        # Dùng cùng shop write-lock với bán hàng/phiếu nhập, rồi bỏ toàn bộ
-        # object đã đọc trước khóa. Cả đường nhập lô lẫn xuất FEFO đều phải dựa
-        # trên stock + danh sách lô mới nhất dưới khóa này.
-        locked_shop_id = int(prod.shop_id)
-        inventory_service.lock_shop_for_inventory(db, locked_shop_id)
-        db.expire_all()
-        prod = (
-            db.query(models.Product)
-            .filter(
-                models.Product.id == product_id,
-                models.Product.shop_id == locked_shop_id,
-            )
-            .first()
+    # Product.stock and its exact cost pool are a single state machine.  Use the
+    # same shop write-lock for batch and non-batch inventory mutations, then
+    # discard every object read before the lock.
+    locked_shop_id = int(prod.shop_id)
+    inventory_service.lock_shop_for_inventory(db, locked_shop_id)
+    db.expire_all()
+    prod = (
+        db.query(models.Product)
+        .filter(
+            models.Product.id == product_id,
+            models.Product.shop_id == locked_shop_id,
         )
-        if prod is None:
-            db.rollback()
-            raise HTTPException(status_code=404, detail=tr("Sản phẩm không tồn tại"))
+        .first()
+    )
+    if prod is None:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=tr("Sản phẩm không tồn tại"))
+
+    if prod.track_batches:
         return _dieu_chinh_ton_theo_lo(
             db, current_user, prod, delta, unit_cost, expiry_date, reason
         )
 
     gia_von_truoc = prod.cost_price
-    result = db.execute(
-        _ADJUST_STOCK,
-        {
-            "delta": delta,
-            "product_id": product_id,
-            "unit_cost": unit_cost,
-            # Giữ nguyên nghiệp vụ Điều chỉnh kho cũ. Trần phiếu nhập được
-            # truyền riêng ở add_purchase_stock; thay đổi luật của màn cũ cần
-            # một quyết định nghiệp vụ độc lập.
-            "max_stock": None,
-        },
-    )
-    if result.rowcount != 1:
+    current_stock = int(prod.stock or 0)
+    if delta < 0 and current_stock < -delta:
         db.rollback()
         raise HTTPException(
             status_code=400,
@@ -1567,6 +1714,14 @@ def adjust_stock(
                 stock=prod.stock,
             ),
         )
+    if delta > 0:
+        if current_stock > MAX_SAFE_QUANTITY - delta:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=tr("Tồn kho sau điều chỉnh vượt giới hạn"))
+        inventory_service.add_cost_pool(prod, delta, unit_cost)
+    else:
+        inventory_service.consume_cost_pool(prod, -delta)
+    prod.stock = current_stock + delta
     db.commit()
     db.refresh(prod)
     gia_von_sau = prod.cost_price

@@ -10,6 +10,11 @@
       "down_revision": "0001_legacy_9cf7106_baseline",
       "path": "versions/0002_i04_operational_tables.py",
       "sha256": "811595d51abd3ba12d1dd10ab9602960766567310281fabd00a042be4bdb797b"
+    },
+    "0003_i05_integer_vnd_cost_basis": {
+      "down_revision": "0002_i04_operational_tables",
+      "path": "versions/0003_i05_integer_vnd_cost_basis.py",
+      "sha256": "d0abe1f5df1d729678dbd258e9ff40848588437c26e3d05c8b88a8e47d492539"
     }
   }
 }

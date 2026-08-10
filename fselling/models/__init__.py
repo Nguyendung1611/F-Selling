@@ -13,12 +13,14 @@ from .customer import Customer
 from .expense import ExpenseCategory, ExpenseTemplate, OperatingExpense
 from .loyalty import LoyaltyPointEntry, LoyaltyProgram
 from .order import (
+    OfflineBatchStockDeficit,
     Order,
     OrderItem,
     OrderItemBatch,
     OrderPayment,
     OrderReturn,
     OrderReturnItem,
+    OrderReturnItemBatch,
 )
 from .shift import CashMovement, CashShift
 from .shop import Shop
@@ -55,6 +57,7 @@ __all__ = [
     "OrderPayment",
     "OrderReturn",
     "OrderReturnItem",
+    "OrderReturnItemBatch",
     "CashShift",
     "CashMovement",
     "SystemLog",
@@ -64,6 +67,7 @@ __all__ = [
     "ExpenseTemplate",
     "OperatingExpense",
     "LoyaltyProgram",
+    "OfflineBatchStockDeficit",
     "LoyaltyPointEntry",
     "Supplier",
     "PurchaseReceipt",

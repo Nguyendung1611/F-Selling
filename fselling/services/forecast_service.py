@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -111,7 +112,7 @@ def _da_ban_theo_ngay(
         db.query(
             models.OrderItem.product_id,
             ngay_ban,
-            func.sum(models.OrderItem.quantity),
+            models.OrderItem.quantity,
         )
         .join(models.Order, models.Order.id == models.OrderItem.order_id)
         .filter(
@@ -121,7 +122,6 @@ def _da_ban_theo_ngay(
             models.Order.created_at < moc_cuoi,
             models.OrderItem.product_id.isnot(None),
         )
-        .group_by(models.OrderItem.product_id, ngay_ban)
         .all()
     )
     for product_id, ngay, so_luong in ban:
@@ -138,7 +138,7 @@ def _da_ban_theo_ngay(
         db.query(
             models.OrderReturnItem.product_id,
             ngay_tra,
-            func.sum(models.OrderReturnItem.quantity),
+            models.OrderReturnItem.quantity,
         )
         .join(
             models.OrderReturn,
@@ -151,7 +151,6 @@ def _da_ban_theo_ngay(
             models.OrderReturn.created_at < moc_cuoi,
             models.OrderReturnItem.product_id.isnot(None),
         )
-        .group_by(models.OrderReturnItem.product_id, ngay_tra)
         .all()
     )
     for product_id, ngay, so_luong in tra:
@@ -330,7 +329,9 @@ def du_bao_nhap_hang(
                 don_gia = ncc["don_gia_lan_truoc"] or None
             dong["gia_von"] = don_gia
             dong["tien_can_bo_ra"] = (
-                int(round(don_gia * can_nhap)) if don_gia is not None else None
+                int((Decimal(don_gia) * Decimal(can_nhap)).to_integral_value(rounding=ROUND_HALF_UP))
+                if don_gia is not None
+                else None
             )
             if dong["tien_can_bo_ra"]:
                 tong_tien += dong["tien_can_bo_ra"]

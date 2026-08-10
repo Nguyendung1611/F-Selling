@@ -50,6 +50,19 @@ def test_tao_khach_va_gan_vao_don(client):
 
         order = models.Order(shop_id=ctx["shop_id"], total_amount=50000, customer_id=kh_id)
         session.add(order)
+        session.flush()
+        session.add(
+            models.OrderItem(
+                order_id=order.id,
+                product_name="Schema relation item",
+                price=50000,
+                quantity=1,
+                net_amount_vnd=50000,
+                cost_known_qty=0,
+                cost_unknown_qty=1,
+                cost_basis_vnd=0,
+            )
+        )
         session.commit()
         order_id = order.id
     finally:

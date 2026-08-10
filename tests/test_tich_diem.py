@@ -294,7 +294,7 @@ def test_chu_shop_luu_va_doc_lai_day_du_cau_hinh(client):
         assert audit is not None
         assert audit.user_id is not None
         assert f"Shop #{ctx['shop_id']}" in audit.details
-        assert '"earn_amount": 25000.0' in audit.details
+        assert '"earn_amount": 25000' in audit.details
         assert '"expiry_days": 90' in audit.details
     finally:
         session.close()

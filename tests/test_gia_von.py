@@ -34,6 +34,15 @@ def _gia_von(product_id):
     return _sp(product_id).cost_price
 
 
+def _pool(product_id):
+    product = _sp(product_id)
+    return (
+        product.cost_known_qty,
+        product.cost_unknown_qty,
+        product.cost_basis_vnd,
+    )
+
+
 def _nhap_kho(client, token, product_id, delta, unit_cost=None):
     body = {"delta": delta, "reason": "Kiểm thử điều chỉnh kho"}
     if unit_cost is not None:
@@ -211,14 +220,14 @@ def test_binh_quan_theo_ty_trong_so_luong(client):
     )
 
 
-def test_chua_khai_gia_von_thi_lan_nhap_dau_lay_luon_don_gia(client):
+def test_chua_khai_gia_von_thi_lan_nhap_dau_khong_suy_dien_hang_cu(client):
     ctx = seller_with_shop(client)  # tồn 10, chưa khai giá vốn
     pid = ctx["product"]["id"]
 
     _nhap_kho(client, ctx["token"], pid, 5, unit_cost=20000)
-    assert _gia_von(pid) == 20000, (
-        "Không có giá vốn cũ thì không có gì để bình quân - lấy luôn đơn giá. "
-        "Coi giá vốn cũ là 0 sẽ ra 6.666đ, thấp hơn thực tế."
+    assert _gia_von(pid) is None
+    assert _pool(pid) == (5, 10, 100000), (
+        "Chỉ 5 món vừa nhập có provenance 20.000đ; 10 món legacy vẫn unknown."
     )
 
 
@@ -244,12 +253,13 @@ def test_nhap_hang_tang_gia_0_keo_binh_quan_xuong(client):
     )
 
 
-def test_nhap_kho_khong_gui_don_gia_thi_giu_nguyen_gia_von(client):
+def test_nhap_kho_khong_gui_don_gia_tao_unknown_khong_gia_cost_cu(client):
     ctx = seller_with_shop(client)
     sp = _tao_sp_co_gia_von(client, ctx, gia_ban=50000, ton=10, gia_von=30000)
 
     _nhap_kho(client, ctx["token"], sp["id"], 10)
-    assert _gia_von(sp["id"]) == 30000
+    assert _gia_von(sp["id"]) is None
+    assert _pool(sp["id"]) == (10, 10, 300000)
     assert _sp(sp["id"]).stock == 20
 
 
@@ -273,6 +283,7 @@ def test_phieu_xuat_kem_don_gia_bi_tu_choi(client):
     res = _nhap_kho(client, ctx["token"], sp["id"], -2, unit_cost=40000)
     assert res.status_code == 400
     assert _gia_von(sp["id"]) == 30000
+    assert _pool(sp["id"]) == (10, 0, 300000)
     assert _sp(sp["id"]).stock == 10, "Phiếu bị từ chối thì tồn kho cũng không đổi"
 
 
@@ -577,7 +588,8 @@ def test_nhan_vien_kho_van_nhap_kho_duoc_nhung_khong_dat_duoc_gia_von(client):
 
     res = _nhap_kho(client, staff_token, sp["id"], 5, unit_cost=99000)
     assert res.status_code == 403
-    assert _gia_von(sp["id"]) == 30000
+    assert _gia_von(sp["id"]) is None
+    assert _pool(sp["id"]) == (10, 5, 300000)
     assert _sp(sp["id"]).stock == 15, "Bị từ chối thì tồn kho cũng không đổi"
 
 

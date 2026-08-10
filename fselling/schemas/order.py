@@ -3,6 +3,9 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from ..core.numeric_limits import MAX_SAFE_QUANTITY, MAX_SAFE_VND
+from .money import ExactVND, SignedExactVND
+
 
 class OrderItemCreate(BaseModel):
     """Một dòng hàng do client gửi lên.
@@ -18,7 +21,9 @@ class OrderItemCreate(BaseModel):
 
     product_id: Optional[int] = None
     product_name: Optional[str] = None
-    price: float
+    price: ExactVND = Field(ge=0, le=MAX_SAFE_VND)
+    # Service preserves the historical HTTP 400 contract for nonpositive and
+    # oversized quantities after exact integer parsing.
     quantity: int
 
 
@@ -31,7 +36,7 @@ class OrderCreate(BaseModel):
     customer_id: Optional[int] = None
     # Số điểm nguyên khách muốn dùng. Server đọc lại chương trình + số dư,
     # áp Voucher trước rồi mới tính phần giảm bằng điểm.
-    loyalty_points_to_use: int = Field(default=0, ge=0)
+    loyalty_points_to_use: int = Field(default=0, ge=0, le=MAX_SAFE_QUANTITY)
 
 
 class OfflineOrderItem(BaseModel):
@@ -48,8 +53,8 @@ class OfflineOrderItem(BaseModel):
 
     product_id: int
     product_name: str = Field(min_length=1, max_length=300)
-    unit_price: float = Field(ge=0)
-    quantity: int = Field(gt=0)
+    unit_price: ExactVND = Field(ge=0, le=MAX_SAFE_VND)
+    quantity: int = Field(gt=0, le=MAX_SAFE_QUANTITY)
 
 
 class OfflineOrderCreate(BaseModel):
@@ -66,7 +71,7 @@ class OfflineOrderCreate(BaseModel):
     sold_at: datetime
     items: List[OfflineOrderItem] = Field(min_length=1)
     # Tiền khách đưa. Nhỏ hơn tổng đơn là phiếu sai, server từ chối.
-    cash_tendered: float = Field(ge=0)
+    cash_tendered: ExactVND = Field(ge=0, le=MAX_SAFE_VND)
     device_label: Optional[str] = Field(default=None, max_length=64)
 
 
@@ -74,7 +79,7 @@ class PaymentWebhook(BaseModel):
     order_id: int
     status: Optional[str] = "PAID"
     transaction_id: Optional[str] = None
-    amount: Optional[float] = None
+    amount: Optional[ExactVND] = Field(default=None, ge=0, le=MAX_SAFE_VND)
 
 
 class CashTopup(BaseModel):
@@ -84,7 +89,7 @@ class CashTopup(BaseModel):
     tại gửi con số đang thấy, nhưng phải khớp phần thiếu tại lúc xử lý.
     """
 
-    amount: Optional[float] = None
+    amount: Optional[SignedExactVND] = Field(default=None, le=MAX_SAFE_VND)
     note: Optional[str] = None
 
 
@@ -95,7 +100,7 @@ class CashPayment(BaseModel):
     gửi hay tự quyết định số tiền phải trả lại.
     """
 
-    tendered_amount: float
+    tendered_amount: ExactVND = Field(ge=0, le=MAX_SAFE_VND)
 
 
 class OrderReturnItemCreate(BaseModel):
@@ -137,7 +142,9 @@ class DebtPayment(BaseModel):
     bán ghi sổ.
     """
 
-    amount: float
+    # Service owns the historical HTTP 400 response for zero/negative debt
+    # payments.  Keep exact VND parsing at the HTTP boundary first.
+    amount: SignedExactVND = Field(ge=-MAX_SAFE_VND, le=MAX_SAFE_VND)
     method: Literal["cash", "transfer"]
     note: Optional[str] = None
     reference: Optional[str] = None

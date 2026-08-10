@@ -222,9 +222,10 @@ def backfill_order_item_product_id(db):
 
 def backfill_legacy_order_payments(db):
     result = db.execute(text("""INSERT INTO order_payments (
-        order_id, entry_type, amount, idempotency_key, provider,
+        order_id, entry_type, amount, amount_vnd, idempotency_key, provider,
         bank_txn_id, account_no, note, created_at)
-        SELECT o.id, 'BANK_IN', o.paid_amount, 'legacy-order:' || o.id, 'legacy',
+        SELECT o.id, 'BANK_IN', o.paid_amount, CAST(o.paid_amount AS INTEGER),
+        'legacy-order:' || o.id, 'legacy',
         o.bank_txn_id, s.bank_account_no, 'Dữ liệu ngân hàng trước khi có sổ giao dịch',
         COALESCE(o.created_at, CURRENT_TIMESTAMP)
         FROM orders o LEFT JOIN shops s ON s.id=o.shop_id

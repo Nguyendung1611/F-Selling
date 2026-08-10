@@ -154,13 +154,15 @@ def _allocated_map(db: Session, entry_ids: Sequence[int]) -> Dict[int, int]:
     rows = (
         db.query(
             models.SupplierPaymentAllocation.payable_entry_id,
-            func.coalesce(func.sum(models.SupplierPaymentAllocation.amount), 0),
+            models.SupplierPaymentAllocation.amount,
         )
         .filter(models.SupplierPaymentAllocation.payable_entry_id.in_(entry_ids))
-        .group_by(models.SupplierPaymentAllocation.payable_entry_id)
         .all()
     )
-    return {int(entry_id): int(amount or 0) for entry_id, amount in rows}
+    result: Dict[int, int] = {}
+    for entry_id, amount in rows:
+        result[int(entry_id)] = result.get(int(entry_id), 0) + int(amount or 0)
+    return result
 
 
 def _supplier_entries(db: Session, supplier_id: int) -> List[models.SupplierPayableEntry]:
@@ -670,12 +672,12 @@ def _receipt_out(
     ).first()
     paid = 0
     if payable is not None:
-        paid = int(
-            db.query(func.coalesce(func.sum(models.SupplierPaymentAllocation.amount), 0))
+        paid_rows = (
+            db.query(models.SupplierPaymentAllocation.amount)
             .filter(models.SupplierPaymentAllocation.payable_entry_id == payable.id)
-            .scalar()
-            or 0
+            .all()
         )
+        paid = sum(int(amount or 0) for (amount,) in paid_rows)
     supplier_name = db.query(models.Supplier.name).filter(
         models.Supplier.id == receipt.supplier_id
     ).scalar()
