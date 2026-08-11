@@ -15,6 +15,11 @@
       "down_revision": "0002_i04_operational_tables",
       "path": "versions/0003_i05_integer_vnd_cost_basis.py",
       "sha256": "d0abe1f5df1d729678dbd258e9ff40848588437c26e3d05c8b88a8e47d492539"
+    },
+    "0004_i09_offline_receipts": {
+      "down_revision": "0003_i05_integer_vnd_cost_basis",
+      "path": "versions/0004_i09_offline_receipts.py",
+      "sha256": "572c969914b6517f84a2b5a2bd9c3477e79f9deb88f50fe2c77b3384d487d506"
     }
   }
 }

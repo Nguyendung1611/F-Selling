@@ -140,6 +140,42 @@ old/new trong lần adoption.
 Không dùng `alembic upgrade` trực tiếp: đường đó bị chặn vì không thể bảo đảm
 transaction chung cho version/journal/verifier/attempt của coordinator.
 
+### 6.2. Ma trận phiên bản DB ↔ binary (revision `0004` offline)
+
+Revision `0004_i09_offline_receipts` là forward-only và **không có downgrade**.
+Bốn tổ hợp dưới đây là toàn bộ trạng thái có thể xảy ra khi deploy:
+
+| Database | Binary | Kết quả |
+|---|---|---|
+| `0003` | biết `0004` (build mới) | startup verification raise trong lifespan; process **fail boot/restart**, chưa có listener để trả JSON 503 |
+| `0004` | biết `0004` | ready, chạy bình thường |
+| `0004` | chưa biết `0004` (build cũ) | **fail boot** — verifier thấy journal dài hơn graph đã checkout và từ chối khởi động |
+| `0003` | chưa biết `0004` | ready — đây là lý do phải quay binary TRƯỚC khi database chạm `0004` |
+
+Thứ tự bắt buộc khi lên `0004`:
+
+1. Bật maintenance, drain traffic, dừng hẳn build cũ (mục 6.1 bước 1–3).
+2. Chạy migration CLI trên đúng machine gắn volume:
+
+   ```sh
+   python -m fselling.migration.cli --database /data/fselling_v4.db upgrade head
+   python -m fselling.migration.cli --database /data/fselling_v4.db verify
+   ```
+
+3. `verify` xanh rồi **mới** khởi động binary mới và chờ `/api/health/ready`
+   trả 200.
+
+Ô thứ ba là ô nguy hiểm: build cũ không biết bảng lease/registry/receipt nên nếu
+nó chạy được thì mỗi phiếu offline đồng bộ trong lúc đó sẽ mất dấu attribution và
+tombstone — đúng đường sinh doanh thu kép. Vì vậy nó được thiết kế để **chết ngay
+lúc boot**, không phải để chạy nửa vời.
+
+Hệ quả: **rollback binary không phải là rollback**. Đổi config trên build mới thì
+được; muốn quay lại binary cũ thì phải restore bản backup đã verify theo runbook
+I04 (mục 6.1 bước 6) rồi ingest lại các phiếu phát sinh sau thời điểm snapshot.
+Tuyệt đối không viết downgrade cho `0004` và không thêm `release_command` để
+"tự chạy migration khi deploy" — cảnh báo ở mục 6 vẫn nguyên giá trị.
+
 ## 7. Mở web
 
 ```

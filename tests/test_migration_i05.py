@@ -22,6 +22,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ROOT = "0001_legacy_9cf7106_baseline"
 I04 = "0002_i04_operational_tables"
 I05 = "0003_i05_integer_vnd_cost_basis"
+I09 = "0004_i09_offline_receipts"
+
+
+def _i05_module(coordinator: MigrationCoordinator):
+    """The I05 revision is no longer head; assert against it by id."""
+    return next(
+        item.module
+        for item in coordinator._graph().revisions
+        if item.revision == I05
+    )
 
 
 def _coordinator(path: Path, *, project_root: Path = PROJECT_ROOT) -> MigrationCoordinator:
@@ -128,15 +138,15 @@ def test_fresh_0001_0002_0003_and_i04_upgrade_are_linear(tmp_path):
     assert coordinator.init() == [ROOT]
     assert coordinator.upgrade(I04) == [I04]
     assert coordinator.status().current_revision == I04
-    assert coordinator.upgrade("head") == [I05]
+    assert coordinator.upgrade("head") == [I05, I09]
     report = coordinator.verify()
-    assert report.current_revision == report.head_revision == I05
-    assert report.revision_count == 3
+    assert report.current_revision == report.head_revision == I09
+    assert report.revision_count == 4
     assert coordinator.upgrade("head") == []
 
     connection = _connect(database)
     try:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (I05,)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (I09,)
         assert connection.execute(
             "SELECT type FROM pragma_table_info('orders') WHERE name='total_vnd'"
         ).fetchone() == ("INTEGER",)
@@ -180,7 +190,7 @@ def test_exact_legacy_conversion_allocation_and_unknown_cost(tmp_path):
     finally:
         connection.close()
 
-    assert coordinator.upgrade() == [I05]
+    assert coordinator.upgrade() == [I05, I09]
     coordinator.verify()
     connection = _connect(database)
     try:
@@ -226,7 +236,7 @@ def test_i04_tracked_ton_am_gap_migrates_with_exact_durable_evidence(
     finally:
         connection.close()
 
-    assert coordinator.upgrade() == [I05]
+    assert coordinator.upgrade() == [I05, I09]
     coordinator.verify()
     connection = _connect(database)
     try:
@@ -332,7 +342,7 @@ def test_offline_deficit_verifier_rejects_unproven_or_inexact_mismatch(
             connection.execute(sql)
         connection.commit()
         with pytest.raises(RuntimeError, match=error_code):
-            coordinator._graph().head.module.verify(connection)
+            _i05_module(coordinator).verify(connection)
     finally:
         connection.close()
 
@@ -390,7 +400,7 @@ def test_closed_zero_source_gap_still_requires_historical_evidence(tmp_path):
         with pytest.raises(
             RuntimeError, match="I05_VERIFY_OFFLINE_BATCH_DEFICIT_REQUIRED"
         ):
-            coordinator._graph().head.module.verify(connection)
+            _i05_module(coordinator).verify(connection)
     finally:
         connection.close()
 
@@ -472,7 +482,7 @@ def test_write_off_verifier_rejects_corrupt_canonical_provenance(
         )
         connection.commit()
         with pytest.raises(RuntimeError, match=error_code):
-            coordinator._graph().head.module.verify(connection)
+            _i05_module(coordinator).verify(connection)
     finally:
         connection.close()
 
@@ -548,10 +558,9 @@ def test_i05_checksum_fingerprint_and_verifier_are_fail_closed(tmp_path):
     with pytest.raises(RuntimeError, match="I05_VERIFY_SCHEMA_OBJECTS"):
         # Call the durable revision verifier directly so this assertion remains
         # specific even though coordinator fingerprinting also fails closed.
-        graph = coordinator._graph()
         connection = _connect(database)
         try:
-            graph.head.module.verify(connection)
+            _i05_module(coordinator).verify(connection)
         finally:
             connection.close()
     with pytest.raises(Exception, match="fingerprint mismatch"):
@@ -599,7 +608,7 @@ def test_nonempty_positive_ledgers_backfill_and_required_triggers_are_durable(tm
         connection.close()
 
 
-    assert coordinator.upgrade() == [I05]
+    assert coordinator.upgrade() == [I05, I09]
     coordinator.verify()
     connection = _connect(database)
     try:
@@ -645,11 +654,10 @@ def test_durable_verifier_rejects_noninteger_canonical_storage(tmp_path):
         connection.execute("PRAGMA ignore_check_constraints = ON")
         connection.execute("UPDATE products SET price_vnd='not-an-integer' WHERE id=1")
         connection.commit()
-        graph = coordinator._graph()
         with pytest.raises(
             RuntimeError,
             match=r"I05_VERIFY_MONEY_RANGE:products\.price_vnd",
         ):
-            graph.head.module.verify(connection)
+            _i05_module(coordinator).verify(connection)
     finally:
         connection.close()
