@@ -9,8 +9,14 @@ Mỗi test ở đây tương ứng một cách mất tiền thật, không phả
 """
 from __future__ import annotations
 
+import copy
+import threading
 import uuid as _uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from fastapi import HTTPException
+from sqlalchemy import text
 
 from conftest import (
     _TEST_MIGRATIONS,
@@ -24,6 +30,8 @@ from conftest import (
 from fselling import models
 from fselling.core import thoi_gian
 from fselling.core.database import SessionLocal
+from fselling.schemas.order import OfflineOrderCreate
+from fselling.services import offline_service
 
 
 def _uid() -> str:
@@ -174,6 +182,670 @@ def test_gui_lai_khong_cong_tien_lan_hai(client):
     finally:
         s.close()
     assert so_but_toan == 1, "một phiếu chỉ được sinh đúng một bút toán tiền mặt"
+
+
+def test_phieu_moi_tao_registry_receipt_v0_atomic_va_verifier_pass(client):
+    ctx = seller_with_shop(client)
+    _mo_ca(client, ctx)
+    sold_utc = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(seconds=1)
+    sold_plus_seven = sold_utc.astimezone(timezone(timedelta(hours=7)))
+    marker = "MÁY-I09-B1-" + _uuid.uuid4().hex
+    payload = _phieu(
+        ctx["product"],
+        luc_ban=sold_plus_seven,
+        may=f"  {marker}\u00a0 A  ",
+    )
+
+    response = _gui(client, ctx, payload)
+    assert response.status_code == 200, response.text
+    assert response.json()["created"] is True
+
+    session = SessionLocal()
+    try:
+        order = session.get(models.Order, response.json()["order_id"])
+        registry = session.get(models.OfflineReceiptRegistry, payload["offline_uuid"])
+        receipt = (
+            session.query(models.OfflineReceipt)
+            .filter(models.OfflineReceipt.offline_uuid == payload["offline_uuid"])
+            .one()
+        )
+        expected_sold = sold_utc.replace(tzinfo=None)
+        assert order.created_at == order.sold_offline_at == expected_sold
+        assert order.offline_device == f"{marker} A"
+        assert registry.order_id == order.id
+        assert registry.shop_id == ctx["shop_id"]
+        assert registry.state == "INGESTED"
+        assert registry.contract_version == 0
+        assert registry.state_version == 0
+        assert registry.server_fingerprint.startswith("fsofr0:")
+        assert len(registry.server_fingerprint) == 71
+        assert receipt.order_id == order.id
+        assert receipt.server_fingerprint == registry.server_fingerprint
+        assert receipt.contract_version == 0
+        assert receipt.sold_by_claimed_user_id == receipt.synced_by_user_id == order.created_by_user_id
+        assert receipt.attribution_kind == "LEGACY_UNKNOWN"
+        assert receipt.time_confidence == "LEGACY"
+        assert receipt.sold_at_effective == receipt.sold_at_client_utc
+        assert receipt.sold_at_effective == expected_sold.strftime("%Y-%m-%d %H:%M:%S.%f")
+        assert len(receipt.ingested_at) == 26
+        assert (
+            receipt.lease_id,
+            receipt.device_id,
+            receipt.offline_session_id,
+            receipt.sequence,
+            receipt.client_fingerprint,
+            receipt.sold_at_upper_bound,
+            receipt.client_monotonic_ms,
+            receipt.server_anchor_id,
+        ) == (None,) * 8
+        assert receipt.client_fingerprint_mismatch == 0
+        assert session.execute(
+            text("SELECT typeof(total_vnd) FROM orders WHERE id=:id"),
+            {"id": order.id},
+        ).scalar_one() == "integer"
+        audit = (
+            session.query(models.SystemLog)
+            .filter(models.SystemLog.action == "OFFLINE_SALE", models.SystemLog.details.contains(f"Đơn #{order.id}"))
+            .one()
+        )
+        assert audit.shop_id == ctx["shop_id"]
+        assert marker not in audit.details
+        assert payload["offline_uuid"] not in audit.details
+    finally:
+        session.close()
+    _TEST_MIGRATIONS.verify()
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["quantity", "price", "product_name", "sold_at", "cash_tendered", "device_label"],
+)
+def test_cung_uuid_doi_field_vat_chat_tra_fingerprint_conflict_atomic(client, field):
+    ctx = seller_with_shop(client)
+    _mo_ca(client, ctx)
+    payload = _phieu(
+        ctx["product"],
+        luc_ban=datetime.utcnow() - timedelta(seconds=2),
+    )
+    created = _gui(client, ctx, payload)
+    assert created.status_code == 200, created.text
+    before_stock = _ton_kho(ctx["product"]["id"])
+
+    changed = copy.deepcopy(payload)
+    if field == "quantity":
+        changed["items"][0]["quantity"] += 1
+    elif field == "price":
+        changed["items"][0]["unit_price"] += 1
+    elif field == "product_name":
+        changed["items"][0]["product_name"] += " khác"
+    elif field == "sold_at":
+        changed["sold_at"] = (
+            datetime.fromisoformat(changed["sold_at"]) - timedelta(seconds=1)
+        ).isoformat()
+    elif field == "cash_tendered":
+        changed["cash_tendered"] += 1
+    else:
+        changed["device_label"] = "POS-02"
+
+    conflict = _gui(client, ctx, changed)
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["detail"]["code"] == "OFFLINE_RECEIPT_FINGERPRINT_CONFLICT"
+    assert "order_id" not in conflict.text
+    assert _ton_kho(ctx["product"]["id"]) == before_stock
+
+    session = SessionLocal()
+    try:
+        order_id = created.json()["order_id"]
+        assert session.query(models.Order).filter(models.Order.offline_uuid == payload["offline_uuid"]).count() == 1
+        assert session.query(models.OrderPayment).filter(models.OrderPayment.order_id == order_id).count() == 1
+        assert session.query(models.OfflineReceiptRegistry).filter(models.OfflineReceiptRegistry.offline_uuid == payload["offline_uuid"]).count() == 1
+        assert session.query(models.OfflineReceipt).filter(models.OfflineReceipt.offline_uuid == payload["offline_uuid"]).count() == 1
+        assert session.query(models.SystemLog).filter(models.SystemLog.action == "OFFLINE_SALE", models.SystemLog.details.contains(f"Đơn #{order_id}")).count() == 1
+    finally:
+        session.close()
+
+
+def test_reorder_items_va_timezone_tuong_duong_la_retry_hop_le(client):
+    ctx = seller_with_shop(client)
+    other = create_product(
+        client,
+        ctx["token"],
+        ctx["shop_id"],
+        _unique("SP reorder"),
+        50_000,
+        10,
+        ctx["category_id"],
+    )
+    _mo_ca(client, ctx)
+    sold_utc = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(seconds=1)
+    payload = _phieu(ctx["product"], luc_ban=sold_utc.astimezone(timezone(timedelta(hours=7))))
+    payload["items"].append(
+        {
+            "product_id": other["id"],
+            "product_name": other["name"],
+            "unit_price": other["price"],
+            "quantity": 1,
+        }
+    )
+    payload["cash_tendered"] += other["price"]
+    first = _gui(client, ctx, payload)
+    assert first.status_code == 200, first.text
+
+    retry = copy.deepcopy(payload)
+    retry["items"].reverse()
+    retry["sold_at"] = sold_utc.isoformat().replace("+00:00", "Z")
+    second = _gui(client, ctx, retry)
+    assert second.status_code == 200, second.text
+    assert second.json()["created"] is False
+    assert second.json()["order_id"] == first.json()["order_id"]
+    assert _ton_kho(ctx["product"]["id"]) == 9
+    assert _ton_kho(other["id"]) == 9
+
+
+def test_duplicate_line_multiplicity_khong_bi_group_thanh_retry(client):
+    ctx = seller_with_shop(client)
+    _mo_ca(client, ctx)
+    payload = _phieu(ctx["product"], so_luong=1)
+    payload["items"].append(copy.deepcopy(payload["items"][0]))
+    payload["cash_tendered"] *= 2
+    first = _gui(client, ctx, payload)
+    assert first.status_code == 200, first.text
+
+    grouped = copy.deepcopy(payload)
+    grouped["items"] = [copy.deepcopy(payload["items"][0])]
+    grouped["items"][0]["quantity"] = 2
+    conflict = _gui(client, ctx, grouped)
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["detail"]["code"] == "OFFLINE_RECEIPT_FINGERPRINT_CONFLICT"
+    assert _ton_kho(ctx["product"]["id"]) == 8
+
+
+# ---------- Tác động nghiệp vụ phải theo canonical, không theo thứ tự payload ----------
+def _pool_mixed_known_unknown(client, ctx, ten: str) -> dict:
+    """Sản phẩm không theo lô với pool giá vốn 1 unknown + 1 known basis 100."""
+    sp = create_product(
+        client, ctx["token"], ctx["shop_id"], _unique(ten), 100, 1, ctx["category_id"]
+    )
+    res = client.post(
+        f"/api/products/{sp['id']}/stock",
+        json={"delta": 1, "unit_cost": 100, "reason": "mixed cost pool"},
+        headers=auth(ctx["token"]),
+    )
+    assert res.status_code == 200, res.text
+    return sp
+
+
+def _phieu_hai_dong_cung_san_pham(sp, uuid_value, *, dao_thu_tu: bool) -> dict:
+    """Hai dòng CÙNG product, khác đơn giá. Canonical sắp 100 trước 200."""
+    dong = [
+        {
+            "product_id": sp["id"],
+            "product_name": sp["name"],
+            "unit_price": 100,
+            "quantity": 1,
+        },
+        {
+            "product_id": sp["id"],
+            "product_name": sp["name"],
+            "unit_price": 200,
+            "quantity": 1,
+        },
+    ]
+    if dao_thu_tu:
+        dong.reverse()
+    return {
+        "offline_uuid": uuid_value,
+        "sold_at": datetime.utcnow().isoformat(),
+        "items": dong,
+        "cash_tendered": 300,
+        "device_label": "POS-01",
+    }
+
+
+def _provenance_dong_hang(order_id: int):
+    session = SessionLocal()
+    try:
+        return [
+            (
+                int(row.price),
+                row.quantity,
+                row.cost_known_qty,
+                row.cost_unknown_qty,
+                row.cost_basis_vnd,
+            )
+            for row in session.query(models.OrderItem)
+            .filter(models.OrderItem.order_id == order_id)
+            .order_by(models.OrderItem.id)
+            .all()
+        ]
+    finally:
+        session.close()
+
+
+def test_dao_thu_tu_payload_giu_nguyen_fingerprint_va_cost_provenance_canonical(client):
+    """Hai dòng cùng product, pool mixed known/unknown, đảo thứ tự payload.
+
+    Fingerprint coi `items` là tập không thứ tự. Nếu tác động nghiệp vụ vẫn chạy
+    theo thứ tự client gửi thì cùng một phiếu — thậm chí hai request song song
+    của chính nó — lại trừ pool giá vốn khác nhau: dòng nào nhận unknown và dòng
+    nào nhận known/basis phụ thuộc request nào thắng. Lãi và trả hàng từng phần
+    của cùng một phiếu sẽ khác nhau.
+    """
+    ctx_a = seller_with_shop(client)
+    _mo_ca(client, ctx_a)
+    sp_a = _pool_mixed_known_unknown(client, ctx_a, "SP canonical A")
+    payload_a = _phieu_hai_dong_cung_san_pham(sp_a, _uid(), dao_thu_tu=True)
+    dau = _gui(client, ctx_a, payload_a)
+    assert dau.status_code == 200, dau.text
+    assert dau.json()["created"] is True
+
+    # Cùng canonical document dù thứ tự dòng ngược lại: phải là retry no-op.
+    gui_lai = copy.deepcopy(payload_a)
+    gui_lai["items"].reverse()
+    lai = _gui(client, ctx_a, gui_lai)
+    assert lai.status_code == 200, lai.text
+    assert lai.json()["created"] is False
+    assert lai.json()["order_id"] == dau.json()["order_id"]
+
+    # Shop độc lập, cùng nội dung nhưng gửi theo thứ tự kia: provenance durable
+    # phải trùng khít, không phụ thuộc request nào thắng.
+    ctx_b = seller_with_shop(client)
+    _mo_ca(client, ctx_b)
+    sp_b = _pool_mixed_known_unknown(client, ctx_b, "SP canonical B")
+    payload_b = _phieu_hai_dong_cung_san_pham(sp_b, _uid(), dao_thu_tu=False)
+    sau = _gui(client, ctx_b, payload_b)
+    assert sau.status_code == 200, sau.text
+
+    prov_a = _provenance_dong_hang(dau.json()["order_id"])
+    prov_b = _provenance_dong_hang(sau.json()["order_id"])
+    assert prov_a == prov_b == [
+        # Dòng 100 đứng trước theo canonical nên nhận phần unknown trước.
+        (100, 1, 0, 1, 0),
+        (200, 1, 1, 0, 100),
+    ]
+    _TEST_MIGRATIONS.verify()
+
+
+def test_dao_thu_tu_payload_khong_doi_ket_qua_tra_hang_tung_phan(client):
+    """Trả đúng dòng 200 ở hai shop gửi ngược thứ tự: tiền và giá vốn hoàn phải
+    bằng nhau. Nếu dòng nào nhận known phụ thuộc payload thì hai lần trả cùng
+    một mặt hàng lại trừ lãi khác nhau."""
+    ket_qua = []
+    for dao in (True, False):
+        ctx = seller_with_shop(client)
+        _mo_ca(client, ctx)
+        sp = _pool_mixed_known_unknown(client, ctx, "SP canonical return")
+        payload = _phieu_hai_dong_cung_san_pham(sp, _uid(), dao_thu_tu=dao)
+        ban = _gui(client, ctx, payload)
+        assert ban.status_code == 200, ban.text
+        order_id = ban.json()["order_id"]
+
+        session = SessionLocal()
+        try:
+            dong_200 = (
+                session.query(models.OrderItem)
+                .filter(
+                    models.OrderItem.order_id == order_id,
+                    models.OrderItem.price == 200,
+                )
+                .one()
+            )
+            dong_200_id = dong_200.id
+        finally:
+            session.close()
+
+        tra = client.post(
+            f"/api/orders/{order_id}/returns",
+            json={
+                "items": [
+                    {"order_item_id": dong_200_id, "quantity": 1, "restock": True}
+                ],
+                "method": "transfer",
+                "operation_id": "off-return-" + _uuid.uuid4().hex,
+            },
+            headers=auth(ctx["token"]),
+        )
+        assert tra.status_code == 200, tra.text
+
+        session = SessionLocal()
+        try:
+            dong = session.get(models.OrderItem, dong_200_id)
+            sp_sau = session.get(models.Product, sp["id"])
+            ket_qua.append(
+                (
+                    (
+                        dong.returned_total_qty,
+                        dong.returned_known_qty,
+                        dong.returned_unknown_qty,
+                        dong.returned_cost_basis_vnd,
+                        dong.returned_refund_vnd,
+                    ),
+                    (
+                        sp_sau.stock,
+                        sp_sau.cost_known_qty,
+                        sp_sau.cost_unknown_qty,
+                        sp_sau.cost_basis_vnd,
+                        sp_sau.cost_deficit_qty,
+                    ),
+                )
+            )
+        finally:
+            session.close()
+
+    assert ket_qua[0] == ket_qua[1] == ((1, 1, 0, 100, 200), (1, 1, 0, 100, 0))
+    _TEST_MIGRATIONS.verify()
+
+
+# ---------- Chuẩn hóa text và giờ biên không được thành 500 ----------
+def test_ten_hang_chi_toan_khoang_trang_unicode_bi_tu_choi_400_khong_side_effect(client):
+    """`product_name` là bằng chứng bắt buộc: sản phẩm bị xóa giữa bán và sync
+    thì đó là thứ duy nhất nối khoản tiền trong két về mặt hàng đã bán. Chuỗi
+    chỉ gồm khoảng trắng Unicode lọt qua `min_length=1` nhưng chuẩn hóa thành
+    rỗng, nên phải bị chặn TRƯỚC mọi side effect."""
+    ctx = seller_with_shop(client)
+    _mo_ca(client, ctx)
+    ton_truoc = _ton_kho(ctx["product"]["id"])
+    phieu = _phieu(ctx["product"])
+    phieu["items"][0]["product_name"] = "\u3000 \u00a0 "
+
+    res = _gui(client, ctx, phieu)
+    assert res.status_code == 400, res.text
+
+    session = SessionLocal()
+    try:
+        assert (
+            session.query(models.Order)
+            .filter(models.Order.offline_uuid == phieu["offline_uuid"])
+            .count()
+            == 0
+        )
+        assert (
+            session.query(models.OrderPayment)
+            .filter(
+                models.OrderPayment.idempotency_key
+                == f"offline:{phieu['offline_uuid']}"
+            )
+            .count()
+            == 0
+        )
+        assert session.get(models.OfflineReceiptRegistry, phieu["offline_uuid"]) is None
+        assert (
+            session.query(models.OfflineReceipt)
+            .filter(models.OfflineReceipt.offline_uuid == phieu["offline_uuid"])
+            .count()
+            == 0
+        )
+        assert (
+            session.query(models.SystemLog)
+            .filter(
+                models.SystemLog.action == "OFFLINE_SALE",
+                models.SystemLog.shop_id == ctx["shop_id"],
+            )
+            .count()
+            == 0
+        )
+    finally:
+        session.close()
+    assert _ton_kho(ctx["product"]["id"]) == ton_truoc
+
+
+def test_nhan_may_chi_toan_khoang_trang_van_thanh_null(client):
+    """Nullable khác required: `device_label` rỗng vẫn canonical thành NULL."""
+    ctx = seller_with_shop(client)
+    _mo_ca(client, ctx)
+    phieu = _phieu(ctx["product"], may="\u3000  \u00a0")
+
+    res = _gui(client, ctx, phieu)
+    assert res.status_code == 200, res.text
+    assert res.json()["created"] is True
+
+    session = SessionLocal()
+    try:
+        don = session.get(models.Order, res.json()["order_id"])
+        assert don.offline_device is None
+    finally:
+        session.close()
+
+
+def test_gio_ban_bien_co_offset_tra_400_an_toan_khong_500(client):
+    """Năm 0001 kèm `+14:00` đẩy instant ra ngoài `datetime.min` khi đổi sang
+    UTC. Input không hợp lệ không được làm endpoint 500."""
+    ctx = seller_with_shop(client)
+    _mo_ca(client, ctx)
+    ton_truoc = _ton_kho(ctx["product"]["id"])
+    phieu = _phieu(ctx["product"])
+    phieu["sold_at"] = "0001-01-01T00:00:00+14:00"
+
+    res = _gui(client, ctx, phieu)
+    assert res.status_code == 400, res.text
+
+    session = SessionLocal()
+    try:
+        assert (
+            session.query(models.Order)
+            .filter(models.Order.offline_uuid == phieu["offline_uuid"])
+            .count()
+            == 0
+        )
+        assert session.get(models.OfflineReceiptRegistry, phieu["offline_uuid"]) is None
+    finally:
+        session.close()
+    assert _ton_kho(ctx["product"]["id"]) == ton_truoc
+
+
+def test_retry_order_legacy_pre_registry_khong_fabricate_bang_chung(client):
+    ctx = seller_with_shop(client)
+    _mo_ca(client, ctx)
+    payload = _phieu(ctx["product"])
+    first = _gui(client, ctx, payload)
+    assert first.status_code == 200, first.text
+
+    session = SessionLocal()
+    try:
+        session.query(models.OfflineReceipt).filter(models.OfflineReceipt.offline_uuid == payload["offline_uuid"]).delete()
+        session.query(models.OfflineReceiptRegistry).filter(models.OfflineReceiptRegistry.offline_uuid == payload["offline_uuid"]).delete()
+        session.commit()
+    finally:
+        session.close()
+    _TEST_MIGRATIONS.verify()
+
+    changed = copy.deepcopy(payload)
+    changed["items"][0]["quantity"] = 9
+    retry = _gui(client, ctx, changed)
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["created"] is False
+    assert retry.json()["order_id"] == first.json()["order_id"]
+    session = SessionLocal()
+    try:
+        assert session.get(models.OfflineReceiptRegistry, payload["offline_uuid"]) is None
+        assert session.query(models.OfflineReceipt).filter(models.OfflineReceipt.offline_uuid == payload["offline_uuid"]).count() == 0
+    finally:
+        session.close()
+
+
+def test_registry_receipt_corruption_fail_closed_khong_tu_va(client):
+    ctx = seller_with_shop(client)
+    _mo_ca(client, ctx)
+    payload = _phieu(ctx["product"])
+    first = _gui(client, ctx, payload)
+    assert first.status_code == 200, first.text
+    stock = _ton_kho(ctx["product"]["id"])
+
+    session = SessionLocal()
+    try:
+        session.query(models.OfflineReceipt).filter(models.OfflineReceipt.offline_uuid == payload["offline_uuid"]).delete()
+        session.commit()
+    finally:
+        session.close()
+
+    failed = _gui(client, ctx, payload)
+    assert failed.status_code == 409, failed.text
+    assert failed.json()["detail"]["code"] == "OFFLINE_RECEIPT_REGISTRY_INCONSISTENT"
+    assert _ton_kho(ctx["product"]["id"]) == stock
+    session = SessionLocal()
+    try:
+        assert session.get(models.OfflineReceiptRegistry, payload["offline_uuid"]) is not None
+        assert session.query(models.OfflineReceipt).filter(models.OfflineReceipt.offline_uuid == payload["offline_uuid"]).count() == 0
+        # The test suite shares one temporary database across TestClient
+        # lifespans. Restore a verifier-valid legacy shape after proving the
+        # endpoint did not self-heal the corruption.
+        session.query(models.OfflineReceiptRegistry).filter(
+            models.OfflineReceiptRegistry.offline_uuid == payload["offline_uuid"]
+        ).delete()
+        session.commit()
+    finally:
+        session.close()
+    _TEST_MIGRATIONS.verify()
+
+
+def test_hai_retry_dong_thoi_chi_mot_order_payment_registry_receipt(
+    client, monkeypatch
+):
+    ctx = seller_with_shop(client)
+    _mo_ca(client, ctx)
+    payload = _phieu(ctx["product"], so_luong=2)
+    request = OfflineOrderCreate(**payload)
+
+    ready = threading.Barrier(2)
+    real_lock = offline_service.order_service._lock_shop_for_order
+
+    def synchronized_shop_lock(db, shop_id):
+        ready.wait(timeout=5)
+        return real_lock(db, shop_id)
+
+    monkeypatch.setattr(
+        offline_service.order_service,
+        "_lock_shop_for_order",
+        synchronized_shop_lock,
+    )
+    outcomes = []
+    outcomes_lock = threading.Lock()
+
+    def submit():
+        session = SessionLocal()
+        try:
+            user = session.query(models.User).filter(models.User.username == ctx["username"]).one()
+            outcome = offline_service.dong_bo_phieu(
+                session, user, ctx["shop_id"], request
+            )
+        except HTTPException as exc:  # pragma: no cover - hiện rõ lỗi thread
+            outcome = {"error": exc.status_code, "detail": exc.detail}
+        except Exception as exc:  # pragma: no cover - hiện rõ lỗi thread
+            outcome = {"error": type(exc).__name__, "detail": str(exc)}
+        finally:
+            session.close()
+        with outcomes_lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=submit) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(outcomes) == 2
+    assert all("error" not in outcome for outcome in outcomes), outcomes
+    assert {outcome["created"] for outcome in outcomes} == {True, False}
+    assert len({outcome["order_id"] for outcome in outcomes}) == 1
+    assert _ton_kho(ctx["product"]["id"]) == 8
+
+    session = SessionLocal()
+    try:
+        order_id = outcomes[0]["order_id"]
+        assert session.query(models.Order).filter(models.Order.offline_uuid == payload["offline_uuid"]).count() == 1
+        assert session.query(models.OrderPayment).filter(models.OrderPayment.order_id == order_id).count() == 1
+        assert session.query(models.OfflineReceiptRegistry).filter(models.OfflineReceiptRegistry.offline_uuid == payload["offline_uuid"]).count() == 1
+        assert session.query(models.OfflineReceipt).filter(models.OfflineReceipt.offline_uuid == payload["offline_uuid"]).count() == 1
+        assert session.query(models.SystemLog).filter(models.SystemLog.action == "OFFLINE_SALE", models.SystemLog.details.contains(f"Đơn #{order_id}")).count() == 1
+    finally:
+        session.close()
+    _TEST_MIGRATIONS.verify()
+
+
+def test_commit_failure_rolls_back_order_ledger_inventory_receipt_audit(
+    client, monkeypatch
+):
+    ctx = seller_with_shop(client)
+    _mo_ca(client, ctx)
+    payload = _phieu(ctx["product"], so_luong=3)
+    request = OfflineOrderCreate(**payload)
+
+    session = SessionLocal()
+    try:
+        user = session.query(models.User).filter(models.User.username == ctx["username"]).one()
+        before_audit = session.query(models.SystemLog).filter(
+            models.SystemLog.action == "OFFLINE_SALE",
+            models.SystemLog.shop_id == ctx["shop_id"],
+        ).count()
+
+        def fail_commit():
+            raise RuntimeError("injected offline commit failure")
+
+        monkeypatch.setattr(session, "commit", fail_commit)
+        with pytest.raises(RuntimeError, match="injected offline commit failure"):
+            offline_service.dong_bo_phieu(
+                session, user, ctx["shop_id"], request
+            )
+    finally:
+        session.close()
+
+    fresh = SessionLocal()
+    try:
+        assert fresh.query(models.Order).filter(models.Order.offline_uuid == payload["offline_uuid"]).count() == 0
+        assert fresh.get(models.OfflineReceiptRegistry, payload["offline_uuid"]) is None
+        assert fresh.query(models.OfflineReceipt).filter(models.OfflineReceipt.offline_uuid == payload["offline_uuid"]).count() == 0
+        assert fresh.query(models.OrderPayment).filter(models.OrderPayment.idempotency_key == f"offline:{payload['offline_uuid']}").count() == 0
+        assert fresh.query(models.SystemLog).filter(
+            models.SystemLog.action == "OFFLINE_SALE",
+            models.SystemLog.shop_id == ctx["shop_id"],
+        ).count() == before_audit
+        assert fresh.get(models.Product, ctx["product"]["id"]).stock == 10
+    finally:
+        fresh.close()
+    _TEST_MIGRATIONS.verify()
+
+
+def test_lost_response_retry_reads_durable_winner_without_double_mutation(
+    client, monkeypatch
+):
+    ctx = seller_with_shop(client)
+    _mo_ca(client, ctx)
+    payload = _phieu(ctx["product"], so_luong=2)
+    request = OfflineOrderCreate(**payload)
+
+    session = SessionLocal()
+    try:
+        user = session.query(models.User).filter(models.User.username == ctx["username"]).one()
+        real_commit = session.commit
+
+        def commit_then_lose_response():
+            real_commit()
+            raise RuntimeError("simulated lost response")
+
+        monkeypatch.setattr(session, "commit", commit_then_lose_response)
+        with pytest.raises(RuntimeError, match="simulated lost response"):
+            offline_service.dong_bo_phieu(
+                session, user, ctx["shop_id"], request
+            )
+    finally:
+        session.close()
+
+    retry = _gui(client, ctx, payload)
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["created"] is False
+    assert _ton_kho(ctx["product"]["id"]) == 8
+    fresh = SessionLocal()
+    try:
+        order_id = retry.json()["order_id"]
+        assert fresh.query(models.Order).filter(models.Order.offline_uuid == payload["offline_uuid"]).count() == 1
+        assert fresh.query(models.OrderPayment).filter(models.OrderPayment.order_id == order_id).count() == 1
+        assert fresh.query(models.OfflineReceiptRegistry).filter(models.OfflineReceiptRegistry.offline_uuid == payload["offline_uuid"]).count() == 1
+        assert fresh.query(models.OfflineReceipt).filter(models.OfflineReceipt.offline_uuid == payload["offline_uuid"]).count() == 1
+        assert fresh.query(models.SystemLog).filter(models.SystemLog.action == "OFFLINE_SALE", models.SystemLog.details.contains(f"Đơn #{order_id}")).count() == 1
+    finally:
+        fresh.close()
+    _TEST_MIGRATIONS.verify()
 
 
 # ---------- Hết hàng vẫn phải ghi ----------
@@ -676,7 +1348,10 @@ def test_uuid_cua_shop_khac_thi_bao_xung_dot(client):
 
     phieu = _phieu(a["product"])
     assert _gui(client, a, phieu).status_code == 200
-    assert _gui(client, b, phieu).status_code == 409
+    conflict = _gui(client, b, phieu)
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "OFFLINE_RECEIPT_UUID_OTHER_SHOP"
+    assert "order_id" not in conflict.text
 
 
 def test_nguoi_ngoai_khong_gui_duoc_phieu(client):

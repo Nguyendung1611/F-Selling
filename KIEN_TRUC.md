@@ -1124,6 +1124,18 @@ chừng, người dùng bấm đồng bộ lại); không có index đó thì m�
 một đơn mới, doanh thu và tồn kho cùng nhân đôi. `order_payments.idempotency_key`
 = `offline:<uuid>` là lớp chặn thứ hai cho hai request song song.
 
+Từ I09-B1, phiếu mới còn phải có đúng một dòng
+`offline_receipt_registry` + `offline_receipts` trong **cùng transaction** với
+Order/items/payment/tồn kho/giá vốn/audit. Server tự canonicalize sáu field v0
+(`shop_id`, UUID, giờ bán UTC, các dòng hàng, tiền khách đưa, nhãn máy) và lưu
+fingerprint `fsofr0:`; cùng UUID chỉ là retry khi fingerprint khớp, khác nội
+dung phải 409 trước mọi side effect. Giờ có offset phải đổi thật sang UTC rồi
+mới bỏ timezone, không dùng `replace(tzinfo=None)`. Registry/receipt lệch nhau
+thì fail-closed, không tự vá. Riêng order offline tạo trước I09-B1 không có hai
+bảng bằng chứng vẫn trả retry `created=false` để tương thích, nhưng tuyệt đối
+không dựng fingerprint từ payload gửi lại: lịch sử đó không đủ bằng chứng để
+chứng minh một payload khác hay giống.
+
 **Chưa làm:** phần máy bán (hàng chờ trong IndexedDB, khóa về tiền mặt khi mất
 mạng, tự đồng bộ khi có mạng lại). Backend đã sẵn sàng và đứng một mình được —
 gọi thẳng `POST /api/orders/{shop_id}/offline` là ghi được phiếu.
