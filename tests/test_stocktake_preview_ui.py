@@ -103,4 +103,45 @@ def test_modal_dung_summary_theo_product_va_giu_snapshot_payload():
     # Token ABA và body giao tiếp server không đổi khi sửa preview.
     assert "offline_deficit_snapshot: d.offline_deficit_snapshot" in apply
     assert "batches: Object.entries(d.lo).map" in apply
+    # Hàng KHÔNG theo lô cũng phải echo token, nếu không server từ chối cả phiếu
+    # bằng OFFLINE_DEFICIT_SNAPSHOT_REQUIRED khi sản phẩm còn evidence tồn âm.
+    assert apply.count("offline_deficit_snapshot: d.offline_deficit_snapshot") == 2
+
+
+def test_kkdem_chup_token_evidence_ngay_luc_bat_dau_dem():
+    """Token phải chụp cùng lúc với `stock_snapshot`, không phải lúc bấm Áp dụng.
+
+    Chụp muộn là chụp trạng thái đã đổi trong lúc đếm — đúng thứ token sinh ra
+    để chặn.
+    """
+    js = (ROOT / "static/js/seller.js").read_text(encoding="utf-8")
+    begin = js.index("function kkDem(sp, soLuong)")
+    end = js.index("function kkThemTheoLo(sp)", begin)
+    dem = js[begin:end]
+
+    assert "deficitKiemKeTheoSanPham[sp.id]" in dem
+    assert "offline_deficit_snapshot: deficit.snapshot || null" in dem
+    assert "stock_snapshot: sp.stock" in dem
+
+
+def test_ap_dung_xong_phai_nap_lai_token_truoc_phieu_ke_tiep():
+    """Token đã dùng xong là token chết.
+
+    Xóa `phieuKiemKe` mà không nạp lại map deficit thì phiếu thứ hai trong cùng
+    tab gửi lại đúng token vừa bị tiêu, và người dùng nhận 409 cho tới khi mở
+    lại tab — lỗi trông như hỏng chức năng chứ không như bảo vệ.
+    """
+    js = (ROOT / "static/js/seller.js").read_text(encoding="utf-8")
+    begin = js.index("async function kkApDung()")
+    end = js.index("function kkHienKetQua(", begin)
+    apply = js[begin:end]
+
+    reset = apply.index("phieuKiemKe = {};")
+    assert "await kkNapLo();" in apply[reset:], "phải nạp lại token sau khi áp dụng"
+
+
+def test_html_bump_cache_buster_khi_seller_js_doi():
+    """Quên bump `?v=` là người dùng chạy code cũ trong im lặng."""
+    html = (ROOT / "static/seller.html").read_text(encoding="utf-8")
+    assert "/js/seller.js?v=20260811-i09c-deficit-token-refresh" in html
 

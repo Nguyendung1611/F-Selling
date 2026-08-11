@@ -36,7 +36,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -45,10 +45,11 @@ from ..core.i18n import tr
 from ..core.money import checked_add, checked_multiply, exact_vnd
 from ..dependencies import (
     PERMISSION_SALE,
+    has_cost_visibility,
     require_shop_access,
     require_staff_permission,
 )
-from ..schemas.order import OfflineOrderCreate
+from ..schemas.order import OfflineIssueAcknowledge, OfflineOrderCreate
 from . import inventory_service, order_service
 from .offline_fingerprint import (
     OfflineFingerprintV0,
@@ -56,13 +57,43 @@ from .offline_fingerprint import (
     fingerprint_offline_receipt_v0,
 )
 
-# Vướng mắc lúc ghi phiếu. Nối bằng dấu phẩy vào `orders.offline_issue` để nổi
-# lên màn Đối Soát. Đơn KHÔNG bị chặn vì lý do nào trong số này.
+# Vướng mắc lúc ghi phiếu. Đơn KHÔNG bị chặn vì lý do nào trong số này.
+#
+# Mỗi vướng mắc sinh MỘT DÒNG `offline_receipt_issues` — đó mới là sự thật của
+# màn Đối Soát. `orders.offline_issue` vẫn được ghi y như cũ nhưng chỉ còn là
+# bản sao tương thích: một chuỗi nối bằng dấu phẩy không nói được dòng nào,
+# còn thiếu bao nhiêu, hay ai đã xác nhận cái gì.
 ISSUE_TON_AM = "TON_AM"              # kho không đủ hàng lúc sync
 ISSUE_CA_DA_CHOT = "CA_DA_CHOT"      # ca lúc bán nay đã kết ca
 ISSUE_KHONG_CO_CA = "KHONG_CO_CA"    # không ca nào phủ giờ bán
 ISSUE_SP_KHONG_CON = "SP_KHONG_CON"  # sản phẩm đã bị xóa giữa bán và sync
 ISSUE_GIA_DOI = "GIA_DOI"            # giá trên phiếu khác giá hiện tại
+
+EVIDENCE_STOCK_DEFICIT = "OFFLINE_STOCK_DEFICIT"
+EVIDENCE_BATCH_DEFICIT = "OFFLINE_BATCH_DEFICIT"
+EVIDENCE_SHIFT = "SHIFT"
+EVIDENCE_CATALOG = "CATALOG"
+EVIDENCE_LEGACY_AMBIGUOUS = "LEGACY_AMBIGUOUS"
+
+SEVERITY_INFO = "INFO"
+SEVERITY_ACTION = "ACTION"
+
+STATE_OPEN = "OPEN"
+STATE_ACKNOWLEDGED = "ACKNOWLEDGED"
+STATE_RESOLVED = "RESOLVED"
+
+# GIA_DOI là thông tin, không phải việc phải làm: đơn đã ghi đúng giá khách trả
+# lúc mua, giá hôm nay khác là chuyện bình thường. Ghi thẳng RESOLVED để nó nằm
+# trong lịch sử mà không chiếm chỗ trên màn "Cần xử lý".
+RESOLUTION_INFORMATIONAL = "INFORMATIONAL_AT_INGEST"
+RESOLUTION_STOCKTAKE = "STOCKTAKE"
+
+# Acknowledging is NOT a resolution: it records that a human looked, and 0005
+# rejects any ACKNOWLEDGED row that carries a `resolution_kind`.
+ISSUE_STATES = (STATE_OPEN, STATE_ACKNOWLEDGED, STATE_RESOLVED)
+
+# Codes chỉ được acknowledge khi không có bằng chứng exact nào để đóng.
+ACKNOWLEDGEABLE_ISSUE_CODES = (ISSUE_CA_DA_CHOT, ISSUE_KHONG_CO_CA)
 
 # Đã nằm trong `CASH_PAYMENT_IN_TYPES` của shift_service nên tự được tính vào
 # két của ca. ĐỪNG thêm `CashMovement` kèm theo — sẽ cộng két hai lần.
@@ -72,6 +103,12 @@ ERROR_FINGERPRINT_CONFLICT = "OFFLINE_RECEIPT_FINGERPRINT_CONFLICT"
 ERROR_UUID_OTHER_SHOP = "OFFLINE_RECEIPT_UUID_OTHER_SHOP"
 ERROR_REGISTRY_INCONSISTENT = "OFFLINE_RECEIPT_REGISTRY_INCONSISTENT"
 ERROR_UUID_UNAVAILABLE = "OFFLINE_RECEIPT_UUID_UNAVAILABLE"
+
+# Bằng chứng exact chỉ đóng được bằng kiểm kê thật; nút "đã xem" không làm số
+# hàng thiếu quay lại. Map lại sản phẩm / chấp nhận giá vốn unknown thuộc I09-G.
+ERROR_ISSUE_EVIDENCE_REQUIRED = "OFFLINE_ISSUE_EVIDENCE_REQUIRED"
+ERROR_ISSUE_RECOVERY_REQUIRED = "OFFLINE_ISSUE_RECOVERY_REQUIRED"
+ERROR_ISSUE_STATE_CONFLICT = "OFFLINE_ISSUE_STATE_CONFLICT"
 
 MONEY_EPSILON = 0
 
@@ -263,6 +300,44 @@ def _durable_retry_after_integrity(
         fresh.close()
 
 
+def _issue_moi(
+    *,
+    order_id: int,
+    issue_code: str,
+    evidence_kind: str,
+    severity: str,
+    opened_at: str,
+    order_item_id: Optional[int] = None,
+    product_id: Optional[int] = None,
+    evidence_id: Optional[int] = None,
+    resolution_kind: Optional[str] = None,
+    resolved_by_user_id: Optional[int] = None,
+) -> models.OfflineReceiptIssue:
+    """Build one issue row. Version 0 and no ACK path: 0005 enforces both.
+
+    A row is either born OPEN, or born RESOLVED when it is purely informational.
+    It can never be born ACKNOWLEDGED — that is somebody taking responsibility,
+    so it has to be an audited transition with a reason.
+    """
+    resolved = resolution_kind is not None
+    return models.OfflineReceiptIssue(
+        order_id=order_id,
+        order_item_id=order_item_id,
+        product_id=product_id,
+        issue_code=issue_code,
+        evidence_kind=evidence_kind,
+        evidence_id=evidence_id,
+        severity=severity,
+        state=STATE_RESOLVED if resolved else STATE_OPEN,
+        reason=None,
+        opened_at=opened_at,
+        resolved_at=opened_at if resolved else None,
+        resolved_by_user_id=resolved_by_user_id if resolved else None,
+        resolution_kind=resolution_kind,
+        state_version=0,
+    )
+
+
 def _ca_phu_gio_ban(
     db: Session, shop_id: int, user_id: int, luc_ban: datetime
 ) -> Optional[models.CashShift]:
@@ -419,14 +494,20 @@ def dong_bo_phieu(
                     status_code=400,
                     detail=tr("Tổng tiền phiếu vượt giới hạn"),
                 )
-            dong_hang.append({"prod": prod, "mh": mh})
+            # Cờ ghi ở mức DÒNG, không phải mức đơn: bảng issue cần biết đúng
+            # dòng nào hỏng, còn `van_de` chỉ là bản sao tương thích của đơn.
+            thieu_sp = prod is None
+            gia_doi = prod is not None and _tien(prod.price) != mh.unit_price_vnd
+            dong_hang.append(
+                {"prod": prod, "mh": mh, "thieu_sp": thieu_sp, "gia_doi": gia_doi}
+            )
 
-            if prod is None:
+            if thieu_sp:
                 # Sản phẩm bị xóa giữa lúc bán và lúc sync. Vẫn ghi dòng tiền bằng
                 # tên đã chụp, để khoản tiền trong két còn tra được về đâu.
                 if ISSUE_SP_KHONG_CON not in van_de:
                     van_de.append(ISSUE_SP_KHONG_CON)
-            elif _tien(prod.price) != mh.unit_price_vnd:
+            elif gia_doi:
                 if ISSUE_GIA_DOI not in van_de:
                     van_de.append(ISSUE_GIA_DOI)
 
@@ -552,19 +633,85 @@ def dong_bo_phieu(
             db.add(dong)
             db.flush()
 
+            if cap["thieu_sp"]:
+                # Không auto-resolve: map lại sản phẩm hoặc chấp nhận giá vốn
+                # unknown là việc của owner ở I09-G, không phải nút "đã xem".
+                db.add(
+                    _issue_moi(
+                        order_id=don.id,
+                        issue_code=ISSUE_SP_KHONG_CON,
+                        evidence_kind=EVIDENCE_CATALOG,
+                        severity=SEVERITY_ACTION,
+                        opened_at=now_text,
+                        order_item_id=dong.id,
+                    )
+                )
+            elif cap["gia_doi"]:
+                db.add(
+                    _issue_moi(
+                        order_id=don.id,
+                        issue_code=ISSUE_GIA_DOI,
+                        evidence_kind=EVIDENCE_CATALOG,
+                        severity=SEVERITY_INFO,
+                        opened_at=now_text,
+                        order_item_id=dong.id,
+                        product_id=prod.id if prod else None,
+                        resolution_kind=RESOLUTION_INFORMATIONAL,
+                        resolved_by_user_id=user_id,
+                    )
+                )
+
             if prod is not None and prod.track_batches and unallocated_qty > 0:
                 # Do not invent a batch for goods that had already left the shop.
                 # This row is the durable, per-product/exact-quantity evidence that
                 # makes the deliberate Product.stock < SUM(batch.quantity) gap
                 # restart-verifiable until a batch stocktake reconciles it.
+                bang_chung_lo = models.OfflineBatchStockDeficit(
+                    order_item_id=dong.id,
+                    product_id=prod.id,
+                    deficit_quantity=unallocated_qty,
+                    remaining_quantity=unallocated_qty,
+                    resolution_kind=None,
+                    state_version=0,
+                )
+                db.add(bang_chung_lo)
+                db.flush()  # cần id để issue trỏ đúng bằng chứng
                 db.add(
-                    models.OfflineBatchStockDeficit(
+                    _issue_moi(
+                        order_id=don.id,
+                        issue_code=ISSUE_TON_AM,
+                        evidence_kind=EVIDENCE_BATCH_DEFICIT,
+                        severity=SEVERITY_ACTION,
+                        opened_at=now_text,
                         order_item_id=dong.id,
                         product_id=prod.id,
-                        deficit_quantity=unallocated_qty,
-                        remaining_quantity=unallocated_qty,
-                        resolution_kind=None,
-                        state_version=0,
+                        evidence_id=bang_chung_lo.id,
+                    )
+                )
+            elif prod is not None and not prod.track_batches and thieu > 0:
+                # Exact per-line evidence for a product without batches. The only
+                # other trace is the aggregate `products.cost_deficit_qty`, which
+                # can never be attributed back to a line — so it can never say
+                # which issue a stocktake just closed.
+                bang_chung = models.OfflineStockDeficit(
+                    order_item_id=dong.id,
+                    product_id=prod.id,
+                    deficit_quantity=thieu,
+                    remaining_quantity=thieu,
+                    state_version=0,
+                )
+                db.add(bang_chung)
+                db.flush()
+                db.add(
+                    _issue_moi(
+                        order_id=don.id,
+                        issue_code=ISSUE_TON_AM,
+                        evidence_kind=EVIDENCE_STOCK_DEFICIT,
+                        severity=SEVERITY_ACTION,
+                        opened_at=now_text,
+                        order_item_id=dong.id,
+                        product_id=prod.id,
+                        evidence_id=bang_chung.id,
                     )
                 )
 
@@ -587,6 +734,21 @@ def dong_bo_phieu(
                         )
                     )
 
+        # Vấn đề về ca thuộc về cả phiếu, không thuộc dòng hàng nào.
+        for ma_ca in (ISSUE_CA_DA_CHOT, ISSUE_KHONG_CO_CA):
+            if ma_ca in van_de:
+                db.add(
+                    _issue_moi(
+                        order_id=don.id,
+                        issue_code=ma_ca,
+                        evidence_kind=EVIDENCE_SHIFT,
+                        severity=SEVERITY_ACTION,
+                        opened_at=now_text,
+                    )
+                )
+
+        # Bản sao tương thích. Màn Đối Soát đọc `offline_receipt_issues`, nhưng
+        # chuỗi này vẫn được ghi để lịch sử, verifier 0005 và client cũ khớp nhau.
         if van_de:
             don.offline_issue = ",".join(van_de)
 
@@ -635,25 +797,249 @@ def dong_bo_phieu(
     return _phan_hoi(don, moi=True)
 
 
-def danh_sach_can_xu_ly(db: Session, shop_id: int) -> List[Dict[str, Any]]:
-    """Đơn offline có vướng mắc, để chủ shop xử lý. Mới nhất trước."""
-    don = (
-        db.query(models.Order)
-        .filter(
-            models.Order.shop_id == shop_id,
-            models.Order.offline_issue.isnot(None),
+def _remaining_theo_evidence(
+    db: Session, issues: List[models.OfflineReceiptIssue]
+) -> Dict[Tuple[str, int], int]:
+    """Đọc phần còn thiếu của từng bằng chứng, gom theo (kind, id)."""
+    can_ids: Dict[str, List[int]] = {
+        EVIDENCE_STOCK_DEFICIT: [],
+        EVIDENCE_BATCH_DEFICIT: [],
+    }
+    for issue in issues:
+        if issue.evidence_kind in can_ids and issue.evidence_id is not None:
+            can_ids[issue.evidence_kind].append(int(issue.evidence_id))
+
+    remaining: Dict[Tuple[str, int], int] = {}
+    if can_ids[EVIDENCE_STOCK_DEFICIT]:
+        for row in (
+            db.query(models.OfflineStockDeficit)
+            .filter(models.OfflineStockDeficit.id.in_(can_ids[EVIDENCE_STOCK_DEFICIT]))
+            .all()
+        ):
+            remaining[(EVIDENCE_STOCK_DEFICIT, int(row.id))] = int(
+                row.remaining_quantity or 0
+            )
+    if can_ids[EVIDENCE_BATCH_DEFICIT]:
+        for row in (
+            db.query(models.OfflineBatchStockDeficit)
+            .filter(
+                models.OfflineBatchStockDeficit.id.in_(can_ids[EVIDENCE_BATCH_DEFICIT])
+            )
+            .all()
+        ):
+            remaining[(EVIDENCE_BATCH_DEFICIT, int(row.id))] = int(
+                row.remaining_quantity or 0
+            )
+    return remaining
+
+
+def danh_sach_can_xu_ly(
+    db: Session, shop_id: int, state: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Đơn offline có vướng mắc, để chủ shop xử lý. Mới nhất trước.
+
+    Đọc `offline_receipt_issues`, KHÔNG lọc bằng chuỗi `orders.offline_issue`:
+    chuỗi đó không nói được dòng nào hỏng, còn thiếu bao nhiêu hay ai đã xác
+    nhận, nên một đơn đã xử lý xong vẫn nằm mãi trên màn "Cần xử lý".
+
+    Mặc định chỉ trả `OPEN`. Đơn đã ACK/RESOLVED rời khỏi danh sách việc phải
+    làm nhưng vẫn tra lại được bằng `state=ACKNOWLEDGED|RESOLVED|ALL`.
+
+    KHÔNG trả fingerprint, UUID, `reason` thô, token hay giá vốn: đây là màn
+    danh sách, và mấy thứ đó hoặc là bằng chứng nội bộ hoặc là số nhạy cảm.
+    """
+    state = (state or STATE_OPEN).strip().upper()
+    if state != "ALL" and state not in ISSUE_STATES:
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Trạng thái vướng mắc không hợp lệ"),
         )
-        .order_by(models.Order.sold_offline_at.desc())
-        .all()
+
+    query = (
+        db.query(models.OfflineReceiptIssue, models.Order)
+        .join(models.Order, models.Order.id == models.OfflineReceiptIssue.order_id)
+        .filter(models.Order.shop_id == shop_id)
     )
-    return [
-        {
-            "order_id": o.id,
-            "sold_at": o.sold_offline_at,
-            "total": _tien(o.total_amount),
-            "device": o.offline_device,
-            "shift_id": o.shift_id,
-            "issues": [x for x in (o.offline_issue or "").split(",") if x],
-        }
-        for o in don
-    ]
+    if state != "ALL":
+        query = query.filter(models.OfflineReceiptIssue.state == state)
+    cap = query.order_by(models.OfflineReceiptIssue.id).all()
+
+    issues = [issue for issue, _order in cap]
+    remaining = _remaining_theo_evidence(db, issues)
+
+    theo_don: Dict[int, Dict[str, Any]] = {}
+    for issue, order in cap:
+        muc = theo_don.get(order.id)
+        if muc is None:
+            muc = {
+                "order_id": order.id,
+                "sold_at": order.sold_offline_at,
+                "total": _tien(order.total_amount),
+                "device": order.offline_device,
+                "shift_id": order.shift_id,
+                "issues": [],
+                "issue_details": [],
+            }
+            theo_don[order.id] = muc
+        if issue.issue_code not in muc["issues"]:
+            muc["issues"].append(issue.issue_code)
+        muc["issue_details"].append({
+            "id": issue.id,
+            "code": issue.issue_code,
+            "severity": issue.severity,
+            "state": issue.state,
+            "evidence_kind": issue.evidence_kind,
+            "order_item_id": issue.order_item_id,
+            "remaining_quantity": remaining.get(
+                (issue.evidence_kind, issue.evidence_id)
+            ),
+            "state_version": int(issue.state_version or 0),
+        })
+
+    return sorted(
+        theo_don.values(),
+        # Mới nhất trước như cũ; `order_id` giữ thứ tự tất định khi hai đơn cùng
+        # mốc bán, và khi `sold_offline_at` NULL ở dữ liệu cũ.
+        key=lambda muc: (muc["sold_at"] is not None, muc["sold_at"], muc["order_id"]),
+        reverse=True,
+    )
+
+
+def _require_shop_owner_or_admin(
+    db: Session, shop_id: int, current_user: models.User
+) -> models.Shop:
+    """Chỉ chủ shop và ADMIN. Nhân viên kho KHÔNG được xác nhận thay.
+
+    Xác nhận một vướng mắc là nhận trách nhiệm về một khoản tiền đã phát sinh -
+    hẹp hơn hẳn quyền kiểm kê, cùng vòng người với quyền xem giá vốn.
+    """
+    shop = require_shop_access(db, shop_id, current_user)
+    if not has_cost_visibility(shop, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail=tr("Chỉ chủ cửa hàng mới xác nhận được vướng mắc offline"),
+        )
+    return shop
+
+
+def xac_nhan_van_de(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    issue_id: int,
+    payload: OfflineIssueAcknowledge,
+) -> Dict[str, Any]:
+    """Chủ shop xác nhận đã xem một vướng mắc không có bằng chứng để đóng.
+
+    Nút này KHÔNG sửa được kho, giá vốn hay tiền. Vì vậy nó chỉ áp cho các vướng
+    mắc mà không có gì exact để đối chiếu; những cái còn lại phải đi đúng đường
+    của chúng:
+
+    - `TON_AM` exact: chỉ một phiếu kiểm kê dương mới chứng minh hàng đã về;
+    - `SP_KHONG_CON`: map lại sản phẩm hoặc chấp nhận giá vốn unknown là I09-G,
+      biến nút "đã xem" thành đường sửa giá vốn là ghi một con số không có thật.
+    """
+    _require_shop_owner_or_admin(db, shop_id, current_user)
+    reason = (payload.reason or "").strip()
+    if not reason:
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Lý do xác nhận không được để trống"),
+        )
+
+    try:
+        issue = (
+            db.query(models.OfflineReceiptIssue)
+            .join(models.Order, models.Order.id == models.OfflineReceiptIssue.order_id)
+            .filter(
+                models.OfflineReceiptIssue.id == issue_id,
+                models.Order.shop_id == shop_id,
+            )
+            .first()
+        )
+        if issue is None:
+            raise HTTPException(
+                status_code=404, detail=tr("Không tìm thấy vướng mắc offline")
+            )
+
+        if issue.evidence_kind in (EVIDENCE_STOCK_DEFICIT, EVIDENCE_BATCH_DEFICIT):
+            raise _xung_dot(
+                ERROR_ISSUE_EVIDENCE_REQUIRED,
+                "Vướng mắc này chỉ đóng được bằng phiếu kiểm kê thực tế",
+            )
+        if issue.issue_code == ISSUE_SP_KHONG_CON:
+            raise _xung_dot(
+                ERROR_ISSUE_RECOVERY_REQUIRED,
+                "Vướng mắc này cần map lại sản phẩm hoặc xác nhận giá vốn",
+            )
+        if issue.issue_code not in ACKNOWLEDGEABLE_ISSUE_CODES and (
+            issue.evidence_kind != EVIDENCE_LEGACY_AMBIGUOUS
+        ):
+            raise _xung_dot(
+                ERROR_ISSUE_RECOVERY_REQUIRED,
+                "Vướng mắc này không xác nhận bằng tay được",
+            )
+
+        # Đọc trước khi commit: `commit()` expire mọi ORM object, và response
+        # không được phụ thuộc vào một lần refresh sau đó.
+        order_id = int(issue.order_id)
+        issue_code = str(issue.issue_code)
+        old_state = issue.state
+        old_version = int(issue.state_version or 0)
+        new_version = old_version + 1
+        acknowledged_at = canonical_time_text(datetime.utcnow())
+        result = db.execute(
+            text(
+                """UPDATE offline_receipt_issues
+                      SET state = 'ACKNOWLEDGED',
+                          reason = :reason,
+                          resolved_by_user_id = :actor,
+                          resolved_at = :acknowledged_at,
+                          state_version = state_version + 1
+                    WHERE id = :id AND state = 'OPEN'
+                      AND state_version = :version"""
+            ),
+            {
+                "reason": reason,
+                "actor": int(current_user.id),
+                "acknowledged_at": acknowledged_at,
+                "id": int(issue_id),
+                "version": int(payload.state_version),
+            },
+        )
+        if result.rowcount != 1 or old_state != STATE_OPEN or (
+            old_version != int(payload.state_version)
+        ):
+            # Ai đó vừa xử lý xong, hoặc máy khách đang cầm phiên bản cũ. Ghi đè
+            # là xóa mất quyết định vừa rồi mà không ai biết.
+            raise _xung_dot(
+                ERROR_ISSUE_STATE_CONFLICT,
+                "Vướng mắc đã đổi trạng thái; vui lòng tải lại",
+            )
+
+        # Transaction-local: không dùng `log_system_action()` vì helper đó tự
+        # commit và nuốt lỗi, tức là có thể có một xác nhận không còn dấu vết ai
+        # đã bấm. `reason` thô không đi ra response, nhưng audit thì phải có.
+        order_service._them_nhat_ky(
+            db,
+            int(current_user.id),
+            "OFFLINE_ISSUE_ACK",
+            (
+                f"Đơn #{order_id} - vướng {issue_code}: "
+                f"{old_state} -> {STATE_ACKNOWLEDGED} (v{new_version}). "
+                f"Lý do: {reason}"
+            ),
+            shop_id=shop_id,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "id": int(issue_id),
+        "order_id": order_id,
+        "code": issue_code,
+        "state": STATE_ACKNOWLEDGED,
+        "state_version": new_version,
+    }

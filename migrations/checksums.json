@@ -20,6 +20,11 @@
       "down_revision": "0003_i05_integer_vnd_cost_basis",
       "path": "versions/0004_i09_offline_receipts.py",
       "sha256": "572c969914b6517f84a2b5a2bd9c3477e79f9deb88f50fe2c77b3384d487d506"
+    },
+    "0005_i09c_offline_issue_lifecycle": {
+      "down_revision": "0004_i09_offline_receipts",
+      "path": "versions/0005_i09c_offline_issue_lifecycle.py",
+      "sha256": "c4ffcb31bb6f50786ee228cead5202e716abc50eebac93dfba4813de457c4716"
     }
   }
 }

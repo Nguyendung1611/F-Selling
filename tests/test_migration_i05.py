@@ -23,6 +23,7 @@ ROOT = "0001_legacy_9cf7106_baseline"
 I04 = "0002_i04_operational_tables"
 I05 = "0003_i05_integer_vnd_cost_basis"
 I09 = "0004_i09_offline_receipts"
+I09C = "0005_i09c_offline_issue_lifecycle"
 
 
 def _i05_module(coordinator: MigrationCoordinator):
@@ -56,8 +57,17 @@ def _connect(path: Path) -> sqlite3.Connection:
 
 
 def _insert_shop(connection: sqlite3.Connection) -> None:
+    # A shop with a real owner: 0005 names an accountable principal on any
+    # issue row it backfills as already resolved.
     connection.execute(
-        "INSERT INTO shops (id, name, is_active) VALUES (1, 'I05 temp shop', 1)"
+        """INSERT INTO users
+           (id, username, hashed_password, role, is_verified, is_active,
+            failed_login_count, verification_attempts)
+           VALUES (1, 'i05-owner', 'x', 'SELLER', 1, 1, 0, 0)"""
+    )
+    connection.execute(
+        "INSERT INTO shops (id, name, is_active, owner_id)"
+        " VALUES (1, 'I05 temp shop', 1, 1)"
     )
 
 
@@ -138,15 +148,15 @@ def test_fresh_0001_0002_0003_and_i04_upgrade_are_linear(tmp_path):
     assert coordinator.init() == [ROOT]
     assert coordinator.upgrade(I04) == [I04]
     assert coordinator.status().current_revision == I04
-    assert coordinator.upgrade("head") == [I05, I09]
+    assert coordinator.upgrade("head") == [I05, I09, I09C]
     report = coordinator.verify()
-    assert report.current_revision == report.head_revision == I09
-    assert report.revision_count == 4
+    assert report.current_revision == report.head_revision == I09C
+    assert report.revision_count == 5
     assert coordinator.upgrade("head") == []
 
     connection = _connect(database)
     try:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (I09,)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (I09C,)
         assert connection.execute(
             "SELECT type FROM pragma_table_info('orders') WHERE name='total_vnd'"
         ).fetchone() == ("INTEGER",)
@@ -190,7 +200,7 @@ def test_exact_legacy_conversion_allocation_and_unknown_cost(tmp_path):
     finally:
         connection.close()
 
-    assert coordinator.upgrade() == [I05, I09]
+    assert coordinator.upgrade() == [I05, I09, I09C]
     coordinator.verify()
     connection = _connect(database)
     try:
@@ -236,7 +246,7 @@ def test_i04_tracked_ton_am_gap_migrates_with_exact_durable_evidence(
     finally:
         connection.close()
 
-    assert coordinator.upgrade() == [I05, I09]
+    assert coordinator.upgrade() == [I05, I09, I09C]
     coordinator.verify()
     connection = _connect(database)
     try:
@@ -572,12 +582,6 @@ def test_nonempty_positive_ledgers_backfill_and_required_triggers_are_durable(tm
     coordinator = _at_i04(database)
     connection = _connect(database)
     try:
-        connection.execute(
-            """INSERT INTO users
-               (id, username, hashed_password, role, is_verified, is_active,
-                failed_login_count, verification_attempts)
-               VALUES (1, 'i05-ledger-user', 'x', 'SELLER', 1, 1, 0, 0)"""
-        )
         _insert_shop(connection)
         connection.execute(
             """INSERT INTO orders
@@ -608,7 +612,7 @@ def test_nonempty_positive_ledgers_backfill_and_required_triggers_are_durable(tm
         connection.close()
 
 
-    assert coordinator.upgrade() == [I05, I09]
+    assert coordinator.upgrade() == [I05, I09, I09C]
     coordinator.verify()
     connection = _connect(database)
     try:

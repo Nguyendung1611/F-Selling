@@ -502,7 +502,7 @@ def open_offline_batch_deficit_qty(db: Session, product_id: int) -> int:
 
 
 def close_offline_batch_deficits_after_stocktake(
-    db: Session, product_id: int
+    db: Session, product_id: int, *, actor_user_id: int, resolved_at: str
 ) -> int:
     """Close exact open evidence after stocktake rebuilds Product.stock."""
     rows = (
@@ -520,7 +520,347 @@ def close_offline_batch_deficits_after_stocktake(
         row.remaining_quantity = 0
         row.resolution_kind = "STOCKTAKE"
         row.state_version = int(row.state_version or 0) + 1
+        resolve_issue_for_evidence(
+            db,
+            evidence_kind="OFFLINE_BATCH_DEFICIT",
+            evidence_id=int(row.id),
+            actor_user_id=actor_user_id,
+            resolved_at=resolved_at,
+        )
     return closed
+
+
+# ------------------------------------------------- exact non-batch evidence
+#
+# The tracked twin above lives in migration 0003 and is unchanged.  Everything
+# below belongs to `offline_stock_deficits` (0004 schema, 0005 guards), which
+# covers products WITHOUT `track_batches`.  The two never share a validator:
+# a tracked row is only ever open-or-closed, while a non-batch row may sit at a
+# partial remainder, so the tracked partial rules would wave real corruption
+# through.
+#
+# `products.cost_deficit_qty` is deliberately never read here.  It is an
+# aggregate that cannot be attributed back to an order line, so it can never
+# say which piece of evidence a stocktake just closed.
+
+
+def _deficit_snapshot_error() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "OFFLINE_DEFICIT_EVIDENCE_INVALID",
+            "message": tr("Evidence tồn âm offline không hợp lệ"),
+        },
+    )
+
+
+def offline_stock_deficit_state(db: Session, product_id: int) -> Dict[str, Any]:
+    """Return an ABA-safe snapshot and exact open quantity for one product.
+
+    The token covers identity, provenance, remaining, resolution and version of
+    every row, so a deficit that was closed and a new one opened between reading
+    and applying a stocktake produces a different token even when the open total
+    is unchanged.
+    """
+    rows = (
+        db.query(models.OfflineStockDeficit)
+        .filter(models.OfflineStockDeficit.product_id == int(product_id))
+        .order_by(models.OfflineStockDeficit.id)
+        .all()
+    )
+    total = 0
+    token_parts = ["i09c", str(int(product_id))]
+    for row in rows:
+        raw_values = (
+            row.id,
+            row.order_item_id,
+            row.product_id,
+            row.deficit_quantity,
+            row.remaining_quantity,
+            row.state_version,
+        )
+        if any(
+            not isinstance(value, int) or isinstance(value, bool)
+            for value in raw_values
+        ):
+            raise _deficit_snapshot_error()
+        original = row.deficit_quantity
+        remaining = row.remaining_quantity
+        version = row.state_version
+        resolution = row.resolution_kind
+        actor = row.resolved_by_user_id
+        resolved_at = row.resolved_at
+        if (
+            original <= 0
+            or original > MAX_SAFE_QUANTITY
+            or remaining < 0
+            or remaining > original
+            or version < 0
+            # Each legal update drops remaining by at least one and raises the
+            # version by exactly one, so the version can never outrun the total
+            # reduction, and any reduction must have bumped it at least once.
+            or version > original - remaining
+            or (remaining < original and version < 1)
+            or (remaining == original and version != 0)
+            or (
+                remaining > 0
+                and (
+                    resolution is not None
+                    or actor is not None
+                    or resolved_at is not None
+                    or row.resolution_reason is not None
+                )
+            )
+            or (
+                remaining == 0
+                and (
+                    resolution != "STOCKTAKE"
+                    or actor is None
+                    or not isinstance(resolved_at, str)
+                    or len(resolved_at) != 26
+                )
+            )
+        ):
+            raise _deficit_snapshot_error()
+        if total > MAX_SAFE_QUANTITY - remaining:
+            raise HTTPException(
+                status_code=409,
+                detail=tr("Tổng evidence tồn âm offline vượt giới hạn"),
+            )
+        total += remaining
+        token_parts.append(
+            ":".join(
+                (
+                    str(row.id),
+                    str(row.order_item_id),
+                    str(row.product_id),
+                    str(original),
+                    str(remaining),
+                    str(resolution or "OPEN"),
+                    str(actor if actor is not None else "-"),
+                    str(resolved_at or "-"),
+                    str(version),
+                )
+            )
+        )
+    snapshot = "i09c:" + hashlib.sha256(
+        "|".join(token_parts).encode("ascii")
+    ).hexdigest()
+    return {"snapshot": snapshot, "open_quantity": total}
+
+
+def open_offline_stock_deficit_qty(db: Session, product_id: int) -> int:
+    """Return exact unresolved non-batch offline evidence for one product."""
+    return int(offline_stock_deficit_state(db, product_id)["open_quantity"])
+
+
+def _cas_conflict() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "OFFLINE_DEFICIT_CAS_CONFLICT",
+            "message": tr(
+                "Evidence tồn âm offline đã đổi trong lúc kiểm kê; "
+                "vui lòng bắt đầu lại dòng này"
+            ),
+        },
+    )
+
+
+def _issue_link_invalid() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "OFFLINE_ISSUE_EVIDENCE_LINK_INVALID",
+            "message": tr("Bằng chứng tồn âm offline thiếu vướng mắc đi kèm"),
+        },
+    )
+
+
+def _issue_state_conflict() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "OFFLINE_ISSUE_STATE_CONFLICT",
+            "message": tr("Vướng mắc đã đổi trạng thái; vui lòng tải lại"),
+        },
+    )
+
+
+def resolve_issue_for_evidence(
+    db: Session,
+    *,
+    evidence_kind: str,
+    evidence_id: int,
+    actor_user_id: int,
+    resolved_at: str,
+) -> None:
+    """Move the TON_AM issue owning this evidence to RESOLVED, or refuse.
+
+    There is exactly one issue per piece of exact evidence - migration 0005
+    verifies it and the ingest path creates it.  So anything else here is
+    corruption, not a legacy shape: returning quietly would close a shortfall
+    while the job of investigating it disappears from the Đối Soát screen, or
+    while somebody else's decision (an acknowledgement) is silently overwritten.
+
+    The CAS is pinned to the exact issue code and evidence identity as well as
+    the observed version, so a concurrent transition loses instead of winning
+    by accident.
+    """
+    issues = (
+        db.query(models.OfflineReceiptIssue)
+        .filter(
+            models.OfflineReceiptIssue.evidence_kind == evidence_kind,
+            models.OfflineReceiptIssue.evidence_id == int(evidence_id),
+            models.OfflineReceiptIssue.issue_code == "TON_AM",
+        )
+        .all()
+    )
+    if len(issues) != 1:
+        # Missing, duplicated, or wearing a different code: in every case the
+        # evidence has no single owner to resolve.
+        raise _issue_link_invalid()
+    issue = issues[0]
+    if issue.state != "OPEN":
+        raise _issue_state_conflict()
+
+    order_id = int(issue.order_id)
+    issue_code = str(issue.issue_code)
+    new_version = int(issue.state_version or 0) + 1
+    result = db.execute(
+        text(
+            """UPDATE offline_receipt_issues
+                  SET state = 'RESOLVED',
+                      resolution_kind = 'STOCKTAKE',
+                      resolved_by_user_id = :actor,
+                      resolved_at = :resolved_at,
+                      state_version = state_version + 1
+                WHERE id = :id AND state = 'OPEN'
+                  AND state_version = :version
+                  AND issue_code = :issue_code
+                  AND evidence_kind = :kind AND evidence_id = :evidence_id"""
+        ),
+        {
+            "actor": int(actor_user_id),
+            "resolved_at": resolved_at,
+            "id": int(issue.id),
+            "version": new_version - 1,
+            "issue_code": issue_code,
+            "kind": evidence_kind,
+            "evidence_id": int(evidence_id),
+        },
+    )
+    if result.rowcount != 1:
+        raise _cas_conflict()
+
+    # One audit row per transition, transaction-local.  A stocktake line in the
+    # generic log cannot say WHICH problem stopped being somebody's job, and
+    # `log_system_action()` would commit by itself and swallow its own failure.
+    shop_id = db.execute(
+        text("SELECT shop_id FROM orders WHERE id = :id"), {"id": order_id}
+    ).scalar()
+    db.add(
+        models.SystemLog(
+            user_id=int(actor_user_id),
+            shop_id=int(shop_id) if shop_id is not None else None,
+            action="OFFLINE_ISSUE_RESOLVED",
+            details=(
+                f"Đơn #{order_id} - vướng {issue_code}: OPEN -> RESOLVED "
+                f"(v{new_version}) do kiểm kê thực tế"
+            ),
+        )
+    )
+    db.expire(issue)
+
+
+def reconcile_offline_stock_deficits(
+    db: Session,
+    product_id: int,
+    quantity: int,
+    *,
+    actor_user_id: int,
+    resolved_at: str,
+) -> int:
+    """Consume `quantity` of open non-batch evidence, oldest evidence first.
+
+    FIFO by `id ASC` so the reduction is deterministic when one product carries
+    several deficits.  Every row is written with a conditional UPDATE over its
+    whole immutable/state tuple plus the version: a row that moved since the
+    snapshot cannot be reduced twice, and two deficits of one product can never
+    close each other's quantity.
+    """
+    remaining_to_apply = int(quantity)
+    if remaining_to_apply <= 0:
+        return 0
+    rows = (
+        db.query(models.OfflineStockDeficit)
+        .filter(
+            models.OfflineStockDeficit.product_id == int(product_id),
+            models.OfflineStockDeficit.remaining_quantity > 0,
+        )
+        .order_by(models.OfflineStockDeficit.id)
+        .all()
+    )
+    applied = 0
+    for row in rows:
+        if remaining_to_apply <= 0:
+            break
+        old_remaining = int(row.remaining_quantity or 0)
+        take = min(old_remaining, remaining_to_apply)
+        new_remaining = old_remaining - take
+        closing = new_remaining == 0
+        result = db.execute(
+            text(
+                """UPDATE offline_stock_deficits
+                      SET remaining_quantity = :new_remaining,
+                          resolution_kind = :kind,
+                          resolved_by_user_id = :actor,
+                          resolved_at = :resolved_at,
+                          state_version = state_version + 1
+                    WHERE id = :id
+                      AND order_item_id = :order_item_id
+                      AND product_id = :product_id
+                      AND deficit_quantity = :deficit
+                      AND remaining_quantity = :old_remaining
+                      AND state_version = :version
+                      AND resolution_kind IS NULL
+                      AND resolved_by_user_id IS NULL
+                      AND resolved_at IS NULL
+                      AND resolution_reason IS NULL"""
+            ),
+            {
+                "new_remaining": new_remaining,
+                # A partial reduction keeps every resolution field NULL: the
+                # line is still missing goods, so nothing has been resolved.
+                "kind": "STOCKTAKE" if closing else None,
+                "actor": int(actor_user_id) if closing else None,
+                "resolved_at": resolved_at if closing else None,
+                "id": int(row.id),
+                "order_item_id": int(row.order_item_id),
+                "product_id": int(row.product_id),
+                "deficit": int(row.deficit_quantity),
+                "old_remaining": old_remaining,
+                "version": int(row.state_version or 0),
+            },
+        )
+        if result.rowcount != 1:
+            raise _cas_conflict()
+        db.expire(row)
+        applied += take
+        remaining_to_apply -= take
+        if closing:
+            resolve_issue_for_evidence(
+                db,
+                evidence_kind="OFFLINE_STOCK_DEFICIT",
+                evidence_id=int(row.id),
+                actor_user_id=actor_user_id,
+                resolved_at=resolved_at,
+            )
+    if applied != int(quantity):
+        # The caller already clamped to the open total under the snapshot, so a
+        # shortfall here means the evidence moved underneath this transaction.
+        raise _cas_conflict()
+    return applied
 
 
 def doi_chieu_ton_kho(db: Session, shop_id: int) -> List[Dict[str, Any]]:

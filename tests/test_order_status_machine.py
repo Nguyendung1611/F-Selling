@@ -14,6 +14,8 @@ import threading
 import pytest
 from conftest import PAYMENT_SUMMARY_KEYS, auth, seller_with_shop
 
+from sqlalchemy import or_
+
 from fselling import models
 from fselling.core.database import SessionLocal
 from fselling.routers import webhooks
@@ -82,7 +84,11 @@ def _dem_log(action, order_id):
             session.query(models.SystemLog)
             .filter(
                 models.SystemLog.action == action,
-                models.SystemLog.details.like(f"%{order_id}%"),
+                or_(
+                    models.SystemLog.details.like(f"Order {order_id}:%"),
+                    models.SystemLog.details.like(f"Order {order_id} %"),
+                    models.SystemLog.details.like(f"%#{order_id} %"),
+                ),
             )
             .count()
         )
@@ -175,7 +181,7 @@ def test_thu_cong_bam_trung_tren_don_da_paid_tra_200_im_lang(client):
     }
     assert _trang_thai(order_id) == STATUS_PAID
     # Không ghi thêm log thanh toán cho lần bấm trùng
-    assert _dem_log("PAY_ORDER", f"#{order_id} ") == 1
+    assert _dem_log("PAY_ORDER", order_id) == 1
 
 
 def test_thu_cong_tren_don_da_huy_bi_tu_choi_409(client):

@@ -7,6 +7,7 @@ from ..schemas.order import (
     CashPayment,
     CashTopup,
     DebtPayment,
+    OfflineIssueAcknowledge,
     OfflineOrderCreate,
     OrderCreate,
     OrderReturnCreate,
@@ -52,12 +53,35 @@ def dong_bo_don_offline(
 @router.get("/{shop_id}/offline-issues")
 def don_offline_can_xu_ly(
     shop_id: int,
+    state: str | None = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    """Đơn offline có vướng mắc (tồn âm, ca đã chốt, sản phẩm đã xóa...)."""
+    """Đơn offline có vướng mắc (tồn âm, ca đã chốt, sản phẩm đã xóa...).
+
+    Mặc định chỉ trả vướng mắc `OPEN`. Truyền `state=ACKNOWLEDGED|RESOLVED|ALL`
+    để tra lịch sử những cái đã xử lý xong.
+    """
     require_shop_access(db, shop_id, current_user)
-    return offline_service.danh_sach_can_xu_ly(db, shop_id)
+    return offline_service.danh_sach_can_xu_ly(db, shop_id, state)
+
+
+@router.post("/{shop_id}/offline-issues/{issue_id}/acknowledge")
+def xac_nhan_van_de_offline(
+    shop_id: int,
+    issue_id: int,
+    payload: OfflineIssueAcknowledge,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Chủ shop ghi nhận đã xem một vướng mắc không có bằng chứng để đóng.
+
+    Không đụng tới kho, giá vốn hay tiền: `TON_AM` exact vẫn phải đợi kiểm kê,
+    còn `SP_KHONG_CON` phải đi đường phục hồi.
+    """
+    return offline_service.xac_nhan_van_de(
+        db, current_user, shop_id, issue_id, payload
+    )
 
 
 @router.get("/{order_id}")

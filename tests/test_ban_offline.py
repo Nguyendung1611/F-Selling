@@ -939,6 +939,23 @@ def test_stocktake_reconcile_tracked_ton_am_reports_product_delta_not_batch_delt
         "offline_deficit_reconciled": True,
     }]
     assert _ton_kho(product["id"]) == 5
+
+    # Đóng một TON_AM tracked cũng phải để lại dấu vết riêng, không chỉ nằm gộp
+    # trong dòng log kiểm kê chung.
+    session = SessionLocal()
+    try:
+        audit = session.execute(
+            text(
+                "SELECT shop_id, user_id, details FROM system_logs"
+                " WHERE action = 'OFFLINE_ISSUE_RESOLVED' ORDER BY id DESC LIMIT 1"
+            )
+        ).fetchone()
+    finally:
+        session.close()
+    assert audit is not None, "thiếu audit cho transition RESOLVED"
+    assert audit[0] == ctx["shop_id"]
+    assert audit[1] is not None
+    assert "TON_AM" in audit[2] and "OPEN -> RESOLVED" in audit[2]
     _TEST_MIGRATIONS.verify()
 
 

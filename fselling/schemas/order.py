@@ -75,6 +75,19 @@ class OfflineOrderCreate(BaseModel):
     device_label: Optional[str] = Field(default=None, max_length=64)
 
 
+class OfflineIssueAcknowledge(BaseModel):
+    """Chủ shop xác nhận đã xem một vướng mắc offline.
+
+    `state_version` là phiên bản mà máy khách đang nhìn thấy. Gửi kèm để hai
+    người cùng mở màn Đối Soát không ghi đè quyết định của nhau: bản cũ bị từ
+    chối 409 chứ không âm thầm thắng.
+    """
+
+    # Trimmed và bắt buộc không rỗng - service kiểm lại trước mọi side effect.
+    reason: str = Field(min_length=1, max_length=500)
+    state_version: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+
+
 class PaymentWebhook(BaseModel):
     order_id: int
     status: Optional[str] = "PAID"

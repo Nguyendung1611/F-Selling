@@ -77,9 +77,10 @@ class StocktakeItem(BaseModel):
     stock_snapshot: Optional[int] = None
     batches: Optional[List[StocktakeBatchCount]] = None
     # Durable evidence can change without changing any batch quantity.  The
-    # tracked stocktake endpoint supplies this opaque token and the client must
-    # echo it so apply cannot close a newer offline deficit (including ABA).
-    offline_deficit_snapshot: Optional[str] = Field(default=None, max_length=68)
+    # stocktake endpoint supplies this opaque token - `i05:<sha256>` for tracked
+    # products, `i09c:<sha256>` for the non-batch ones - and the client must echo
+    # it so apply cannot close a newer offline deficit (including ABA).
+    offline_deficit_snapshot: Optional[str] = Field(default=None, max_length=72)
 
 
 class StocktakeApply(BaseModel):

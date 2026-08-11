@@ -106,7 +106,7 @@ def test_module_nap_sau_seller_va_moi_file_dung_dung_phien_ban():
     purchasing_version = "20260807-nha-cung-cap-ui-f9"
     cashflow_version = "20260808-dong-tien-k1"
     locale_version = "20260809-tro-ly-giong-noi"
-    seller_version = "20260811-i05-stocktake-preview"
+    seller_version = "20260811-i09c-deficit-token-refresh"
 
     expected = (
         f"/css/seller.css?v={cashflow_version}",

@@ -3056,10 +3056,16 @@ function kkDem(sp, soLuong) {
         cu.counted += soLuong;
         if (cu.counted < 0) cu.counted = 0;
     } else {
+        // Token evidence tồn âm phải chụp lúc BẮT ĐẦU đếm, đúng như
+        // `stock_snapshot`: server dùng nó để từ chối đóng một bằng chứng đã đổi
+        // trong lúc đếm. Hàng không có evidence thì không có token, và server
+        // cũng không đòi.
+        const deficit = deficitKiemKeTheoSanPham[sp.id] || {};
         phieuKiemKe[sp.id] = {
             theoLo: false,
             counted: Math.max(0, soLuong),
             stock_snapshot: sp.stock,
+            offline_deficit_snapshot: deficit.snapshot || null,
             name: sp.name
         };
     }
@@ -3317,7 +3323,8 @@ async function kkApDung() {
             : {
                 product_id: parseInt(id, 10),
                 counted: d.counted,
-                stock_snapshot: d.stock_snapshot
+                stock_snapshot: d.stock_snapshot,
+                offline_deficit_snapshot: d.offline_deficit_snapshot
             }
     ));
     if (!items.length) return;
@@ -3361,6 +3368,11 @@ async function kkApDung() {
                 if (generation !== currentShopGeneration || currentShopId !== shopId) return;
                 kkHienKetQua(res);
                 phieuKiemKe = {};
+                // Token evidence vừa dùng xong là token chết: server sẽ từ chối
+                // nó ở phiếu sau. Nạp lại map trước khi người dùng bắt đầu đếm
+                // tiếp, nếu không phiếu thứ hai trong cùng tab nhận 409 và
+                // trông như chức năng bị hỏng.
+                await kkNapLo();
                 kkVeBang();
                 loadProducts();
             } catch (e) {

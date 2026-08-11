@@ -176,24 +176,40 @@ def test_dong_thieu_product_id_fail_closed_khong_doi_trang_thai(client):
             .filter(models.OrderItem.order_id == order["order_id"])
             .first()
         )
+        product_id_goc = item.product_id
         item.product_id = None  # giả lập dòng dữ liệu cũ
         session.commit()
     finally:
         session.close()
 
-    ton_truoc = _ton_kho(ctx["product"]["id"])
-    res = _huy(client, ctx, order["order_id"])
-
-    assert res.status_code == 409
-    assert _ton_kho(ctx["product"]["id"]) == ton_truoc, "Không đoán mò theo tên"
-    assert _trang_thai(order["order_id"]) == STATUS_PENDING
-    session = SessionLocal()
     try:
-        current = session.get(models.Order, order["order_id"])
-        assert current.inventory_reversed == 0
-        assert current.items[0].returned_total_qty == 0
+        ton_truoc = _ton_kho(ctx["product"]["id"])
+        res = _huy(client, ctx, order["order_id"])
+
+        assert res.status_code == 409
+        assert _ton_kho(ctx["product"]["id"]) == ton_truoc, "Không đoán mò theo tên"
+        assert _trang_thai(order["order_id"]) == STATUS_PENDING
+        session = SessionLocal()
+        try:
+            current = session.get(models.Order, order["order_id"])
+            assert current.inventory_reversed == 0
+            assert current.items[0].returned_total_qty == 0
+        finally:
+            session.close()
     finally:
-        session.close()
+        # Không để dòng dữ liệu hỏng (product_id=NULL) lọt sang test/file khác
+        # dùng chung DB test.
+        session = SessionLocal()
+        try:
+            item = (
+                session.query(models.OrderItem)
+                .filter(models.OrderItem.order_id == order["order_id"])
+                .first()
+            )
+            item.product_id = product_id_goc
+            session.commit()
+        finally:
+            session.close()
 
 
 # ---------- Voucher ----------
@@ -403,6 +419,8 @@ def test_seller_khac_khong_huy_duoc_don_mo_coi(client):
     require_shop_access và bị chặn - nếu không, ai cũng hủy được đơn của
     người khác chỉ cần shop đó đã bị xóa.
     """
+    from conftest import admin_token
+
     ctx, order = _tao_don(client, quantity=2)
     assert _ton_kho(ctx["product"]["id"]) == 8
 
@@ -415,12 +433,21 @@ def test_seller_khac_khong_huy_duoc_don_mo_coi(client):
     finally:
         session.close()
 
-    _, token_b = new_seller(client)
-    res = client.post(f"/api/orders/{order['order_id']}/cancel", headers=auth(token_b))
+    try:
+        _, token_b = new_seller(client)
+        res = client.post(f"/api/orders/{order['order_id']}/cancel", headers=auth(token_b))
 
-    assert res.status_code == 404, "Seller không được đụng vào đơn mồ côi"
-    assert _ton_kho(ctx["product"]["id"]) == 8, "Không hoàn kho cho người không có quyền"
-    assert _trang_thai(order["order_id"]) == STATUS_PENDING
+        assert res.status_code == 404, "Seller không được đụng vào đơn mồ côi"
+        assert _ton_kho(ctx["product"]["id"]) == 8, "Không hoàn kho cho người không có quyền"
+        assert _trang_thai(order["order_id"]) == STATUS_PENDING
+    finally:
+        # Không để đơn PENDING mồ côi lọt sang test/file khác dùng chung DB
+        # test. Đường admin cancel đã được test riêng ở
+        # test_admin_huy_duoc_don_mo_coi_khi_shop_da_bi_xoa.
+        res_cleanup = client.post(
+            f"/api/orders/{order['order_id']}/cancel", headers=auth(admin_token(client))
+        )
+        assert res_cleanup.status_code == 200, res_cleanup.text
 
 
 def test_chu_shop_cu_van_huy_duoc_don_cua_minh_khi_shop_con_song(client):

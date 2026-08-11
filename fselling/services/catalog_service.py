@@ -38,6 +38,7 @@ from ..dependencies import (
 from ..schemas.catalog import CategoryUpdate
 from . import inventory_service
 from .log_service import log_system_action
+from .offline_fingerprint import canonical_time_text
 
 DEFAULT_PRODUCT_IMAGE = "https://placehold.co/150x150/1E293B/FFF?text=SP"
 
@@ -969,6 +970,11 @@ def lo_de_kiem_ke(
 
     Lô đã về 0 bị loại: nó là lịch sử, không phải hàng trên kệ để đếm.
 
+    Sản phẩm KHÔNG theo lô cũng xuất hiện ở đây, nhưng chỉ khi nó còn evidence
+    tồn âm offline chưa đóng: máy khách cần token snapshot để phiếu đếm không
+    đóng nhầm một bằng chứng mới hơn. Sản phẩm không có evidence thì không có gì
+    để echo nên vẫn đi đường cũ.
+
     KHÔNG trả `cost_price` - đếm hàng không cần biết giá vốn, và endpoint này mở
     cho cả thủ kho.
     """
@@ -981,6 +987,20 @@ def lo_de_kiem_ke(
             models.Product.shop_id == shop_id,
             models.Product.track_batches == True,  # noqa: E712
         )
+        .all()
+    )
+    non_batch = (
+        db.query(models.Product)
+        .join(
+            models.OfflineStockDeficit,
+            models.OfflineStockDeficit.product_id == models.Product.id,
+        )
+        .filter(
+            models.Product.shop_id == shop_id,
+            models.Product.track_batches == False,  # noqa: E712
+            models.OfflineStockDeficit.remaining_quantity > 0,
+        )
+        .distinct()
         .all()
     )
     lo_theo_sp: Dict[int, List[models.ProductBatch]] = {}
@@ -999,6 +1019,10 @@ def lo_de_kiem_ke(
         p.id: inventory_service.offline_batch_deficit_state(db, p.id)
         for p in san_pham
     }
+    deficit_states.update({
+        p.id: inventory_service.offline_stock_deficit_state(db, p.id)
+        for p in non_batch
+    })
 
     return {
         "products": [
@@ -1006,6 +1030,7 @@ def lo_de_kiem_ke(
                 "product_id": p.id,
                 "name": p.name,
                 "stock": p.stock,
+                "track_batches": bool(p.track_batches),
                 "offline_deficit_qty": deficit_states[p.id]["open_quantity"],
                 "offline_deficit_snapshot": deficit_states[p.id]["snapshot"],
                 "batches": [
@@ -1017,7 +1042,7 @@ def lo_de_kiem_ke(
                     for b in lo_theo_sp.get(p.id, [])
                 ],
             }
-            for p in san_pham
+            for p in san_pham + non_batch
         ]
     }
 
@@ -1062,6 +1087,9 @@ def _kiem_ke_theo_lo(
     prod: models.Product,
     batches: List[Any],
     offline_deficit_snapshot: Optional[str],
+    *,
+    actor_user_id: int,
+    resolved_at: str,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Đặt số lượng của TỪNG LÔ bằng số đếm thực tế, rồi dựng lại `Product.stock`.
 
@@ -1198,7 +1226,7 @@ def _kiem_ke_theo_lo(
         prod.stock = rebuilt_stock
         if offline_deficit_before > 0:
             closed = inventory_service.close_offline_batch_deficits_after_stocktake(
-                db, prod.id
+                db, prod.id, actor_user_id=actor_user_id, resolved_at=resolved_at
             )
             if closed != offline_deficit_before:
                 raise HTTPException(
@@ -1347,10 +1375,14 @@ def apply_stocktake(
                         "Sản phẩm '{name}' thiếu số đếm", name=prod.name
                     ),
                 )
+            # `counted` là số món đang cầm trên tay nên không bao giờ âm, nhưng
+            # `stock_snapshot` là TỒN ĐANG GHI, và bán offline lúc hết hàng cố ý
+            # đẩy nó xuống âm (bẫy 28). Chặn snapshot âm là chặn luôn đúng cái
+            # phiếu kiểm kê dùng để chữa khoản thiếu đó.
             if (
                 it.counted < 0
-                or it.stock_snapshot < 0
                 or it.counted > MAX_SAFE_QUANTITY
+                or it.stock_snapshot < -MAX_SAFE_QUANTITY
                 or it.stock_snapshot > MAX_SAFE_QUANTITY
             ):
                 raise HTTPException(
@@ -1360,82 +1392,152 @@ def apply_stocktake(
     da_dieu_chinh: List[Dict[str, Any]] = []
     bo_qua: List[Dict[str, Any]] = []
     khong_doi = 0
+    actor_user_id = int(current_user.id)
+    # One canonical instant for the whole sheet: two rows of the same stocktake
+    # must not be able to disagree about when the count happened.
+    resolved_at = canonical_time_text(datetime.utcnow())
 
-    for it in items:
-        prod = san_pham.get(it.product_id)
-        if prod is None:
-            bo_qua.append({
-                "product_id": it.product_id,
-                "name": None,
-                "ly_do": "Sản phẩm không còn tồn tại trong cửa hàng",
-            })
-            continue
+    try:
+        for it in items:
+            prod = san_pham.get(it.product_id)
+            if prod is None:
+                bo_qua.append({
+                    "product_id": it.product_id,
+                    "name": None,
+                    "ly_do": "Sản phẩm không còn tồn tại trong cửa hàng",
+                })
+                continue
 
-        if prod.track_batches:
-            dieu_chinh, bo = _kiem_ke_theo_lo(
-                db,
-                prod,
-                it.batches,
-                it.offline_deficit_snapshot,
+            if prod.track_batches:
+                dieu_chinh, bo = _kiem_ke_theo_lo(
+                    db,
+                    prod,
+                    it.batches,
+                    it.offline_deficit_snapshot,
+                    actor_user_id=actor_user_id,
+                    resolved_at=resolved_at,
+                )
+                da_dieu_chinh.extend(dieu_chinh)
+                bo_qua.extend(bo)
+                if not dieu_chinh and not bo:
+                    khong_doi += 1
+                continue
+
+            # Read the exact evidence BEFORE touching stock, so the token that
+            # authorizes closing it describes the state this count was made
+            # against - including an ABA round trip that leaves the open total
+            # unchanged.
+            deficit_state = inventory_service.offline_stock_deficit_state(
+                db, prod.id
             )
-            da_dieu_chinh.extend(dieu_chinh)
-            bo_qua.extend(bo)
-            if not dieu_chinh and not bo:
-                khong_doi += 1
-            continue
+            offline_deficit_before = int(deficit_state["open_quantity"])
+            if (
+                it.offline_deficit_snapshot is not None
+                and it.offline_deficit_snapshot != deficit_state["snapshot"]
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "OFFLINE_DEFICIT_SNAPSHOT_STALE",
+                        "message": tr(
+                            "Evidence tồn âm offline đã đổi trong lúc kiểm kê; "
+                            "vui lòng bắt đầu lại dòng này"
+                        ),
+                    },
+                )
+            if offline_deficit_before > 0 and it.offline_deficit_snapshot is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "OFFLINE_DEFICIT_SNAPSHOT_REQUIRED",
+                        "message": tr(
+                            "Phiếu kiểm kê thiếu snapshot evidence tồn âm offline"
+                        ),
+                    },
+                )
 
-        ton_hien_tai = prod.stock or 0
-        if ton_hien_tai != it.stock_snapshot:
-            bo_qua.append({
+            ton_hien_tai = prod.stock or 0
+            if ton_hien_tai != it.stock_snapshot:
+                bo_qua.append({
+                    "product_id": prod.id,
+                    "name": prod.name,
+                    "ly_do": (
+                        f"Tồn kho đã đổi từ {it.stock_snapshot} thành {ton_hien_tai} "
+                        "trong lúc kiểm kê. Vui lòng đếm lại sản phẩm này."
+                    ),
+                })
+                continue
+
+            if ton_hien_tai == it.counted:
+                khong_doi += 1
+                continue
+
+            lech = it.counted - ton_hien_tai
+            if lech > 0:
+                inventory_service.add_cost_pool(prod, lech, None)
+            else:
+                inventory_service.consume_cost_pool(prod, -lech)
+            prod.stock = it.counted
+            dong_ket_qua = {
                 "product_id": prod.id,
                 "name": prod.name,
-                "ly_do": (
-                    f"Tồn kho đã đổi từ {it.stock_snapshot} thành {ton_hien_tai} "
-                    "trong lúc kiểm kê. Vui lòng đếm lại sản phẩm này."
-                ),
-            })
-            continue
+                "truoc": ton_hien_tai,
+                "sau": it.counted,
+                "lech": lech,
+            }
+            # Only goods that actually reappeared may retire the evidence that
+            # they were missing. A count that is unchanged or lower proves
+            # nothing came back, so it leaves every deficit exactly as it was.
+            if lech > 0 and offline_deficit_before > 0:
+                reconcile_qty = min(lech, offline_deficit_before)
+                dong_ket_qua["offline_deficit_reconciled"] = (
+                    inventory_service.reconcile_offline_stock_deficits(
+                        db,
+                        prod.id,
+                        reconcile_qty,
+                        actor_user_id=actor_user_id,
+                        resolved_at=resolved_at,
+                    )
+                )
+            da_dieu_chinh.append(dong_ket_qua)
 
-        if ton_hien_tai == it.counted:
-            khong_doi += 1
-            continue
-
-        lech = it.counted - ton_hien_tai
-        if lech > 0:
-            inventory_service.add_cost_pool(prod, lech, None)
-        else:
-            inventory_service.consume_cost_pool(prod, -lech)
-        prod.stock = it.counted
-        da_dieu_chinh.append({
-            "product_id": prod.id,
-            "name": prod.name,
-            "truoc": ton_hien_tai,
-            "sau": it.counted,
-            "lech": lech,
-        })
-
-    db.commit()
-
-    if da_dieu_chinh:
-        tong_lech = sum(d["lech"] for d in da_dieu_chinh)
-        # Liệt kê tối đa 10 dòng để một phiếu kiểm kê lớn không sinh ra dòng log
-        # dài vô hạn; con số tổng vẫn phản ánh đủ. Dòng theo lô nêu kèm hạn:
-        # không có nó thì cùng một sản phẩm hiện mấy dòng giống hệt nhau.
-        chi_tiet = ", ".join(
-            f"{d['name']}"
-            f"{' HSD ' + (d.get('expiry_date') or '-') if d.get('batch_id') else ''}"
-            f": {d['truoc']}->{d['sau']}"
-            for d in da_dieu_chinh[:10]
-        )
-        if len(da_dieu_chinh) > 10:
-            chi_tiet += f" (và {len(da_dieu_chinh) - 10} dòng khác)"
-        log_system_action(
-            db,
-            current_user.id,
-            "STOCKTAKE",
-            f"Kiểm kê shop {shop_id}: điều chỉnh {len(da_dieu_chinh)} dòng, "
-            f"lệch tổng {tong_lech:+d}. {chi_tiet}",
-        )
+        if da_dieu_chinh:
+            tong_lech = sum(d["lech"] for d in da_dieu_chinh)
+            # Liệt kê tối đa 10 dòng để một phiếu kiểm kê lớn không sinh ra dòng log
+            # dài vô hạn; con số tổng vẫn phản ánh đủ. Dòng theo lô nêu kèm hạn:
+            # không có nó thì cùng một sản phẩm hiện mấy dòng giống hệt nhau.
+            chi_tiet = ", ".join(
+                f"{d['name']}"
+                f"{' HSD ' + (d.get('expiry_date') or '-') if d.get('batch_id') else ''}"
+                f": {d['truoc']}->{d['sau']}"
+                for d in da_dieu_chinh[:10]
+            )
+            if len(da_dieu_chinh) > 10:
+                chi_tiet += f" (và {len(da_dieu_chinh) - 10} dòng khác)"
+            # Transaction-local, NOT `log_system_action()`: that helper commits
+            # by itself and swallows the error, which would leave a closed
+            # deficit and a resolved issue with no record of who closed them.
+            db.add(
+                models.SystemLog(
+                    user_id=current_user.id,
+                    # Ghi tường minh: ADMIN thao tác trên nhiều shop, suy từ
+                    # user_id sẽ hoặc làm log vô hình ở màn "Ai làm gì" của chủ
+                    # shop, hoặc lộ việc của shop khác.
+                    shop_id=shop_id,
+                    action="STOCKTAKE",
+                    details=(
+                        f"Kiểm kê shop {shop_id}: điều chỉnh "
+                        f"{len(da_dieu_chinh)} dòng, lệch tổng {tong_lech:+d}. "
+                        f"{chi_tiet}"
+                    ),
+                )
+            )
+        # Stock, cost pools, offline evidence, issue transitions and audit all
+        # become durable together or not at all.
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     return {
         "da_dieu_chinh": da_dieu_chinh,

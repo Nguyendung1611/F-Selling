@@ -12,7 +12,13 @@ from .catalog import (
 from .customer import Customer
 from .expense import ExpenseCategory, ExpenseTemplate, OperatingExpense
 from .loyalty import LoyaltyPointEntry, LoyaltyProgram
-from .offline import OfflineLease, OfflineReceipt, OfflineReceiptRegistry
+from .offline import (
+    OfflineLease,
+    OfflineReceipt,
+    OfflineReceiptIssue,
+    OfflineReceiptRegistry,
+    OfflineStockDeficit,
+)
 from .order import (
     OfflineBatchStockDeficit,
     Order,
@@ -71,6 +77,8 @@ __all__ = [
     "OfflineLease",
     "OfflineReceiptRegistry",
     "OfflineReceipt",
+    "OfflineReceiptIssue",
+    "OfflineStockDeficit",
     "OfflineBatchStockDeficit",
     "LoyaltyPointEntry",
     "Supplier",
