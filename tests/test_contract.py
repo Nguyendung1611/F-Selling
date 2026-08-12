@@ -123,6 +123,13 @@ ROUTES_BO_SUNG = {
     ("POST", "/api/offline/leases/{lease_id}/heartbeat"),
     ("POST", "/api/offline/leases/{lease_id}/reclaim"),
     ("DELETE", "/api/offline/leases/{lease_id}"),
+    # I09-G1: owner/ADMIN recovery data path. The file checksum is accidental
+    # corruption detection only; every operation still requires JWT shop owner.
+    ("POST", "/api/offline/recovery/{shop_id}/export"),
+    ("POST", "/api/offline/recovery/{shop_id}/import"),
+    ("GET", "/api/offline/recovery/{shop_id}/candidates"),
+    ("GET", "/api/offline/recovery/{shop_id}/candidates/{offline_uuid}"),
+    ("POST", "/api/offline/recovery/{shop_id}/candidates/{offline_uuid}/resolve"),
     # G3: màn "Ai làm gì" của chủ shop. Khác /api/logs/admin: chỉ việc của người
     # thuộc shop này, và đã lọc bỏ hành động không đụng tiền hay kho.
     ("GET", "/api/logs/shop/{shop_id}"),

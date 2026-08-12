@@ -180,3 +180,26 @@ class OfflineReceiptIssue(Base):
     resolved_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     resolution_kind = Column(String, nullable=True)
     state_version = Column(Integer, nullable=False, server_default=text("0"))
+
+
+class OfflineRecoveryAction(Base):
+    """Durable owner-recovery decision paired with a transaction-local audit.
+
+    Migration 0004 owns the table and deliberately requires ``system_log_id``.
+    The ORM mapping is added only when the G1 service starts writing the already
+    released schema; it does not create or alter database objects.
+    """
+
+    __tablename__ = "offline_recovery_actions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    shop_id = Column(Integer, ForeignKey("shops.id"), nullable=False)
+    action_kind = Column(String, nullable=False)
+    original_offline_uuid = Column(String, nullable=False)
+    original_fingerprint = Column(String, nullable=True)
+    replacement_offline_uuid = Column(String, nullable=True)
+    file_digest = Column(String(64), nullable=True)
+    reason = Column(String, nullable=False)
+    performed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    performed_at = Column(String(26), nullable=False)
+    system_log_id = Column(Integer, ForeignKey("system_logs.id"), nullable=False)

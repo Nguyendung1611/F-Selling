@@ -34,6 +34,7 @@ from .routers import (
     forecast,
     loyalty,
     offline_leases,
+    offline_recovery,
     orders,
     pages,
     products,
@@ -212,6 +213,7 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
     application.include_router(webhooks.router)
     application.include_router(orders.router)
     application.include_router(offline_leases.router)
+    application.include_router(offline_recovery.router)
     application.include_router(shifts.router)
     application.include_router(staff.router)
     application.include_router(subscriptions.router)

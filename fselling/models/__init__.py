@@ -14,6 +14,7 @@ from .expense import ExpenseCategory, ExpenseTemplate, OperatingExpense
 from .loyalty import LoyaltyPointEntry, LoyaltyProgram
 from .offline import (
     OfflineLease,
+    OfflineRecoveryAction,
     OfflineReceipt,
     OfflineReceiptItem,
     OfflineReceiptIssue,
@@ -76,6 +77,7 @@ __all__ = [
     "OperatingExpense",
     "LoyaltyProgram",
     "OfflineLease",
+    "OfflineRecoveryAction",
     "OfflineReceiptRegistry",
     "OfflineReceipt",
     "OfflineReceiptItem",

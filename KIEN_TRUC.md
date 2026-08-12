@@ -1696,6 +1696,42 @@ do client khai; server không xác minh được delta, cũng không xác minh �
 điểm con người bán. `sequence` chỉ giữ thứ tự tương đối, không xác minh giờ kế
 toán. Rào chắn thật là cửa sổ lease + revocation.
 
+### 44. File phục hồi offline có checksum nhưng KHÔNG có tính xác thực
+
+I09-G1 export một JSON canonical có version và SHA-256. Hash này chỉ phát hiện
+file hỏng vô ý; người sửa file có thể tính lại hash, nên import/resolve luôn phải
+xác thực JWT hiện tại và chỉ cho đúng owner hoặc ADMIN của shop. Server tự
+canonicalize, tự tính fingerprint/content digest và không dùng client hash,
+client fingerprint, tên sản phẩm hay giá vốn làm bằng chứng quyền hoặc provenance.
+
+Import chỉ giữ registry `ABANDONED`, content digest và audit, không giữ raw file.
+Resolve phải gửi lại đúng file đã import và `state_version`; dưới shop write lock,
+server tạo replacement receipt/fingerprint mới, CAS original thành `SUPERSEDED`
+rồi commit order/items/payment/inventory/cost/issues/recovery action/SystemLog
+trong cùng một transaction. Retry/lost response đọc durable winner; quyết định
+khác trên cùng original bị chặn. Contract v0 vẫn `LEGACY_UNKNOWN/LEGACY`; v1
+owner recovery giữ lease evidence có thật nhưng ghi `OWNER_RECOVERY/RECOVERED`.
+`TON_AM` exact không đi qua API này: chỉ stocktake dương FIFO + snapshot/CAS hiện
+hữu mới được giảm hoặc đóng evidence.
+
+Ba hàng rào correction của G1 cũng là invariant startup. Nếu đã có `Order` cùng
+UUID nhưng chưa có registry/receipt (legacy pre-registry), recovery không thể
+chứng minh file owner gửi lại có cùng nội dung nên phải fail-closed trước cả bước
+stage; không được tạo order thay thế. Với replacement v1 `ACCEPT_UNKNOWN`, claimed
+product inactive nhưng vẫn còn thuộc đúng shop phải được giữ ở
+`OrderItem.product_id` để khớp snapshot/verifier 0006, nhưng Product object không
+được đi vào đường trừ tồn/giá vốn. Claimed ID thiếu/deleted hoặc thuộc shop khác
+vẫn để business FK `NULL`.
+
+Riêng v0 normal-ingested đã có `INGESTED` + `SP_KHONG_CON OPEN`, owner resolve
+trực tiếp trên order hiện hữu, không cần import/file và không tạo doanh
+thu/payment mới. Intent được buộc vào fingerprint durable đã lưu; server không
+bịa lại claimed product ID đã không được snapshot ở contract v0.
+MAP áp phần inventory/cost còn thiếu đúng một lần; ACCEPT_UNKNOWN chỉ đóng issue
+với reason. Order-item, issue và registry đều CAS dưới shop write lock;
+`LEGACY_INGEST` action + SystemLog commit transaction-local. Retry/lost response
+đọc durable action, còn `TON_AM` exact vẫn không được click-clear qua đường này.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

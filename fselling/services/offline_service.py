@@ -1413,7 +1413,15 @@ def _receipt_v1_consistent(
     except (AttributeError, TypeError, ValueError):
         return False
 
-    mismatch = receipt.client_fingerprint != receipt.server_fingerprint
+    # OWNER_RECOVERY creates a new server artifact and therefore has no client
+    # fingerprint assertion.  NULL + mismatch=0 means "not supplied"; normal
+    # LEASE_CLAIM receipts retain the exact client-vs-server comparison.
+    mismatch = (
+        False
+        if receipt.attribution_kind == "OWNER_RECOVERY"
+        and receipt.client_fingerprint is None
+        else receipt.client_fingerprint != receipt.server_fingerprint
+    )
     return bool(
         registry.state == "INGESTED"
         and registry.order_id == order.id == receipt.order_id
@@ -1429,9 +1437,13 @@ def _receipt_v1_consistent(
         and receipt.device_id == lease.device_id == order.offline_device
         and receipt.server_anchor_id == lease.server_anchor_id
         and receipt.sold_by_claimed_user_id == order.created_by_user_id == lease.user_id
-        and receipt.attribution_kind == "LEASE_CLAIM"
-        and receipt.time_confidence
-        in (CONFIDENCE_ANCHORED_CLIENT, CONFIDENCE_BOUNDED, CONFIDENCE_ANOMALY)
+        and (
+            receipt.attribution_kind == "LEASE_CLAIM"
+            and receipt.time_confidence
+            in (CONFIDENCE_ANCHORED_CLIENT, CONFIDENCE_BOUNDED, CONFIDENCE_ANOMALY)
+            or receipt.attribution_kind == "OWNER_RECOVERY"
+            and receipt.time_confidence == "RECOVERED"
+        )
         and (receipt.time_confidence != CONFIDENCE_ANCHORED_CLIENT or upper is None)
         and (upper is None or upper >= effective)
         and _canonical_order_time(order.created_at) == receipt.sold_at_effective
