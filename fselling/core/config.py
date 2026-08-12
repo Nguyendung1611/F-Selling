@@ -143,6 +143,19 @@ def _positive_int_env(name: str, default: int) -> int:
     return value
 
 
+def _bool_env_fail_closed(name: str) -> bool:
+    """Chỉ giá trị bật tường minh mới mở capability nhạy cảm."""
+    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Cấp credential bán offline là capability mới, nên mặc định TẮT. Cờ này chỉ
+# chặn ISSUE; heartbeat/reclaim/revoke của credential đã phát hành vẫn chạy để
+# máy mất hoặc shop vừa tắt rollout không làm mất đường cứu chứng từ đã có.
+OFFLINE_LEASE_ISSUANCE_ENABLED: bool = _bool_env_fail_closed(
+    "OFFLINE_LEASE_ISSUANCE_ENABLED"
+)
+
+
 # Trần body webhook ORDER ở TẦNG ỨNG DỤNG. 256 KiB là default khởi đầu cho
 # pilot, chưa phải kích thước đã được provider xác minh. App chỉ đọc/đếm stream
 # sau khi secret hợp lệ; giá trị cấu hình lỗi quay về default dương này.

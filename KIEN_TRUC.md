@@ -1659,6 +1659,26 @@ Fly có body limit riêng; nếu cần hai lớp bảo vệ phải cấu hình v
 Webhook subscription đã kiểm secret trước parse từ trước; sửa ORDER không được
 đẩy nó lùi lại. Thứ tự router vẫn là `webhooks.router` trước `orders.router`.
 
+### 42. Offline lease là claim của session, không phải bằng chứng con người
+
+I09-D cấp `lease_id` public và raw token chỉ ở response issue/reclaim; database
+chỉ giữ SHA-256 lowercase. Token chỉ đi qua `X-Offline-Lease-Token`, và phép so
+luôn là `compare_secret(sha256(candidate), stored_digest)`. Heartbeat không kéo
+dài hạn. Reclaim trong 72 giờ grace chỉ cho `SYNC_ONLY`; revoke của owner/ADMIN
+không cần token và chặn mọi normal-v1 capability theo state server hiện tại.
+Reclaim chỉ rotate khi principal vẫn có exact membership, quyền SALE và Pro hiện
+tại; policy được kiểm lại dưới shop write lock trước CAS.
+
+Normal-v1 tương lai chỉ được gọi một seam attribution: JWT user phải chính là
+`lease.user_id`, membership/shop cùng khớp, device/session khớp tuyệt đối và
+token đúng. Seam còn revalidate quyền SALE và Pro hiện tại trong transaction
+caller; mất một trong hai trả 409 `OFFLINE_LEASE_RECOVERY_REQUIRED` để đi owner
+recovery, không tạo `LEASE_CLAIM`. Context khóa `created_by`, payment actor và
+shift owner về claimed seller; normal path không cho owner/ADMIN sync hộ. Đây
+chỉ là claim của session, không chứng minh người thật nào cầm máy bán từng
+phiếu. Heartbeat vẫn là phép đọc state không bị SALE/Pro gate; endpoint v0 giữ
+nguyên `LEGACY_UNKNOWN`, không fabricate lease và không bị Pro gate hồi tố.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

@@ -33,6 +33,7 @@ from .routers import (
     expenses,
     forecast,
     loyalty,
+    offline_leases,
     orders,
     pages,
     products,
@@ -147,7 +148,12 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
         allow_origins=get_allowed_origins(),
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "Accept-Language"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Accept-Language",
+            "X-Offline-Lease-Token",
+        ],
     )
     application.add_middleware(LocaleMiddleware)
 
@@ -205,6 +211,7 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
     # webhooks PHẢI đứng trước orders: /api/orders/webhook vs /api/orders/{shop_id}
     application.include_router(webhooks.router)
     application.include_router(orders.router)
+    application.include_router(offline_leases.router)
     application.include_router(shifts.router)
     application.include_router(staff.router)
     application.include_router(subscriptions.router)

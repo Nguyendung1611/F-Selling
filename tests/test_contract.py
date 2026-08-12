@@ -118,6 +118,11 @@ ROUTES_BO_SUNG = {
     # exact để đóng. Khác kiểm kê (đóng TON_AM bằng hàng thật) và khác phục hồi
     # (map lại sản phẩm/giá vốn, thuộc I09-G).
     ("POST", "/api/orders/{shop_id}/offline-issues/{issue_id}/acknowledge"),
+    # I09-D: lifecycle credential; normal-v1 financial ingest chưa được mở.
+    ("POST", "/api/offline/leases"),
+    ("POST", "/api/offline/leases/{lease_id}/heartbeat"),
+    ("POST", "/api/offline/leases/{lease_id}/reclaim"),
+    ("DELETE", "/api/offline/leases/{lease_id}"),
     # G3: màn "Ai làm gì" của chủ shop. Khác /api/logs/admin: chỉ việc của người
     # thuộc shop này, và đã lọc bỏ hành động không đụng tiền hay kho.
     ("GET", "/api/logs/shop/{shop_id}"),
@@ -243,6 +248,21 @@ def test_webhook_dang_ky_truoc_route_shop_id(app):
     assert subscription_paths.index("/api/subscriptions/webhook") < (
         subscription_paths.index("/api/subscriptions/{shop_id}")
     )
+
+
+def test_cors_cho_phep_header_lease_nhung_khong_mo_wildcard(client):
+    response = client.options(
+        "/api/offline/leases/lse_0000000000000000000000/heartbeat",
+        headers={
+            "Origin": "http://testserver",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "X-Offline-Lease-Token",
+        },
+    )
+    assert response.status_code == 200
+    allowed = response.headers["access-control-allow-headers"].lower()
+    assert "x-offline-lease-token" in allowed
+    assert response.headers["access-control-allow-origin"] == "http://testserver"
 
 
 def test_trang_html_va_redirect(client):
