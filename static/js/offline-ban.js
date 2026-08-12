@@ -2098,6 +2098,55 @@
         };
     }
 
+    /**
+     * Chỉ là view-model cho POS: tuyệt đối không trả token, digest, UUID,
+     * fingerprint, nhãn máy hay nội dung phiếu. Đồng bộ vẫn dùng các seam F2.
+     */
+    async function getOfflineStatusV1(options) {
+        const summary = await getSyncSummaryV1(options);
+        const shopId = Number(options && options.shop_id);
+        const username = String(options && options.username || '');
+        if (!Number.isSafeInteger(shopId) || shopId < 1 || !username
+            || usernameHienTai() !== username) {
+            return { ...summary, catalog_saved_at: null, lease_expires_at: null };
+        }
+        try {
+            const deviceId = await layDeviceId();
+            const pointer = await chay(KHO_META_V1, 'readonly', store =>
+                store.get(activeKey(shopId, username, deviceId))
+            );
+            if (!pointer || typeof pointer.lease_id !== 'string') {
+                return { ...summary, catalog_saved_at: null, lease_expires_at: null };
+            }
+            const credential = await chay(KHO_CREDENTIAL_V1, 'readonly', store =>
+                store.get(pointer.lease_id)
+            );
+            if (!credential || credential.shop_id !== shopId || credential.username !== username
+                || credential.device_id !== deviceId || credential.identity_key !== pointer.identity_key
+                || (options.user_id && credential.user_id !== Number(options.user_id))) {
+                return { ...summary, catalog_saved_at: null, lease_expires_at: null };
+            }
+            const catalog = await chay(KHO_CATALOG_V1, 'readonly', store => store.get(pointer.lease_id));
+            const canonicalTime = value => {
+                if (typeof value !== 'string') return null;
+                if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{6}$/.test(value)
+                    && Number.isFinite(Date.parse(value.replace(' ', 'T') + 'Z'))) return value;
+                // catalog saved_at là timestamp local hiện có của F1; chỉ đưa
+                // qua view khi là ISO hợp lệ, không lộ thêm metadata nào khác.
+                if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+                    && Number.isFinite(Date.parse(value))) return value;
+                return null;
+            };
+            return {
+                ...summary,
+                catalog_saved_at: canonicalTime(catalog && catalog.saved_at),
+                lease_expires_at: canonicalTime(credential.expires_at)
+            };
+        } catch (e) {
+            return { ...summary, catalog_saved_at: null, lease_expires_at: null };
+        }
+    }
+
     async function resumeSyncV1(options) {
         let identity = {
             shop_id: Number(options && options.shop_id),
@@ -2318,6 +2367,7 @@
         fingerprintV1,
         triggerSyncV1,
         getSyncSummaryV1,
+        getOfflineStatusV1,
         resumeSyncV1,
         batTuDongBoV1,
         luuPhieuTuPOS,

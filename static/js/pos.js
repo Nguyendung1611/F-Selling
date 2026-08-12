@@ -2196,22 +2196,130 @@ async function guiYeuCauTaoDonDangDo(state) {
     await hoanTatTienMatDangCho(state);
 }
 
-/** Cập nhật con số phiếu đang chờ gửi trên thanh trạng thái. */
+function identityDongBoPOS() {
+    return {
+        shop_id: Number(currentShopId),
+        username: localStorage.getItem('username') || ''
+    };
+}
+
+function soTrangThaiDongBo(summary, state) {
+    return Number(summary?.state_counts?.[state] || 0);
+}
+
+/** View model chỉ dùng dữ liệu đã sanitize từ F2; không bao giờ cầm phiếu/token. */
+function moHinhTrangThaiOffline(v0Cho, v0Loi, v1, offline) {
+    const ready = soTrangThaiDongBo(v1, 'DRAFT') + soTrangThaiDongBo(v1, 'READY');
+    const syncing = soTrangThaiDongBo(v1, 'SYNCING');
+    const retrying = soTrangThaiDongBo(v1, 'RETRYABLE');
+    const blocked = soTrangThaiDongBo(v1, 'BLOCKED_RECOVERABLE');
+    const quarantined = soTrangThaiDongBo(v1, 'QUARANTINED');
+    const pending = Number(v0Cho || 0) + ready + syncing + retrying + blocked;
+    const hard = v1?.paused && v1.pause_kind === 'HARD';
+    const transient = v1?.paused && v1.pause_kind === 'TRANSIENT';
+    const status = Number(v1?.error?.http_status);
+    let messageKey = offline ? 'pos.offline.panel_offline'
+        : 'pos.offline.panel_waiting';
+    if (hard && status === 401) messageKey = 'pos.offline.panel_login';
+    else if (hard && (status === 402 || status === 403)) messageKey = 'pos.offline.panel_owner';
+    else if (blocked || quarantined || v0Loi) messageKey = 'pos.offline.panel_attention';
+    else if (syncing) messageKey = 'pos.offline.panel_syncing';
+    else if (transient) messageKey = 'pos.offline.panel_retry';
+    else if (!offline && !pending) messageKey = 'pos.offline.panel_synced';
+    return {
+        v0Cho: Number(v0Cho || 0), v0Loi: Number(v0Loi || 0), ready, syncing,
+        retrying, blocked, quarantined, pending, hard, transient,
+        retryAt: v1?.retry_at || null, errorCode: v1?.error?.code || null,
+        messageKey, catalogSavedAt: v1?.catalog_saved_at || null,
+        leaseExpiresAt: v1?.lease_expires_at || null
+    };
+}
+
+function themDongTrangThaiOffline(container, label, value) {
+    const wrap = document.createElement('div');
+    const dt = document.createElement('dt');
+    const dd = document.createElement('dd');
+    dt.textContent = label;
+    dd.textContent = dinhDangSoPOS(value);
+    wrap.append(dt, dd);
+    container.appendChild(wrap);
+}
+
+async function taiTrangThaiOfflinePOS() {
+    if (!window.OfflineBan || !Number.isSafeInteger(Number(currentShopId))) {
+        return moHinhTrangThaiOffline(0, 0, null, Boolean(window.OfflineBan?.dangOffline()));
+    }
+    const [v0Cho, v0Loi, v1] = await Promise.all([
+        OfflineBan.demCho(currentShopId),
+        OfflineBan.demLoi(currentShopId),
+        OfflineBan.getOfflineStatusV1(identityDongBoPOS())
+    ]);
+    return moHinhTrangThaiOffline(v0Cho, v0Loi, v1, OfflineBan.dangOffline());
+}
+
+function capNhatNoiDungTrangThaiOffline(model) {
+    const message = document.getElementById('offlineStatusMessage');
+    const counts = document.getElementById('offlineStatusCounts');
+    const meta = document.getElementById('offlineStatusMeta');
+    const actions = document.getElementById('offlineStatusActions');
+    if (!message || !counts || !meta || !actions) return;
+    message.textContent = dich(model.messageKey, {
+        time: model.retryAt ? dinhDangNgayGio(model.retryAt) : ''
+    });
+    counts.replaceChildren();
+    themDongTrangThaiOffline(counts, dich('pos.offline.count_v1_pending'), model.ready + model.syncing + model.retrying);
+    themDongTrangThaiOffline(counts, dich('pos.offline.count_v0_pending'), model.v0Cho);
+    themDongTrangThaiOffline(counts, dich('pos.offline.count_blocked'), model.blocked + model.quarantined + model.v0Loi);
+    themDongTrangThaiOffline(counts, dich('pos.offline.count_syncing'), model.syncing);
+    const details = [];
+    if (model.catalogSavedAt) details.push(dich('pos.offline.catalog_saved', { time: dinhDangNgayGio(model.catalogSavedAt) }));
+    if (model.leaseExpiresAt) details.push(dich('pos.offline.lease_expires', { time: dinhDangNgayGio(model.leaseExpiresAt) }));
+    if (model.errorCode) details.push(dich('pos.offline.safe_error', { code: model.errorCode }));
+    meta.textContent = details.join(' · ');
+    actions.replaceChildren();
+    if (model.transient && !OfflineBan.dangOffline()) {
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.textContent = dich('pos.offline.retry_now');
+        retry.addEventListener('click', async function () {
+            retry.disabled = true;
+            await OfflineBan.resumeSyncV1(identityDongBoPOS());
+            await capNhatHuyHieuOffline();
+            retry.disabled = false;
+        });
+        actions.appendChild(retry);
+    }
+}
+
+async function moModalTrangThaiOffline() {
+    const modal = document.getElementById('offlineStatusModal');
+    if (!modal) return;
+    hienModalCa('offlineStatusModal', 'offlineStatusClose');
+    await capNhatHuyHieuOffline();
+}
+
+function dongModalTrangThaiOffline() {
+    dongModalCa('offlineStatusModal');
+}
+
+/** Cập nhật badge/panel sau mọi callback, nhưng render không bao giờ resume queue. */
 async function capNhatHuyHieuOffline() {
     const o = document.getElementById('offlineBadge');
     if (!o || !window.OfflineBan) return;
     try {
-        const cho = await OfflineBan.demCho(currentShopId);
-        const loi = await OfflineBan.demLoi(currentShopId);
-        if (!cho && !loi && !OfflineBan.dangOffline()) {
+        const model = await taiTrangThaiOfflinePOS();
+        if (!model.pending && !model.v0Loi && !model.quarantined && !OfflineBan.dangOffline()) {
             o.style.display = 'none';
-            return;
+        } else {
+            o.style.display = 'inline-flex';
+            o.textContent = OfflineBan.dangOffline()
+                ? dich('pos.offline.mat_mang', { count: model.pending })
+                : dich('pos.offline.cho_gui', { count: model.pending });
+            o.title = dich(model.messageKey, {
+                time: model.retryAt ? dinhDangNgayGio(model.retryAt) : ''
+            });
         }
-        o.style.display = 'inline-flex';
-        o.innerText = OfflineBan.dangOffline()
-            ? dich('pos.offline.mat_mang', { count: cho })
-            : dich('pos.offline.cho_gui', { count: cho });
-        o.title = loi ? dich('pos.offline.co_phieu_loi', { count: loi }) : '';
+        capNhatNoiDungTrangThaiOffline(model);
     } catch (e) {
         console.warn('[OFFLINE] Không đọc được hàng chờ:', e);
     }
@@ -3372,7 +3480,11 @@ if (window.OfflineBan) {
             username: localStorage.getItem('username') || ''
         }),
         async (kq) => {
-            if (kq.acked) await loadProducts();
+            if (kq.acked) {
+                showToast(dich('pos.offline.da_dong_bo', { count: kq.acked }));
+                await loadProducts();
+            }
+            await capNhatHuyHieuOffline();
         }
     );
     OfflineBan.batTuDongBo(
@@ -3390,5 +3502,6 @@ if (window.OfflineBan) {
     );
     window.addEventListener('online', capNhatTrangThaiMangPOS);
     window.addEventListener('offline', capNhatTrangThaiMangPOS);
+    document.getElementById('offlineBadge')?.addEventListener('click', moModalTrangThaiOffline);
     capNhatTrangThaiMangPOS();
 }

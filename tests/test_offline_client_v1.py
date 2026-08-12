@@ -30,7 +30,7 @@ def test_node_fake_indexeddb_persistence_harness():
         check=False,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "offline-ban-v1 harness: 1 passed" in completed.stdout
+    assert "offline-ban-v1 harness: 2 passed" in completed.stdout
 
 
 def test_node_auth_identity_seal_harness():
@@ -108,8 +108,8 @@ def test_all_touched_static_files_have_i09_f1_correction_cache_buster():
     index = _read("static/index.html")
     pos = _read("static/pos.html")
     assert '/js/auth.js?v=20260812-i09-f1-c1' in index
-    assert '/js/offline-ban.js?v=20260813-i09-f2' in pos
-    assert '/js/pos.js?v=20260813-i09-f2' in pos
+    assert '/js/offline-ban.js?v=20260813-i09-f3' in pos
+    assert '/js/pos.js?v=20260813-i09-f3' in pos
 
 
 def test_same_tab_login_seals_previous_identity_before_overwrite():

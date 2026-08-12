@@ -45,8 +45,8 @@ def test_v1_sync_is_wired_without_replacing_v0_sync():
     assert "OfflineBan.batTuDongBoV1(" in js
     assert "OfflineBan.batTuDongBo(" in js
     html = _read("static/pos.html")
-    assert "/js/offline-ban.js?v=20260813-i09-f2" in html
-    assert "/js/pos.js?v=20260813-i09-f2" in html
+    assert "/js/offline-ban.js?v=20260813-i09-f3" in html
+    assert "/js/pos.js?v=20260813-i09-f3" in html
 
 
 def test_v1_state_and_lock_contract_are_explicit():

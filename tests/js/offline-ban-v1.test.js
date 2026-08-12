@@ -425,6 +425,11 @@ async function main() {
     assert.equal(readyA[0].client_fingerprint.includes('T'.repeat(42)), false);
     const internalCredential = await api.getCredentialV1(second.lease_id, exactAlice);
     assert.equal(internalCredential.lease_token, `${'T'.repeat(42)}2`);
+    const statusView = await api.getOfflineStatusV1({ shop_id: 1, username: 'alice' });
+    assert.equal(statusView.state_counts.READY, 2);
+    assert.match(statusView.catalog_saved_at, /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(JSON.stringify(statusView).includes('T'.repeat(42)), false);
+    assert.equal(JSON.stringify(statusView).includes('lease_id'), false);
 
     // Quota/abort does not leave a DRAFT or advance sequence.
     fake.failNextWrite = 'receipt_v1';
@@ -659,7 +664,7 @@ async function main() {
     });
     assert(fake.closedConnections > closedBefore);
 
-    console.log('offline-ban-v1 harness: 1 passed');
+    console.log('offline-ban-v1 harness: 2 passed');
 }
 
 module.exports = { FakeIndexedDB, clone, keyString };
