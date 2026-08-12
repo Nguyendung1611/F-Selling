@@ -212,6 +212,39 @@ def test_dong_thieu_product_id_fail_closed_khong_doi_trang_thai(client):
             session.close()
 
 
+def test_huy_don_product_id_shop_khac_409_va_rollback_toan_bo(client):
+    ctx_a, order = _tao_don(client, quantity=2)
+    ctx_b = seller_with_shop(client)
+    product_b_id = ctx_b["product"]["id"]
+    stock_a_before = _ton_kho(ctx_a["product"]["id"])
+    stock_b_before = _ton_kho(product_b_id)
+
+    with SessionLocal() as session:
+        item = session.query(models.OrderItem).filter_by(
+            order_id=order["order_id"]
+        ).one()
+        product_id_goc = item.product_id
+        item.product_id = product_b_id
+        session.commit()
+
+    try:
+        response = _huy(client, ctx_a, order["order_id"])
+        assert response.status_code == 409, response.text
+        assert _trang_thai(order["order_id"]) == STATUS_PENDING
+        assert _ton_kho(ctx_a["product"]["id"]) == stock_a_before
+        assert _ton_kho(product_b_id) == stock_b_before
+        with SessionLocal() as session:
+            current = session.get(models.Order, order["order_id"])
+            assert current.inventory_reversed == 0
+            assert current.inventory_reversal_version == 0
+            assert current.items[0].inventory_reversed == 0
+    finally:
+        with SessionLocal() as session:
+            item = session.query(models.OrderItem).filter_by(
+                order_id=order["order_id"]
+            ).one()
+            item.product_id = product_id_goc
+            session.commit()
 # ---------- Voucher ----------
 def test_huy_don_tra_lai_luot_voucher(client):
     ctx = seller_with_shop(client)

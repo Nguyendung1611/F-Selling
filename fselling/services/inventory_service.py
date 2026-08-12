@@ -353,10 +353,15 @@ def restore_stock(db: Session, order_id: int) -> Tuple[int, int]:
         if item.product_id is None:
             raise HTTPException(status_code=409, detail=tr("Dòng đơn thiếu product_id; không thể hoàn kho an toàn"))
         prod = (
-            db.query(models.Product).filter(models.Product.id == item.product_id).first()
+            db.query(models.Product)
+            .filter(
+                models.Product.id == item.product_id,
+                models.Product.shop_id == order.shop_id,
+            )
+            .first()
         )
         if prod is None:
-            raise HTTPException(status_code=409, detail=tr("Sản phẩm nguồn không còn tồn tại; không thể hoàn kho"))
+            raise HTTPException(status_code=409, detail=tr("Sản phẩm nguồn không thuộc cửa hàng; không thể hoàn kho"))
         quantity = int(item.quantity or 0)
         if quantity <= 0 or int(prod.stock or 0) > MAX_SAFE_QUANTITY - quantity:
             raise HTTPException(status_code=409, detail=tr("Số lượng hoàn hủy không hợp lệ"))
@@ -373,7 +378,10 @@ def restore_stock(db: Session, order_id: int) -> Tuple[int, int]:
             batches = {
                 int(batch.id): batch
                 for batch in db.query(models.ProductBatch)
-                .filter(models.ProductBatch.id.in_(batch_ids))
+                .filter(
+                    models.ProductBatch.id.in_(batch_ids),
+                    models.ProductBatch.product_id == prod.id,
+                )
                 .all()
             }
             if len(batches) != len(set(batch_ids)):

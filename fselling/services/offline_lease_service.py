@@ -82,6 +82,11 @@ class OfflineAttributionContext:
     shop_id: int
     device_id: str
     offline_session_id: str
+    contract_version: int
+    catalog_version: int
+    catalog_snapshot_digest: str
+    server_anchor_id: str
+    anchor_server_time_utc: datetime
     lease_status: str
     sold_by_claimed_user_id: int
     synced_by_user_id: int
@@ -89,6 +94,9 @@ class OfflineAttributionContext:
     created_by_user_id: int
     payment_actor_user_id: int
     shift_owner_user_id: int
+    # Expose issued_at and expires_at for time boundary checks in v1 ingest
+    issued_at: datetime
+    expires_at: datetime
 
 
 def _utcnow() -> datetime:
@@ -688,6 +696,7 @@ def authorize_normal_v1_capability(
     lease_token: str,
     device_id: str,
     offline_session_id: str,
+    request_received_at: datetime | None = None,
 ) -> OfflineAttributionContext:
     """Một seam duy nhất cho normal-v1; không bao giờ dùng cho endpoint v0.
 
@@ -718,7 +727,7 @@ def authorize_normal_v1_capability(
             ERROR_BINDING_MISMATCH,
             "Binding credential offline không khớp",
         )
-    now = _utcnow()
+    now = request_received_at if request_received_at is not None else _utcnow()
     status = _lease_status(lease, now)
     if status == STATUS_REVOKED:
         raise _error(409, ERROR_REVOKED, "Credential offline đã bị thu hồi")
@@ -736,11 +745,19 @@ def authorize_normal_v1_capability(
         )
 
     actor = int(lease.user_id)
+    issued_dt = _parse_time(lease.issued_at)
+    expires_dt = _parse_time(lease.expires_at)
+    anchor_dt = _parse_time(lease.anchor_server_time_utc)
     return OfflineAttributionContext(
         lease_id=lease.lease_id,
         shop_id=int(lease.shop_id),
         device_id=lease.device_id,
         offline_session_id=lease.lease_id,
+        contract_version=int(lease.contract_version),
+        catalog_version=int(lease.catalog_version),
+        catalog_snapshot_digest=lease.catalog_snapshot_digest,
+        server_anchor_id=lease.server_anchor_id,
+        anchor_server_time_utc=anchor_dt,
         lease_status=status,
         sold_by_claimed_user_id=actor,
         synced_by_user_id=int(current_user.id),
@@ -748,6 +765,8 @@ def authorize_normal_v1_capability(
         created_by_user_id=actor,
         payment_actor_user_id=actor,
         shift_owner_user_id=actor,
+        issued_at=issued_dt,
+        expires_at=expires_dt,
     )
 
 

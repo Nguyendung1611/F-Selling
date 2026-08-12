@@ -1032,8 +1032,67 @@ def test_tracked_ton_am_evidence_restart_stocktake_aba_return_cancel(client):
             .filter(models.ProductBatch.product_id == product["id"])
             .all()
         ) == 0
+        first_order_id = first_order.id
+        first_line_id = first_line.id
+        open_before = {
+            "returns": session.query(models.OrderReturn)
+            .filter(models.OrderReturn.order_id == first_order.id)
+            .count(),
+            "payments": session.query(models.OrderPayment)
+            .filter(models.OrderPayment.order_id == first_order.id)
+            .count(),
+            "loyalty": session.query(models.LoyaltyPointEntry)
+            .filter(models.LoyaltyPointEntry.order_id == first_order.id)
+            .count(),
+            "logs": session.query(models.SystemLog)
+            .filter(models.SystemLog.action == "ORDER_RETURN")
+            .count(),
+        }
     finally:
         session.close()
+    _TEST_MIGRATIONS.verify()
+
+    open_return = client.post(
+        f"/api/orders/{first_order_id}/returns",
+        json={
+            "items": [
+                {
+                    "order_item_id": first_line_id,
+                    "quantity": 1,
+                    "restock": False,
+                }
+            ],
+            "method": "transfer",
+            "operation_id": "offline-open-missing-source-" + _uuid.uuid4().hex,
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert open_return.status_code == 409, open_return.text
+    with SessionLocal() as session:
+        line = session.get(models.OrderItem, first_line_id)
+        evidence = session.query(models.OfflineBatchStockDeficit).filter_by(
+            order_item_id=first_line_id
+        ).one()
+        assert (line.returned_total_qty, line.cost_return_version) == (0, 0)
+        assert (
+            evidence.deficit_quantity,
+            evidence.remaining_quantity,
+            evidence.resolution_kind,
+            evidence.state_version,
+        ) == (1, 1, None, 0)
+        assert session.get(models.Product, product["id"]).stock == -1
+        assert session.query(models.OrderReturn).filter_by(
+            order_id=first_order_id
+        ).count() == open_before["returns"]
+        assert session.query(models.OrderPayment).filter_by(
+            order_id=first_order_id
+        ).count() == open_before["payments"]
+        assert session.query(models.LoyaltyPointEntry).filter_by(
+            order_id=first_order_id
+        ).count() == open_before["loyalty"]
+        assert session.query(models.SystemLog).filter_by(
+            action="ORDER_RETURN"
+        ).count() == open_before["logs"]
     _TEST_MIGRATIONS.verify()
 
     snapshot_response = client.get(
@@ -1050,7 +1109,17 @@ def test_tracked_ton_am_evidence_restart_stocktake_aba_return_cancel(client):
     assert snapshot_row["offline_deficit_qty"] == 1
     stale_token = snapshot_row["offline_deficit_snapshot"]
 
+    normal_product = ctx["product"]
     second_payload = _phieu(product, so_luong=1)
+    second_payload["items"].append(
+        {
+            "product_id": normal_product["id"],
+            "product_name": normal_product["name"],
+            "unit_price": normal_product["price"],
+            "quantity": 1,
+        }
+    )
+    second_payload["cash_tendered"] += normal_product["price"]
     second = _gui(client, ctx, second_payload)
     assert second.status_code == 200, second.text
     assert "TON_AM" in second.json()["issues"]
@@ -1119,7 +1188,18 @@ def test_tracked_ton_am_evidence_restart_stocktake_aba_return_cancel(client):
         )
         second_line = (
             session.query(models.OrderItem)
-            .filter(models.OrderItem.order_id == second_order.id)
+            .filter(
+                models.OrderItem.order_id == second_order.id,
+                models.OrderItem.product_id == product["id"],
+            )
+            .one()
+        )
+        normal_line = (
+            session.query(models.OrderItem)
+            .filter(
+                models.OrderItem.order_id == second_order.id,
+                models.OrderItem.product_id == normal_product["id"],
+            )
             .one()
         )
         assert (
@@ -1146,8 +1226,21 @@ def test_tracked_ton_am_evidence_restart_stocktake_aba_return_cancel(client):
             .filter(models.OrderPayment.order_id == second_order.id)
             .count()
         )
+        before_returns = session.query(models.OrderReturn).filter_by(
+            order_id=second_order.id
+        ).count()
+        before_loyalty = session.query(models.LoyaltyPointEntry).filter_by(
+            order_id=second_order.id
+        ).count()
+        before_return_logs = session.query(models.SystemLog).filter_by(
+            action="ORDER_RETURN"
+        ).count()
+        normal_stock_after_sale = session.get(
+            models.Product, normal_product["id"]
+        ).stock
         second_order_id = second_order.id
         second_line_id = second_line.id
+        normal_line_id = normal_line.id
     finally:
         session.close()
     _TEST_MIGRATIONS.verify()
@@ -1170,6 +1263,29 @@ def test_tracked_ton_am_evidence_restart_stocktake_aba_return_cancel(client):
         )
         assert failed_return.status_code == 409, failed_return.text
 
+    failed_multiline_return = client.post(
+        f"/api/orders/{second_order_id}/returns",
+        json={
+            "items": [
+                {
+                    "order_item_id": normal_line_id,
+                    "quantity": 1,
+                    "restock": False,
+                },
+                {
+                    "order_item_id": second_line_id,
+                    "quantity": 1,
+                    "restock": False,
+                },
+            ],
+            "method": "transfer",
+            "operation_id": "offline-multiline-missing-source-"
+            + _uuid.uuid4().hex,
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert failed_multiline_return.status_code == 409, failed_multiline_return.text
+
     session = SessionLocal()
     try:
         order = session.get(models.Order, second_order_id)
@@ -1187,6 +1303,7 @@ def test_tracked_ton_am_evidence_restart_stocktake_aba_return_cancel(client):
     try:
         order = session.get(models.Order, second_order_id)
         line = session.get(models.OrderItem, second_line_id)
+        normal_line = session.get(models.OrderItem, normal_line_id)
         assert (
             order.status,
             order.inventory_reversed,
@@ -1194,6 +1311,11 @@ def test_tracked_ton_am_evidence_restart_stocktake_aba_return_cancel(client):
             line.returned_total_qty,
             line.cost_return_version,
         ) == ("PENDING_PAYMENT", 0, 0, 0, 0)
+        assert (
+            normal_line.returned_total_qty,
+            normal_line.cost_return_version,
+            normal_line.inventory_reversed,
+        ) == (0, 0, 0)
         assert (
             session.query(models.OrderReturn)
             .filter(models.OrderReturn.order_id == second_order_id)
@@ -1206,7 +1328,28 @@ def test_tracked_ton_am_evidence_restart_stocktake_aba_return_cancel(client):
             .count()
             == before_payments
         )
+        assert session.query(models.LoyaltyPointEntry).filter_by(
+            order_id=second_order_id
+        ).count() == before_loyalty
+        assert session.query(models.SystemLog).filter_by(
+            action="ORDER_RETURN"
+        ).count() == before_return_logs
         assert session.get(models.Product, product["id"]).stock == 0
+        assert session.get(
+            models.Product, normal_product["id"]
+        ).stock == normal_stock_after_sale
+        assert session.query(models.OrderReturn).filter_by(
+            order_id=second_order_id
+        ).count() == before_returns
+        closed = session.query(models.OfflineBatchStockDeficit).filter_by(
+            order_item_id=second_line_id
+        ).one()
+        assert (
+            closed.deficit_quantity,
+            closed.remaining_quantity,
+            closed.resolution_kind,
+            closed.state_version,
+        ) == (1, 0, "STOCKTAKE", 1)
     finally:
         session.close()
     _TEST_MIGRATIONS.verify()
@@ -1305,7 +1448,8 @@ def test_tien_khach_dua_it_hon_tong_don_thi_tu_choi(client):
     _mo_ca(client, ctx)
     res = _gui(client, ctx, _phieu(ctx["product"], so_luong=2, tien_dua=150000))
     assert res.status_code == 400
-    assert "nhỏ hơn tổng đơn" in res.json()["detail"]
+    assert res.json()["detail"]["code"] == "OFFLINE_TENDER_TOO_LOW"
+    assert "nhỏ hơn tổng đơn" in res.json()["detail"]["message"]
 
 
 def test_gio_ban_o_tuong_lai_thi_tu_choi(client):
@@ -1367,7 +1511,7 @@ def test_uuid_cua_shop_khac_thi_bao_xung_dot(client):
     assert _gui(client, a, phieu).status_code == 200
     conflict = _gui(client, b, phieu)
     assert conflict.status_code == 409
-    assert conflict.json()["detail"]["code"] == "OFFLINE_RECEIPT_UUID_OTHER_SHOP"
+    assert conflict.json()["detail"]["code"] == "OFFLINE_UUID_OTHER_SHOP"
     assert "order_id" not in conflict.text
 
 

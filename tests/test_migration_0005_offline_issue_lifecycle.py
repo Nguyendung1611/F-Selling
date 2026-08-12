@@ -28,6 +28,7 @@ I04 = "0002_i04_operational_tables"
 I05 = "0003_i05_integer_vnd_cost_basis"
 I09 = "0004_i09_offline_receipts"
 I09C = "0005_i09c_offline_issue_lifecycle"
+I09E = "0006_i09e_offline_receipt_items"
 
 # Pinned so an edit to a released revision fails here instead of silently
 # changing what every managed database already applied.
@@ -226,10 +227,10 @@ def test_fresh_and_restart_verify_are_stable(tmp_path):
     coordinator = _coordinator(database)
 
     assert coordinator.init() == [ROOT]
-    assert coordinator.upgrade("head") == [I04, I05, I09, I09C]
+    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E]
     report = coordinator.verify()
-    assert report.current_revision == report.head_revision == I09C
-    assert report.revision_count == 5
+    assert report.current_revision == report.head_revision == I09E
+    assert report.revision_count == 6
 
     assert coordinator.upgrade("head") == []
     assert coordinator.verify().database_uuid == report.database_uuid
@@ -241,8 +242,8 @@ def test_upgrade_from_0004_adds_only_triggers(tmp_path):
     coordinator = _at_0004(database)
     before = {row[0] for row in _rows(database, "SELECT name FROM sqlite_master")}
 
-    assert coordinator.upgrade("head") == [I09C]
-    coordinator.verify()
+    assert coordinator.upgrade(I09C) == [I09C]
+    _verify_0005(coordinator, database)
 
     after = {row[0] for row in _rows(database, "SELECT name FROM sqlite_master")}
     assert after - before == EXPECTED_TRIGGERS
@@ -264,9 +265,9 @@ def test_released_revisions_and_control_fingerprint_are_untouched():
 
 def test_0005_is_linear_self_contained_and_checksummed(tmp_path):
     graph = _coordinator(tmp_path / "unused.db")._graph()
-    assert [item.revision for item in graph.revisions] == [ROOT, I04, I05, I09, I09C]
-    assert graph.head.revision == I09C
-    assert graph.head.down_revision == I09
+    assert [item.revision for item in graph.revisions] == [ROOT, I04, I05, I09, I09C, I09E]
+    spec = next(item for item in graph.revisions if item.revision == I09C)
+    assert spec.down_revision == I09
 
     revision_path = PROJECT_ROOT / f"migrations/versions/{I09C}.py"
     digest = _normalized_checksum(revision_path)
@@ -278,7 +279,7 @@ def test_0005_is_linear_self_contained_and_checksummed(tmp_path):
         "path": f"versions/{I09C}.py",
         "sha256": digest,
     }
-    assert graph.head.checksum == digest
+    assert spec.checksum == digest
 
     source = revision_path.read_text(encoding="utf-8")
     assert "from alembic import op" in source
@@ -286,7 +287,7 @@ def test_0005_is_linear_self_contained_and_checksummed(tmp_path):
     assert "executescript" not in source
     assert "fs_migration_" not in source
     with pytest.raises(RuntimeError, match="forward-only"):
-        graph.head.module.downgrade()
+        spec.module.downgrade()
 
 
 @pytest.mark.parametrize("stage", ["after_ddl", "after_journal", "after_verify"])
@@ -315,8 +316,8 @@ def test_0005_rolls_back_as_one_unit(tmp_path, stage):
     assert _rows(database, "SELECT COUNT(*) FROM offline_receipt_issues") == [(0,)]
     assert _rows(database, "SELECT version_num FROM alembic_version") == [(I09,)]
 
-    assert _coordinator(database).upgrade("head") == [I09C]
-    _coordinator(database).verify()
+    assert _coordinator(database).upgrade(I09C) == [I09C]
+    _verify_0005(_coordinator(database), database)
     assert _rows(database, "SELECT COUNT(*) FROM offline_receipt_issues") == [(1,)]
 
 
@@ -333,7 +334,7 @@ def _backfilled(tmp_path: Path, name: str, seeds) -> tuple[MigrationCoordinator,
         connection.commit()
     finally:
         connection.close()
-    assert coordinator.upgrade("head") == [I09C]
+    assert coordinator.upgrade("head") == [I09C, I09E]
     coordinator.verify()
     return coordinator, database
 
@@ -502,7 +503,7 @@ def test_unknown_legacy_code_blocks_the_migration(tmp_path, issue):
         assert _rows(database, "SELECT version_num FROM alembic_version") == [(I09,)]
     else:
         # Whitespace-only carries no claim at all, so it is simply nothing.
-        assert coordinator.upgrade("head") == [I09C]
+        assert coordinator.upgrade("head") == [I09C, I09E]
         assert _rows(database, "SELECT COUNT(*) FROM offline_receipt_issues") == [(0,)]
 
 
@@ -543,7 +544,7 @@ def test_backfill_completes_partial_issue_coverage(tmp_path):
     finally:
         connection.close()
 
-    assert coordinator.upgrade("head") == [I09C]
+    assert coordinator.upgrade("head") == [I09C, I09E]
     coordinator.verify()
     assert _rows(
         database,
@@ -598,7 +599,7 @@ def test_backfill_is_a_no_op_when_rows_already_exist(tmp_path):
     finally:
         connection.close()
 
-    assert coordinator.upgrade("head") == [I09C]
+    assert coordinator.upgrade("head") == [I09C, I09E]
     coordinator.verify()
     assert _rows(database, "SELECT COUNT(*) FROM offline_receipt_issues") == [(1,)]
 
@@ -641,7 +642,7 @@ def _guarded(tmp_path: Path, name: str):
         connection.commit()
     finally:
         connection.close()
-    assert coordinator.upgrade("head") == [I09C]
+    assert coordinator.upgrade("head") == [I09C, I09E]
     coordinator.verify()
     return coordinator, database
 
@@ -867,7 +868,7 @@ def test_a_future_issue_code_with_its_mirror_verifies(tmp_path):
         connection.close()
 
     _verify_0005(coordinator, database)
-    assert coordinator.verify().current_revision == I09C
+    assert coordinator.verify().current_revision == I09E
 
 
 @pytest.mark.parametrize(

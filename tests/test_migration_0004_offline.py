@@ -25,6 +25,7 @@ I04 = "0002_i04_operational_tables"
 I05 = "0003_i05_integer_vnd_cost_basis"
 I09 = "0004_i09_offline_receipts"
 I09C = "0005_i09c_offline_issue_lifecycle"
+I09E = "0006_i09e_offline_receipt_items"
 LATER_INDEX = "0006_test_later_index"
 
 # Pinned so an edit to a released revision fails here instead of silently
@@ -142,10 +143,12 @@ def _pre_0004_root(tmp_path: Path) -> Path:
     shutil.copytree(PROJECT_ROOT / "migrations", root / "migrations")
     (root / "migrations/versions/0004_i09_offline_receipts.py").unlink()
     (root / "migrations/versions/0005_i09c_offline_issue_lifecycle.py").unlink()
+    (root / "migrations/versions/0006_i09e_offline_receipt_items.py").unlink()
     manifest_path = root / "migrations/checksums.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     del manifest["revisions"][I09]
     del manifest["revisions"][I09C]
+    del manifest["revisions"][I09E]
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     return root
 
@@ -156,6 +159,7 @@ def _later_index_root(tmp_path: Path) -> Path:
     root.mkdir()
     shutil.copy2(PROJECT_ROOT / "alembic.ini", root / "alembic.ini")
     shutil.copytree(PROJECT_ROOT / "migrations", root / "migrations")
+    (root / "migrations/versions/0006_i09e_offline_receipt_items.py").unlink()
     source = f'''from alembic import op
 
 revision = "{LATER_INDEX}"
@@ -188,6 +192,7 @@ def downgrade():
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
     manifest_path = root / "migrations/checksums.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["revisions"][I09E]
     manifest["revisions"][LATER_INDEX] = {
         "down_revision": I09C,
         "path": f"versions/{LATER_INDEX}.py",
@@ -405,10 +410,10 @@ def test_fresh_root_to_0004_and_restart_verify_are_stable(tmp_path):
     coordinator = _coordinator(database)
 
     assert coordinator.init() == [ROOT]
-    assert coordinator.upgrade("head") == [I04, I05, I09, I09C]
+    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E]
     report = coordinator.verify()
-    assert report.current_revision == report.head_revision == I09C
-    assert report.revision_count == 5
+    assert report.current_revision == report.head_revision == I09E
+    assert report.revision_count == 6
 
     # Restart is a no-op and verification stays green on the same database.
     assert coordinator.upgrade("head") == []
@@ -451,7 +456,7 @@ def test_released_revisions_and_control_fingerprint_are_untouched():
 
 def test_0004_is_linear_self_contained_and_checksummed(tmp_path):
     graph = _coordinator(tmp_path / "unused.db")._graph()
-    assert [item.revision for item in graph.revisions] == [ROOT, I04, I05, I09, I09C]
+    assert [item.revision for item in graph.revisions] == [ROOT, I04, I05, I09, I09C, I09E]
     spec = next(item for item in graph.revisions if item.revision == I09)
     assert spec.down_revision == I05
 
@@ -513,7 +518,7 @@ def test_0004_rolls_back_as_one_unit(tmp_path, stage):
         connection.close()
 
     # The same database still upgrades cleanly once the fault is gone.
-    assert _coordinator(database).upgrade("head") == [I09, I09C]
+    assert _coordinator(database).upgrade("head") == [I09, I09C, I09E]
     _coordinator(database).verify()
 
 
@@ -840,9 +845,8 @@ def test_valid_offline_rows_pass_every_verifier(tmp_path):
     coordinator, database = _seeded(tmp_path, "valid-rows.db")
     # The whole checked-in graph, not only 0004: offline rows must not break
     # the I04 baseline or the I05 money/cost verifiers either.
-    assert coordinator.upgrade("head") == [I09C]
-    report = coordinator.verify()
-    assert report.current_revision == I09C
+    assert coordinator.upgrade(I09C) == [I09C]
+    _module(coordinator, I09C).verify(sqlite3.connect(database))
     _verify_revision(coordinator, database)
 
 
@@ -1034,14 +1038,14 @@ def test_verifier_fails_closed_on_durable_corruption(tmp_path, corruption, error
 
 def test_verifier_does_not_depend_on_wall_clock(tmp_path):
     coordinator, _database = _seeded(tmp_path, "clock-independent.db")
-    assert coordinator.upgrade("head") == [I09C]
+    assert coordinator.upgrade(I09C) == [I09C]
     source = (
         PROJECT_ROOT / f"migrations/versions/{I09}.py"
     ).read_text(encoding="utf-8")
     assert "CURRENT_TIMESTAMP" not in source
     assert "datetime(" not in source
     # An already-expired lease is a runtime state, never schema corruption.
-    coordinator.verify()
+    _verify_revision(coordinator, _database)
 
 
 # ---------------------------------------------------------- version matrix
@@ -1057,13 +1061,13 @@ def test_version_matrix_is_fail_closed_in_both_directions(tmp_path):
     pending = tmp_path / "new-binary-old-db.db"
     coordinator = _at_i05(pending)
     assert coordinator.check().classification == "MANAGED_PENDING"
-    assert coordinator.check().pending_revisions == (I09, I09C)
+    assert coordinator.check().pending_revisions == (I09, I09C, I09E)
     with pytest.raises(RevisionStateError, match="not at the checked-in head"):
         coordinator.verify()
 
     # Cell 2: new binary, database at head -> ready.
-    assert coordinator.upgrade("head") == [I09, I09C]
-    assert coordinator.verify().current_revision == I09C
+    assert coordinator.upgrade("head") == [I09, I09C, I09E]
+    assert coordinator.verify().current_revision == I09E
 
     # Cell 3: old binary against a 0004 database -> refuses to boot rather than
     # serving a schema it does not know.

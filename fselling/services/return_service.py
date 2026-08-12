@@ -667,6 +667,16 @@ def create_return(
         .filter(models.OrderItem.order_id == order_id)
         .all()
     }
+    deficit_order_item_ids = {
+        int(order_item_id)
+        for (order_item_id,) in db.query(
+            models.OfflineBatchStockDeficit.order_item_id
+        )
+        .filter(
+            models.OfflineBatchStockDeficit.order_item_id.in_(dong_don.keys())
+        )
+        .all()
+    }
     da_tra = da_tra_theo_dong(db, order_id)
 
     chi_tiet: List[Dict[str, Any]] = []
@@ -677,6 +687,15 @@ def create_return(
             raise HTTPException(
                 status_code=400,
                 detail=tr("Dòng hàng không thuộc đơn này"),
+            )
+        if int(dong.id) in deficit_order_item_ids:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=tr(
+                    "Dòng theo lô có phần xuất không xác định nguồn; "
+                    "không thể trả hàng an toàn"
+                ),
             )
         con_tra_duoc = int(dong.quantity or 0) - int(dong.returned_total_qty or 0)
         if it.quantity > con_tra_duoc:
@@ -693,14 +712,66 @@ def create_return(
                 ),
             )
         line_delta = _line_return_delta(dong, int(it.quantity))
+        batch_deltas = _batch_return_deltas(db, dong, line_delta)
+        product = None
+        verified_product_id = None
+        batches: Dict[int, models.ProductBatch] = {}
+        if it.restock:
+            if dong.product_id is None:
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=tr("Dòng đơn thiếu product_id; không thể nhập lại kho an toàn"),
+                )
+            product = (
+                db.query(models.Product)
+                .filter(
+                    models.Product.id == dong.product_id,
+                    models.Product.shop_id == order.shop_id,
+                )
+                .first()
+            )
+            if product is None:
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=tr("Sản phẩm nguồn không thuộc cửa hàng; không thể nhập lại kho"),
+                )
+            verified_product_id = int(product.id)
+            if batch_deltas:
+                batch_ids = [int(row["source"].batch_id) for row in batch_deltas]
+                batches = {
+                    int(batch.id): batch
+                    for batch in db.query(models.ProductBatch)
+                    .filter(
+                        models.ProductBatch.id.in_(batch_ids),
+                        models.ProductBatch.product_id == product.id,
+                    )
+                    .all()
+                }
+                if len(batches) != len(set(batch_ids)):
+                    db.rollback()
+                    raise HTTPException(
+                        status_code=409,
+                        detail=tr("Lô nguồn không thuộc sản phẩm của cửa hàng"),
+                    )
+            elif product.track_batches:
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=tr("Dòng theo lô thiếu provenance nguồn"),
+                )
         chi_tiet.append({
             "dong": dong,
+            "product": product,
+            "verified_product_id": verified_product_id,
             "quantity": int(it.quantity),
             "restock": bool(it.restock),
             "tien_hang": int(dong.price or 0) * int(it.quantity),
             "tien_hoan": line_delta["refund"],
             "line_delta": line_delta,
-            "batch_deltas": _batch_return_deltas(db, dong, line_delta),
+            "batch_deltas": batch_deltas,
+            "batches": batches,
         })
 
     tien_hoan = 0
@@ -800,7 +871,7 @@ def create_return(
         return_item = models.OrderReturnItem(
                 return_id=phieu.id,
                 order_item_id=dong.id,
-                product_id=dong.product_id,
+                product_id=d["verified_product_id"],
                 product_name=dong.product_name,
                 quantity=d["quantity"],
                 unit_price=int(dong.price or 0),
@@ -815,22 +886,10 @@ def create_return(
 
         _conditional_advance_line_return(db, dong, line_delta)
 
-        product = None
-        if dong.product_id is not None:
-            product = db.query(models.Product).filter(models.Product.id == dong.product_id).first()
+        product = d["product"]
         batch_deltas = d["batch_deltas"]
         if batch_deltas:
-            if product is None:
-                raise HTTPException(status_code=409, detail=tr("Sản phẩm nguồn của lô trả không còn tồn tại"))
-            batch_ids = [int(row["source"].batch_id) for row in batch_deltas]
-            batches = {
-                int(batch.id): batch
-                for batch in db.query(models.ProductBatch)
-                .filter(models.ProductBatch.id.in_(batch_ids))
-                .all()
-            }
-            if len(batches) != len(set(batch_ids)):
-                raise HTTPException(status_code=409, detail=tr("Lô nguồn của hàng trả không còn tồn tại"))
+            batches = d["batches"]
             for row in batch_deltas:
                 source = row["source"]
                 db.add(
@@ -858,21 +917,18 @@ def create_return(
                 if int(product.stock or 0) > MAX_SAFE_QUANTITY - d["quantity"]:
                     raise HTTPException(status_code=409, detail=tr("Tồn kho sau trả vượt giới hạn"))
                 product.stock = int(product.stock or 0) + d["quantity"]
-        else:
-            if product is not None and product.track_batches:
-                raise HTTPException(status_code=409, detail=tr("Dòng theo lô thiếu provenance nguồn"))
-            if d["restock"]:
-                if product is None:
-                    raise HTTPException(status_code=409, detail=tr("Sản phẩm nguồn của hàng trả không còn tồn tại"))
-                if int(product.stock or 0) > MAX_SAFE_QUANTITY - d["quantity"]:
-                    raise HTTPException(status_code=409, detail=tr("Tồn kho sau trả vượt giới hạn"))
-                inventory_service.restore_cost_pool(
-                    product,
-                    line_delta["known"],
-                    line_delta["unknown"],
-                    line_delta["basis"],
-                )
-                product.stock = int(product.stock or 0) + d["quantity"]
+        elif d["restock"]:
+            if product is None:
+                raise HTTPException(status_code=409, detail=tr("Sản phẩm nguồn của hàng trả không còn tồn tại"))
+            if int(product.stock or 0) > MAX_SAFE_QUANTITY - d["quantity"]:
+                raise HTTPException(status_code=409, detail=tr("Tồn kho sau trả vượt giới hạn"))
+            inventory_service.restore_cost_pool(
+                product,
+                line_delta["known"],
+                line_delta["unknown"],
+                line_delta["basis"],
+            )
+            product.stock = int(product.stock or 0) + d["quantity"]
 
     if tien_hoan > MONEY_EPSILON:
         db.add(

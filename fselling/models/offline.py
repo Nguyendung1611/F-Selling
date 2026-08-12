@@ -1,6 +1,6 @@
 """ORM mappings for the I09 offline receipt tables.
 
-The schema is owned by migrations 0004 and 0005.  These classes only map the
+The schema is owned by migrations 0004 through 0006.  These classes only map the
 released tables so service code can persist and verify offline receipt evidence
 and its issue lifecycle.  Lease behaviour belongs to later I09 slices.
 """
@@ -78,6 +78,43 @@ class OfflineReceipt(Base):
     client_monotonic_ms = Column(Integer, nullable=True)
     server_anchor_id = Column(String, nullable=True)
     ingested_at = Column(String(26), nullable=False)
+
+
+class OfflineReceiptItem(Base):
+    """Canonical contract-v1 line evidence, separate from catalog identity.
+
+    ``claimed_product_id`` is exactly what the offline client signed.  Only a
+    verified same-shop catalog row may also appear in ``OrderItem.product_id``.
+    The ordinal preserves canonical duplicate multiplicity one row at a time.
+    """
+
+    __tablename__ = "offline_receipt_items"
+    __table_args__ = (
+        Index(
+            "ux_offline_receipt_items_receipt_ordinal",
+            "receipt_id",
+            "item_ordinal",
+            unique=True,
+        ),
+        Index(
+            "ux_offline_receipt_items_order_item",
+            "order_item_id",
+            unique=True,
+        ),
+        Index(
+            "ix_offline_receipt_items_claimed_product",
+            "claimed_product_id",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    receipt_id = Column(Integer, ForeignKey("offline_receipts.id"), nullable=False)
+    order_item_id = Column(Integer, ForeignKey("order_items.id"), nullable=False)
+    item_ordinal = Column(Integer, nullable=False)
+    claimed_product_id = Column(Integer, nullable=False)
+    product_name = Column(String, nullable=False)
+    unit_price_vnd = Column(Integer, nullable=False)
+    quantity = Column(Integer, nullable=False)
 
 
 class OfflineStockDeficit(Base):

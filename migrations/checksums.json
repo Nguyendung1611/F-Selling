@@ -25,6 +25,11 @@
       "down_revision": "0004_i09_offline_receipts",
       "path": "versions/0005_i09c_offline_issue_lifecycle.py",
       "sha256": "c4ffcb31bb6f50786ee228cead5202e716abc50eebac93dfba4813de457c4716"
+    },
+    "0006_i09e_offline_receipt_items": {
+      "down_revision": "0005_i09c_offline_issue_lifecycle",
+      "path": "versions/0006_i09e_offline_receipt_items.py",
+      "sha256": "086e1c747b27923cf274773d8ab041f52e44a9e81d8efc569d0af1ce1971f104"
     }
   }
 }

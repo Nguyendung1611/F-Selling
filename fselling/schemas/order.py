@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..core.numeric_limits import MAX_SAFE_QUANTITY, MAX_SAFE_VND
 from .money import ExactVND, SignedExactVND
@@ -178,3 +178,67 @@ class RefundComplete(BaseModel):
     # Một id cho đúng MỘT lần bấm hoàn. Retry mạng dùng lại id này nên không thể
     # vô tình xác nhận hộ một khoản dư mới xuất hiện sau đó.
     operation_id: str = Field(min_length=8, max_length=128)
+
+
+# ---------------------------------------------------------------------------
+# Offline contract v1 schemas (I09-E+B2)
+# ---------------------------------------------------------------------------
+
+
+class OfflineOrderItemV1(BaseModel):
+    """Một dòng hàng trong phiếu offline contract v1."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    product_id: int = Field(strict=True, ge=1, le=MAX_SAFE_QUANTITY)
+    # Canonical layer applies the 300-code-point / 900-byte limits after NFC
+    # and whitespace collapse; a raw decomposed form may legitimately be longer.
+    product_name: str = Field(min_length=1)
+    unit_price_vnd: int = Field(strict=True, ge=0, le=MAX_SAFE_VND)
+    quantity: int = Field(strict=True, ge=1, le=MAX_SAFE_QUANTITY)
+
+
+class OfflineOrderCreateV1(BaseModel):
+    """Phiếu bán offline contract v1 — server-time/lease-backed.
+
+    Token chỉ ở header `X-Offline-Lease-Token`, tuyệt đối không body/query/fingerprint.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    offline_contract_version: int = Field(strict=True, ge=1, le=1)
+    lease_id: str = Field(min_length=26, max_length=26)
+    device_id: str = Field(min_length=1, max_length=128)
+    offline_session_id: str = Field(min_length=26, max_length=26)
+    sequence: int = Field(strict=True, ge=1, le=MAX_SAFE_QUANTITY)
+    offline_uuid: str = Field(min_length=8, max_length=64)
+    # Accept an ISO-8601 wall time with or without an offset.  The fingerprint
+    # layer converts the instant to fixed-width UTC-naive text before any
+    # duplicate decision or persistence.
+    sold_at_client_utc: str = Field(min_length=19, max_length=64)
+    client_monotonic_ms: int = Field(strict=True, ge=0, le=MAX_SAFE_QUANTITY)
+    monotonic_valid: bool = Field(strict=True)
+    server_anchor_id: str = Field(min_length=1, max_length=64)
+    catalog_version: int = Field(strict=True, ge=0, le=MAX_SAFE_QUANTITY)
+    catalog_snapshot_digest: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    client_fingerprint: str = Field(
+        min_length=71, max_length=71, pattern=r"^fsofr1:[0-9a-f]{64}$"
+    )
+    items: List[OfflineOrderItemV1] = Field(min_length=1, max_length=200)
+    cash_tendered: int = Field(strict=True, ge=0, le=MAX_SAFE_VND)
+
+
+class OfflineOrderSyncResponseV1(BaseModel):
+    """Response cho offline contract v1 ingest."""
+
+    contract_version: int
+    order_id: Optional[int] = None
+    offline_uuid: str
+    created: bool
+    sold_by_user_id: int
+    synced_by_user_id: int
+    sold_at_effective: str
+    time_confidence: str
+    server_time_utc: str

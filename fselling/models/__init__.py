@@ -15,6 +15,7 @@ from .loyalty import LoyaltyPointEntry, LoyaltyProgram
 from .offline import (
     OfflineLease,
     OfflineReceipt,
+    OfflineReceiptItem,
     OfflineReceiptIssue,
     OfflineReceiptRegistry,
     OfflineStockDeficit,
@@ -77,6 +78,7 @@ __all__ = [
     "OfflineLease",
     "OfflineReceiptRegistry",
     "OfflineReceipt",
+    "OfflineReceiptItem",
     "OfflineReceiptIssue",
     "OfflineStockDeficit",
     "OfflineBatchStockDeficit",

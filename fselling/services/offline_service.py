@@ -32,7 +32,7 @@ mới — doanh thu và tồn kho cùng nhân đôi.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
@@ -49,12 +49,20 @@ from ..dependencies import (
     require_shop_access,
     require_staff_permission,
 )
-from ..schemas.order import OfflineIssueAcknowledge, OfflineOrderCreate
+from ..schemas.order import (
+    OfflineIssueAcknowledge,
+    OfflineOrderCreate,
+    OfflineOrderCreateV1,
+)
 from . import inventory_service, order_service
 from .offline_fingerprint import (
     OfflineFingerprintV0,
+    OfflineFingerprintV1,
+    OfflineTotalOverflowError,
     canonical_time_text,
+    canonical_time_text_v1,
     fingerprint_offline_receipt_v0,
+    fingerprint_offline_receipt_v1,
 )
 
 # Vướng mắc lúc ghi phiếu. Đơn KHÔNG bị chặn vì lý do nào trong số này.
@@ -100,7 +108,9 @@ ACKNOWLEDGEABLE_ISSUE_CODES = (ISSUE_CA_DA_CHOT, ISSUE_KHONG_CO_CA)
 ENTRY_SALE_CASH = "SALE_CASH"
 
 ERROR_FINGERPRINT_CONFLICT = "OFFLINE_RECEIPT_FINGERPRINT_CONFLICT"
-ERROR_UUID_OTHER_SHOP = "OFFLINE_RECEIPT_UUID_OTHER_SHOP"
+ERROR_UUID_OTHER_SHOP = "OFFLINE_UUID_OTHER_SHOP"
+# Source-compatible alias for callers that imported the pre-ADR Python name.
+ERROR_RECEIPT_UUID_OTHER_SHOP = ERROR_UUID_OTHER_SHOP
 ERROR_REGISTRY_INCONSISTENT = "OFFLINE_RECEIPT_REGISTRY_INCONSISTENT"
 ERROR_UUID_UNAVAILABLE = "OFFLINE_RECEIPT_UUID_UNAVAILABLE"
 
@@ -111,6 +121,13 @@ ERROR_ISSUE_RECOVERY_REQUIRED = "OFFLINE_ISSUE_RECOVERY_REQUIRED"
 ERROR_ISSUE_STATE_CONFLICT = "OFFLINE_ISSUE_STATE_CONFLICT"
 
 MONEY_EPSILON = 0
+
+
+def _bad_request(code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={"code": code, "message": tr(message)},
+    )
 
 
 def _tien(x: Any) -> int:
@@ -252,6 +269,17 @@ def _tim_theo_uuid(
             "Dữ liệu bằng chứng phiếu offline không nhất quán",
         )
     don_theo_registry = db.get(models.Order, registry.order_id)
+    if (
+        registry.contract_version != 0
+        or receipt is not None
+        and receipt.contract_version != 0
+    ):
+        # A UUID cannot be promoted or demoted between v0 and v1.  This is a
+        # document conflict, not durable corruption.
+        raise _xung_dot(
+            ERROR_FINGERPRINT_CONFLICT,
+            "Mã phiếu offline đã được dùng với contract khác",
+        )
     if (
         don_theo_uuid is None
         or don_theo_registry is None
@@ -400,6 +428,73 @@ def _tru_ton_chiu_thieu(
     return da_lay, con_lai
 
 
+def _prepare_offline_sale_lines(
+    db: Session,
+    *,
+    shop_id: int,
+    canonical_items: Tuple[Any, ...],
+) -> Tuple[int, List[Dict[str, Any]], List[str]]:
+    """Shared v0/v1 exact-money preparation in canonical item order."""
+    total = 0
+    lines: List[Dict[str, Any]] = []
+    issues: List[str] = []
+    for item in canonical_items:
+        product = (
+            db.query(models.Product)
+            .filter(
+                models.Product.id == item.product_id,
+                models.Product.shop_id == shop_id,
+            )
+            .first()
+        )
+        total = checked_add(
+            total,
+            checked_multiply(item.quantity, item.unit_price_vnd),
+        )
+        missing = product is None
+        price_changed = (
+            product is not None and _tien(product.price) != item.unit_price_vnd
+        )
+        lines.append(
+            {
+                "prod": product,
+                "mh": item,
+                "thieu_sp": missing,
+                "gia_doi": price_changed,
+            }
+        )
+        code = ISSUE_SP_KHONG_CON if missing else ISSUE_GIA_DOI if price_changed else None
+        if code is not None and code not in issues:
+            issues.append(code)
+    return total, lines, issues
+
+
+def _add_offline_cash_payment(
+    db: Session,
+    *,
+    order_id: int,
+    amount: int,
+    offline_uuid: str,
+    actor_user_id: int,
+    shift_id: Optional[int],
+    sold_at: datetime,
+    note: str,
+) -> None:
+    """Shared append-only cash ledger entry for both offline contracts."""
+    db.add(
+        models.OrderPayment(
+            order_id=order_id,
+            entry_type=ENTRY_SALE_CASH,
+            amount=amount,
+            idempotency_key=f"offline:{offline_uuid}",
+            created_by_user_id=actor_user_id,
+            shift_id=shift_id,
+            note=note,
+            created_at=sold_at,
+        )
+    )
+
+
 def dong_bo_phieu(
     db: Session,
     current_user: models.User,
@@ -428,7 +523,7 @@ def dong_bo_phieu(
 
     uuid = canonical.offline_uuid
     if not uuid:
-        raise HTTPException(status_code=400, detail=tr("Thiếu mã phiếu offline"))
+        raise _bad_request("OFFLINE_UUID_MISSING", "Thiếu mã phiếu offline")
 
     # Fingerprint is already known before the first duplicate decision.  A
     # matching durable registry is a retry; a different document is a conflict.
@@ -458,9 +553,9 @@ def dong_bo_phieu(
         if luc_ban > ingested_at:
             # Đồng hồ máy bán chạy nhanh. Nhận giờ tương lai thì đơn rơi ra ngoài mọi
             # báo cáo theo ngày và không ca nào phủ được nó.
-            raise HTTPException(
-                status_code=400,
-                detail=tr("Giờ bán nằm ở tương lai; kiểm lại đồng hồ máy bán"),
+            raise _bad_request(
+                "OFFLINE_TIME_FUTURE",
+                "Giờ bán nằm ở tương lai; kiểm lại đồng hồ máy bán",
             )
 
         van_de: List[str] = []
@@ -473,51 +568,26 @@ def dong_bo_phieu(
         # known/cost basis lại phụ thuộc request nào thắng. Lãi và trả hàng từng
         # phần sẽ khác nhau trên cùng một phiếu. Thứ tự canonical giữ nguyên bội
         # số dòng trùng, không bao giờ gộp dòng.
-        tong = 0
-        dong_hang: List[Dict[str, Any]] = []
-        for mh in canonical.items:
-            # Lọc kèm shop_id: thiếu điều kiện đó thì đoán product_id là bán được
-            # hàng của shop khác (bẫy 22).
-            prod = (
-                db.query(models.Product)
-                .filter(
-                    models.Product.id == mh.product_id,
-                    models.Product.shop_id == shop_id,
-                )
-                .first()
+        try:
+            tong, dong_hang, line_issues = _prepare_offline_sale_lines(
+                db,
+                shop_id=shop_id,
+                canonical_items=canonical.items,
             )
-            try:
-                tien_dong = checked_multiply(mh.quantity, mh.unit_price_vnd)
-                tong = checked_add(tong, tien_dong)
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail=tr("Tổng tiền phiếu vượt giới hạn"),
-                )
-            # Cờ ghi ở mức DÒNG, không phải mức đơn: bảng issue cần biết đúng
-            # dòng nào hỏng, còn `van_de` chỉ là bản sao tương thích của đơn.
-            thieu_sp = prod is None
-            gia_doi = prod is not None and _tien(prod.price) != mh.unit_price_vnd
-            dong_hang.append(
-                {"prod": prod, "mh": mh, "thieu_sp": thieu_sp, "gia_doi": gia_doi}
+        except ValueError:
+            raise _bad_request(
+                "OFFLINE_TOTAL_OVERFLOW",
+                "Tổng tiền phiếu vượt giới hạn",
             )
-
-            if thieu_sp:
-                # Sản phẩm bị xóa giữa lúc bán và lúc sync. Vẫn ghi dòng tiền bằng
-                # tên đã chụp, để khoản tiền trong két còn tra được về đâu.
-                if ISSUE_SP_KHONG_CON not in van_de:
-                    van_de.append(ISSUE_SP_KHONG_CON)
-            elif gia_doi:
-                if ISSUE_GIA_DOI not in van_de:
-                    van_de.append(ISSUE_GIA_DOI)
+        van_de.extend(line_issues)
 
         tendered = _tien(phieu.cash_tendered)
         if tendered < tong:
             # Tiền khách đưa ít hơn tổng đơn là phiếu sai, không phải xung đột dữ
             # liệu. Nhận vào là ghi một khoản thu không có thật.
-            raise HTTPException(
-                status_code=400,
-                detail=tr(
+            raise _bad_request(
+                "OFFLINE_TENDER_TOO_LOW",
+                tr(
                     "Tiền khách đưa ({tendered}) nhỏ hơn tổng đơn ({total})",
                     tendered=f"{tendered:,.0f}đ",
                     total=f"{tong:,.0f}đ",
@@ -754,17 +824,15 @@ def dong_bo_phieu(
 
         # ---- Bút toán tiền mặt vào két của ca ----
         # `idempotency_key` là lớp chặn thứ hai sau registry/order UUID.
-        db.add(
-            models.OrderPayment(
-                order_id=don.id,
-                entry_type=ENTRY_SALE_CASH,
-                amount=tong,
-                idempotency_key=f"offline:{uuid}",
-                created_by_user_id=user_id,
-                shift_id=ca.id if ca else None,
-                note="Bán tiền mặt khi mất mạng",
-                created_at=luc_ban,
-            )
+        _add_offline_cash_payment(
+            db,
+            order_id=don.id,
+            amount=tong,
+            offline_uuid=uuid,
+            actor_user_id=user_id,
+            shift_id=ca.id if ca else None,
+            sold_at=luc_ban,
+            note="Bán tiền mặt khi mất mạng",
         )
 
         # Transaction-local audit: no device label, UUID or raw payload.
@@ -1043,3 +1111,918 @@ def xac_nhan_van_de(
         "state": STATE_ACKNOWLEDGED,
         "state_version": new_version,
     }
+
+
+# ---------------------------------------------------------------------------
+# v1 offline ingest (I09-E+B2)
+# ---------------------------------------------------------------------------
+
+ISSUE_DONG_HO_LECH = "DONG_HO_LECH"
+ISSUE_FINGERPRINT_LECH = "FINGERPRINT_LECH"  # client ≠ server fingerprint
+EVIDENCE_TIME = "TIME"
+
+ERROR_SEQUENCE_CONFLICT = "OFFLINE_SEQUENCE_CONFLICT"
+ERROR_TIME_BEFORE_LEASE = "OFFLINE_TIME_BEFORE_LEASE"
+
+# Confidence levels for sold_at_effective
+CONFIDENCE_ANCHORED_CLIENT = "ANCHORED_CLIENT"
+CONFIDENCE_BOUNDED = "BOUNDED"
+CONFIDENCE_ANOMALY = "ANOMALY"
+
+
+def _utcnow() -> datetime:
+    return datetime.utcnow()
+
+
+def _parse_canonical_time(value: str) -> datetime:
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d %H:%M:%S.%f")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("timestamp is not canonical UTC-naive text") from exc
+    if canonical_time_text(parsed) != value:
+        raise ValueError("timestamp is not fixed-width canonical text")
+    return parsed
+
+
+def _raise_time_boundary(
+    value: datetime,
+    *,
+    issued_at: datetime,
+    expires_at: datetime,
+    request_received_at: datetime,
+) -> None:
+    """Apply the locked boundary order to a derived/effective timestamp."""
+    if value < issued_at:
+        raise _xung_dot(
+            ERROR_TIME_BEFORE_LEASE,
+            "Giờ bán trước khi lease được phát hành",
+        )
+    if value > expires_at:
+        raise _xung_dot(
+            "OFFLINE_LEASE_EXPIRED",
+            "Giờ bán nằm sau thời điểm lease hết hạn",
+        )
+    if value > request_received_at + timedelta(minutes=2):
+        raise _bad_request(
+            "OFFLINE_TIME_FUTURE",
+            "Giờ bán chạy nhanh hơn 2 phút so với server",
+        )
+
+
+def _compute_sold_at_effective(
+    anchor_server_time_utc: datetime,
+    issued_at: datetime,
+    expires_at: datetime,
+    sold_at_client_utc: str,
+    client_monotonic_ms: int,
+    monotonic_valid: bool,
+    request_received_at: datetime,
+) -> Tuple[str, str, Optional[str], str]:
+    """Compute sold_at_effective and bounds from monotonic clock anchor.
+
+    Returns effective, confidence, optional upper bound and canonical client wall.
+    """
+    canonical_client = canonical_time_text_v1(sold_at_client_utc)
+    client_dt = _parse_canonical_time(canonical_client)
+    lower = anchor_server_time_utc + timedelta(milliseconds=client_monotonic_ms)
+
+    if monotonic_valid:
+        effective = lower
+        upper = None
+        confidence = CONFIDENCE_ANCHORED_CLIENT
+    else:
+        upper = min(
+            lower + timedelta(minutes=5),
+            expires_at,
+            request_received_at + timedelta(minutes=2),
+        )
+        if upper < lower:
+            # Do not swap a contradictory interval.  Classify the lower bound
+            # with the same before/expiry/future precedence as normal input.
+            _raise_time_boundary(
+                lower,
+                issued_at=issued_at,
+                expires_at=expires_at,
+                request_received_at=request_received_at,
+            )
+            raise _xung_dot("OFFLINE_LEASE_EXPIRED", "Cửa sổ thời gian lease rỗng")
+        effective = max(lower, min(client_dt, upper))
+        confidence = CONFIDENCE_BOUNDED
+
+    _raise_time_boundary(
+        effective,
+        issued_at=issued_at,
+        expires_at=expires_at,
+        request_received_at=request_received_at,
+    )
+    if abs(client_dt - effective) > timedelta(minutes=10):
+        confidence = CONFIDENCE_ANOMALY
+    return (
+        canonical_time_text(effective),
+        confidence,
+        canonical_time_text(upper) if upper is not None else None,
+        canonical_client,
+    )
+
+
+def _check_sequence_conflict(
+    db: Session,
+    lease_id: str,
+    device_id: str,
+    offline_session_id: str,
+    sequence: int,
+    offline_uuid: str,
+) -> None:
+    """Check for SEQUENCE_CONFLICT: same lease+sequence but different UUID."""
+    existing = (
+        db.query(models.OfflineReceipt)
+        .join(models.Order, models.Order.id == models.OfflineReceipt.order_id)
+        .filter(
+            models.OfflineReceipt.lease_id == lease_id,
+            models.OfflineReceipt.device_id == device_id,
+            models.OfflineReceipt.offline_session_id == offline_session_id,
+            models.OfflineReceipt.sequence == sequence,
+            models.OfflineReceipt.offline_uuid != offline_uuid,
+        )
+        .first()
+    )
+    if existing is not None:
+        raise _xung_dot(
+            ERROR_SEQUENCE_CONFLICT,
+            f"Sequence {sequence} đã được dùng với một phiếu khác trong session này",
+        )
+
+
+def _sequence_is_non_monotonic(
+    db: Session,
+    *,
+    lease_id: str,
+    sequence: int,
+    client_monotonic_ms: int,
+) -> bool:
+    predecessor = (
+        db.query(models.OfflineReceipt)
+        .filter(
+            models.OfflineReceipt.lease_id == lease_id,
+            models.OfflineReceipt.sequence < sequence,
+        )
+        .order_by(models.OfflineReceipt.sequence.desc())
+        .first()
+    )
+    successor = (
+        db.query(models.OfflineReceipt)
+        .filter(
+            models.OfflineReceipt.lease_id == lease_id,
+            models.OfflineReceipt.sequence > sequence,
+        )
+        .order_by(models.OfflineReceipt.sequence.asc())
+        .first()
+    )
+    return bool(
+        predecessor is not None
+        and predecessor.client_monotonic_ms is not None
+        and int(predecessor.client_monotonic_ms) > client_monotonic_ms
+        or successor is not None
+        and successor.client_monotonic_ms is not None
+        and int(successor.client_monotonic_ms) < client_monotonic_ms
+    )
+
+
+def _receipt_v1_consistent(
+    db: Session,
+    order: models.Order,
+    registry: models.OfflineReceiptRegistry,
+    receipt: models.OfflineReceipt,
+) -> bool:
+    """Reconstruct fsofr1 from durable lease/order/item/cash evidence."""
+    lease = db.get(models.OfflineLease, receipt.lease_id)
+    if lease is None:
+        return False
+    order_items = (
+        db.query(models.OrderItem)
+        .filter(models.OrderItem.order_id == order.id)
+        .all()
+    )
+    snapshots = (
+        db.query(models.OfflineReceiptItem)
+        .filter(models.OfflineReceiptItem.receipt_id == receipt.id)
+        .order_by(models.OfflineReceiptItem.item_ordinal.asc())
+        .all()
+    )
+    payments = (
+        db.query(models.OrderPayment)
+        .filter(models.OrderPayment.idempotency_key == f"offline:{order.offline_uuid}")
+        .all()
+    )
+    if (
+        not 1 <= len(order_items) <= 200
+        or len(snapshots) != len(order_items)
+        or len(payments) != 1
+    ):
+        return False
+    payment = payments[0]
+    try:
+        item_by_id = {int(item.id): item for item in order_items}
+        if len(item_by_id) != len(order_items):
+            return False
+        reconstructed_items = []
+        seen_item_ids = set()
+        for ordinal, snapshot in enumerate(snapshots, start=1):
+            if int(snapshot.item_ordinal) != ordinal:
+                return False
+            order_item = item_by_id.get(int(snapshot.order_item_id))
+            if order_item is None or int(order_item.id) in seen_item_ids:
+                return False
+            seen_item_ids.add(int(order_item.id))
+            if (
+                snapshot.product_name != order_item.product_name
+                or _tien(snapshot.unit_price_vnd) != _tien(order_item.price)
+                or int(snapshot.quantity) != int(order_item.quantity)
+            ):
+                return False
+            if order_item.product_id is not None:
+                product = db.get(models.Product, int(order_item.product_id))
+                if (
+                    int(order_item.product_id) != int(snapshot.claimed_product_id)
+                    or product is None
+                    or int(product.shop_id) != int(order.shop_id)
+                ):
+                    return False
+            elif (
+                db.query(models.Product.id)
+                .filter(
+                    models.Product.id == int(snapshot.claimed_product_id),
+                    models.Product.shop_id == int(order.shop_id),
+                )
+                .first()
+                is not None
+            ):
+                return False
+            reconstructed_items.append(
+                {
+                    "product_id": int(snapshot.claimed_product_id),
+                    "product_name": snapshot.product_name,
+                    "unit_price_vnd": _tien(snapshot.unit_price_vnd),
+                    "quantity": int(snapshot.quantity),
+                }
+            )
+        if seen_item_ids != set(item_by_id):
+            return False
+        effective = _parse_canonical_time(receipt.sold_at_effective)
+        client_wall = _parse_canonical_time(receipt.sold_at_client_utc)
+        ingested = _parse_canonical_time(receipt.ingested_at)
+        upper = (
+            _parse_canonical_time(receipt.sold_at_upper_bound)
+            if receipt.sold_at_upper_bound is not None
+            else None
+        )
+        reconstructed = fingerprint_offline_receipt_v1(
+            shop_id=int(order.shop_id),
+            sold_at_client_utc=canonical_time_text(client_wall),
+            client_monotonic_ms=int(receipt.client_monotonic_ms),
+            monotonic_valid=upper is None,
+            server_anchor_id=receipt.server_anchor_id,
+            lease_id=receipt.lease_id,
+            device_id=receipt.device_id,
+            offline_session_id=receipt.offline_session_id,
+            sequence=int(receipt.sequence),
+            offline_uuid=receipt.offline_uuid,
+            catalog_version=int(lease.catalog_version),
+            catalog_snapshot_digest=lease.catalog_snapshot_digest,
+            items=reconstructed_items,
+            cash_tendered_vnd=_tien(order.cash_tendered_amount),
+        )
+        if [
+            (
+                int(item.product_id),
+                item.product_name,
+                int(item.unit_price_vnd),
+                int(item.quantity),
+            )
+            for item in reconstructed.items
+        ] != [
+            (
+                int(snapshot.claimed_product_id),
+                snapshot.product_name,
+                _tien(snapshot.unit_price_vnd),
+                int(snapshot.quantity),
+            )
+            for snapshot in snapshots
+        ]:
+            return False
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+    mismatch = receipt.client_fingerprint != receipt.server_fingerprint
+    return bool(
+        registry.state == "INGESTED"
+        and registry.order_id == order.id == receipt.order_id
+        and registry.offline_uuid == order.offline_uuid == receipt.offline_uuid
+        and registry.shop_id == order.shop_id == lease.shop_id
+        and registry.contract_version == receipt.contract_version == 1
+        and registry.server_fingerprint == receipt.server_fingerprint
+        and registry.superseded_by_offline_uuid is None
+        and reconstructed.digest == receipt.server_fingerprint
+        and reconstructed.total_vnd == _tien(order.total_amount)
+        and receipt.client_fingerprint_mismatch == (1 if mismatch else 0)
+        and receipt.offline_session_id == receipt.lease_id == lease.lease_id
+        and receipt.device_id == lease.device_id == order.offline_device
+        and receipt.server_anchor_id == lease.server_anchor_id
+        and receipt.sold_by_claimed_user_id == order.created_by_user_id == lease.user_id
+        and receipt.attribution_kind == "LEASE_CLAIM"
+        and receipt.time_confidence
+        in (CONFIDENCE_ANCHORED_CLIENT, CONFIDENCE_BOUNDED, CONFIDENCE_ANOMALY)
+        and (receipt.time_confidence != CONFIDENCE_ANCHORED_CLIENT or upper is None)
+        and (upper is None or upper >= effective)
+        and _canonical_order_time(order.created_at) == receipt.sold_at_effective
+        and _canonical_order_time(order.sold_offline_at) == receipt.sold_at_effective
+        and canonical_time_text(ingested) == receipt.ingested_at
+        and payment.order_id == order.id
+        and payment.entry_type == ENTRY_SALE_CASH
+        and _tien(payment.amount) == _tien(order.total_amount)
+        and payment.created_by_user_id == receipt.sold_by_claimed_user_id
+        and payment.shift_id == order.shift_id
+        and _canonical_order_time(payment.created_at) == receipt.sold_at_effective
+    )
+
+
+def _tim_theo_uuid_v1(
+    db: Session,
+    shop_id: int,
+    canonical: OfflineFingerprintV1,
+) -> Optional[Tuple[models.Order, models.OfflineReceipt]]:
+    order = (
+        db.query(models.Order)
+        .filter(models.Order.offline_uuid == canonical.offline_uuid)
+        .first()
+    )
+    registry = db.get(models.OfflineReceiptRegistry, canonical.offline_uuid)
+    receipt = (
+        db.query(models.OfflineReceipt)
+        .filter(models.OfflineReceipt.offline_uuid == canonical.offline_uuid)
+        .first()
+    )
+    if (
+        order is not None
+        and int(order.shop_id) != int(shop_id)
+        or registry is not None
+        and int(registry.shop_id) != int(shop_id)
+    ):
+        raise _xung_dot(
+            ERROR_UUID_OTHER_SHOP,
+            "Mã phiếu offline đã được dùng cho một cửa hàng khác",
+        )
+    if order is None and registry is None and receipt is None:
+        return None
+    if registry is not None and int(registry.contract_version) != 1:
+        raise _xung_dot(
+            ERROR_FINGERPRINT_CONFLICT,
+            "Mã phiếu offline đã được dùng với contract khác",
+        )
+    if (
+        order is None
+        or registry is None
+        or receipt is None
+        or not _receipt_v1_consistent(db, order, registry, receipt)
+    ):
+        raise _xung_dot(
+            ERROR_REGISTRY_INCONSISTENT,
+            "Dữ liệu bằng chứng phiếu offline không nhất quán",
+        )
+    if registry.server_fingerprint != canonical.digest:
+        raise _xung_dot(
+            ERROR_FINGERPRINT_CONFLICT,
+            "Mã phiếu offline đã được dùng với nội dung khác",
+        )
+    return order, receipt
+
+
+def _phan_hoi_v1(
+    order: models.Order,
+    receipt: models.OfflineReceipt,
+    server_time_utc: str,
+    moi: bool,
+) -> Dict[str, Any]:
+    return {
+        "contract_version": 1,
+        "order_id": order.id,
+        "offline_uuid": order.offline_uuid,
+        "total": _tien(order.total_amount),
+        "shift_id": order.shift_id,
+        "sold_by_user_id": receipt.sold_by_claimed_user_id,
+        "synced_by_user_id": receipt.synced_by_user_id,
+        "sold_at_effective": receipt.sold_at_effective,
+        "time_confidence": receipt.time_confidence,
+        "server_time_utc": server_time_utc,
+        "issues": [x for x in (order.offline_issue or "").split(",") if x],
+        "created": moi,
+    }
+
+
+def dong_bo_phieu_v1(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    phieu: OfflineOrderCreateV1,
+    *,
+    lease_token: str = "",
+) -> Dict[str, Any]:
+    """Ghi một phiếu offline contract v1 (I09-E+B2).
+
+    Time: sold_at_effective = ANCHORED_CLIENT / BOUNDED / ANOMALY.
+    Authorization: authorize_normal_v1_capability() → OfflineAttributionContext.
+    Attribution: sold_by_claimed = payment_actor = shift_owner = lease user.
+    CA: chọn theo sold_at_effective + sold_by_claimed.
+    Fingerprint: server recomputes fsofr1:, client_fp for comparison only.
+    Token: chỉ từ X-Offline-Lease-Token header.
+    """
+    from . import offline_lease_service
+
+    canonical: Optional[OfflineFingerprintV1] = None
+    request_received_at: Optional[datetime] = None
+    # Authentication has already happened at the HTTP boundary.  Close its read
+    # snapshot, take the shop write lock, and perform the single I09-D normal-v1
+    # authorization seam inside the financial transaction.
+    db.rollback()
+    try:
+        order_service._lock_shop_for_order(db, shop_id)
+        request_received_at = _utcnow()
+        ctx = offline_lease_service.authorize_normal_v1_capability(
+            db,
+            current_user=current_user,
+            shop_id=shop_id,
+            lease_id=phieu.lease_id,
+            lease_token=lease_token,
+            device_id=phieu.device_id,
+            offline_session_id=phieu.offline_session_id,
+            request_received_at=request_received_at,
+        )
+        if (
+            ctx.contract_version != 1
+            or phieu.catalog_version != ctx.catalog_version
+            or phieu.catalog_snapshot_digest != ctx.catalog_snapshot_digest
+            or phieu.server_anchor_id != ctx.server_anchor_id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": offline_lease_service.ERROR_BINDING_MISMATCH,
+                    "message": tr("Binding credential offline không khớp"),
+                },
+            )
+        sold_by_user_id = int(ctx.sold_by_claimed_user_id)
+
+        try:
+            (
+                sold_at_effective,
+                time_confidence,
+                sold_at_upper_bound,
+                sold_at_client_canonical,
+            ) = _compute_sold_at_effective(
+                anchor_server_time_utc=ctx.anchor_server_time_utc,
+                issued_at=ctx.issued_at,
+                expires_at=ctx.expires_at,
+                sold_at_client_utc=phieu.sold_at_client_utc,
+                client_monotonic_ms=phieu.client_monotonic_ms,
+                monotonic_valid=phieu.monotonic_valid,
+                request_received_at=request_received_at,
+            )
+            canonical = fingerprint_offline_receipt_v1(
+                shop_id=shop_id,
+                sold_at_client_utc=sold_at_client_canonical,
+                client_monotonic_ms=phieu.client_monotonic_ms,
+                monotonic_valid=phieu.monotonic_valid,
+                server_anchor_id=phieu.server_anchor_id,
+                lease_id=phieu.lease_id,
+                device_id=phieu.device_id,
+                offline_session_id=phieu.offline_session_id,
+                sequence=phieu.sequence,
+                offline_uuid=phieu.offline_uuid,
+                catalog_version=phieu.catalog_version,
+                catalog_snapshot_digest=phieu.catalog_snapshot_digest,
+                items=[
+                    {
+                        "product_id": item.product_id,
+                        "product_name": item.product_name,
+                        "unit_price_vnd": item.unit_price_vnd,
+                        "quantity": item.quantity,
+                    }
+                    for item in phieu.items
+                ],
+                cash_tendered_vnd=phieu.cash_tendered,
+            )
+        except OfflineTotalOverflowError:
+            raise _bad_request(
+                "OFFLINE_TOTAL_OVERFLOW",
+                "Tổng tiền phiếu vượt giới hạn",
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "OFFLINE_RECEIPT_MALFORMED",
+                    "message": tr("Phiếu offline không thể chuẩn hóa an toàn"),
+                },
+            ) from exc
+
+        uuid = canonical.offline_uuid
+        da_co = _tim_theo_uuid_v1(db, shop_id, canonical)
+        if da_co is not None:
+            durable_order, durable_receipt = da_co
+            response = _phan_hoi_v1(
+                durable_order,
+                durable_receipt,
+                canonical_time_text(request_received_at),
+                moi=False,
+            )
+            db.rollback()
+            return response
+
+        _check_sequence_conflict(
+            db,
+            lease_id=phieu.lease_id,
+            device_id=phieu.device_id,
+            offline_session_id=phieu.offline_session_id,
+            sequence=phieu.sequence,
+            offline_uuid=uuid,
+        )
+        if _sequence_is_non_monotonic(
+            db,
+            lease_id=phieu.lease_id,
+            sequence=phieu.sequence,
+            client_monotonic_ms=phieu.client_monotonic_ms,
+        ):
+            time_confidence = CONFIDENCE_ANOMALY
+
+        effective_dt = _parse_canonical_time(sold_at_effective)
+
+        van_de: List[str] = []
+
+        # Client fingerprint mismatch → INFO issue (only on first ingest)
+        fingerprint_lech = phieu.client_fingerprint != canonical.digest
+        if fingerprint_lech:
+            van_de.append(ISSUE_FINGERPRINT_LECH)
+        if time_confidence == CONFIDENCE_ANOMALY:
+            van_de.append(ISSUE_DONG_HO_LECH)
+
+        # ---- Build order items (server-computed total from fingerprint) ----
+        tong, dong_hang, line_issues = _prepare_offline_sale_lines(
+            db,
+            shop_id=shop_id,
+            canonical_items=canonical.items,
+        )
+        if tong != canonical.total_vnd:
+            raise _xung_dot(
+                ERROR_REGISTRY_INCONSISTENT,
+                "Tổng canonical không khớp financial core",
+            )
+        for code in line_issues:
+            if code not in van_de:
+                van_de.append(code)
+        tendered = _tien(phieu.cash_tendered)
+        if tendered < tong:
+            raise _bad_request(
+                "OFFLINE_TENDER_TOO_LOW",
+                tr(
+                    "Tiền khách đưa ({tendered}) nhỏ hơn tổng đơn ({total})",
+                    tendered=f"{tendered:,.0f}đ",
+                    total=f"{tong:,.0f}đ",
+                ),
+            )
+
+        # ---- CA by effective time + sold_by_claimed ----
+        ca = _ca_phu_gio_ban(
+            db,
+            shop_id,
+            ctx.shift_owner_user_id,
+            effective_dt,
+        )
+        if ca is None:
+            van_de.append(ISSUE_KHONG_CO_CA)
+        elif ca.status != "OPEN":
+            van_de.append(ISSUE_CA_DA_CHOT)
+
+        # ---- Atomic: Order + items + payment + inventory + cost + registry + receipt + audit ----
+        ingested_at = request_received_at
+        now_text = canonical_time_text(ingested_at)
+
+        don = models.Order(
+            shop_id=shop_id,
+            created_by_user_id=ctx.created_by_user_id,
+            shift_id=ca.id if ca else None,
+            total_amount=tong,
+            discount_amount=0,
+            payment_method=order_service.PAYMENT_METHOD_CASH,
+            status=order_service.STATUS_PAID,
+            cash_paid_amount=tong,
+            cash_tendered_amount=tendered,
+            cash_change_amount=max(tendered - tong, 0),
+            created_at=effective_dt,
+            sold_offline_at=effective_dt,
+            offline_uuid=uuid,
+            offline_device=phieu.device_id,
+        )
+        db.add(don)
+        db.flush()
+
+        # Registry
+        registry = models.OfflineReceiptRegistry(
+            offline_uuid=uuid,
+            shop_id=shop_id,
+            order_id=don.id,
+            server_fingerprint=canonical.digest,
+            contract_version=1,
+            state="INGESTED",
+            superseded_by_offline_uuid=None,
+            created_at=now_text,
+            updated_at=now_text,
+            state_version=0,
+        )
+        db.add(registry)
+        db.flush()
+
+        # Receipt
+        receipt = models.OfflineReceipt(
+            order_id=don.id,
+            offline_uuid=uuid,
+            contract_version=1,
+            lease_id=phieu.lease_id,
+            device_id=phieu.device_id,
+            offline_session_id=phieu.offline_session_id,
+            sequence=phieu.sequence,
+            server_fingerprint=canonical.digest,
+            client_fingerprint=phieu.client_fingerprint,
+            client_fingerprint_mismatch=1 if fingerprint_lech else 0,
+            sold_by_claimed_user_id=ctx.sold_by_claimed_user_id,
+            synced_by_user_id=ctx.synced_by_user_id,
+            attribution_kind=ctx.attribution_kind,
+            sold_at_effective=sold_at_effective,
+            sold_at_client_utc=sold_at_client_canonical,
+            sold_at_upper_bound=sold_at_upper_bound,
+            time_confidence=time_confidence,
+            client_monotonic_ms=phieu.client_monotonic_ms,
+            server_anchor_id=phieu.server_anchor_id,
+            ingested_at=now_text,
+        )
+        db.add(receipt)
+        db.flush()
+
+        # Order items + inventory
+        for item_ordinal, cap in enumerate(dong_hang, start=1):
+            prod: Optional[models.Product] = cap["prod"]
+            mh = cap["mh"]
+
+            da_lay: List[inventory_service.CostAllocation] = []
+            thieu = mh.quantity if prod is None else 0
+            if prod is not None:
+                da_lay, thieu = _tru_ton_chiu_thieu(db, prod, mh.quantity)
+                if thieu > 0 and ISSUE_TON_AM not in van_de:
+                    van_de.append(ISSUE_TON_AM)
+
+            known_qty, allocated_unknown_qty, cost_basis = (
+                inventory_service.allocation_totals(da_lay)
+            )
+            allocated_qty = sum(a.quantity for a in da_lay)
+            unallocated_qty = max(int(mh.quantity) - allocated_qty, 0)
+            unknown_qty = allocated_unknown_qty + unallocated_qty
+            line_total = checked_multiply(mh.quantity, mh.unit_price_vnd)
+
+            dong = models.OrderItem(
+                order_id=don.id,
+                # Only verified same-shop catalog identity enters the business
+                # FK.  The exact client claim is durable evidence below.
+                product_id=prod.id if prod is not None else None,
+                product_name=mh.product_name,
+                price=mh.unit_price_vnd,
+                quantity=mh.quantity,
+                discount_vnd=0,
+                loyalty_discount_vnd=0,
+                net_amount_vnd=line_total,
+                cost_known_qty=known_qty,
+                cost_unknown_qty=unknown_qty,
+                cost_basis_vnd=cost_basis,
+            )
+            db.add(dong)
+            db.flush()
+
+            db.add(
+                models.OfflineReceiptItem(
+                    receipt_id=receipt.id,
+                    order_item_id=dong.id,
+                    item_ordinal=item_ordinal,
+                    claimed_product_id=mh.product_id,
+                    product_name=mh.product_name,
+                    unit_price_vnd=mh.unit_price_vnd,
+                    quantity=mh.quantity,
+                )
+            )
+
+            if cap["thieu_sp"]:
+                db.add(
+                    _issue_moi(
+                        order_id=don.id,
+                        issue_code=ISSUE_SP_KHONG_CON,
+                        evidence_kind=EVIDENCE_CATALOG,
+                        severity=SEVERITY_ACTION,
+                        opened_at=now_text,
+                        order_item_id=dong.id,
+                    )
+                )
+            elif cap["gia_doi"]:
+                db.add(
+                    _issue_moi(
+                        order_id=don.id,
+                        issue_code=ISSUE_GIA_DOI,
+                        evidence_kind=EVIDENCE_CATALOG,
+                        severity=SEVERITY_INFO,
+                        opened_at=now_text,
+                        order_item_id=dong.id,
+                        product_id=prod.id if prod else None,
+                        resolution_kind=RESOLUTION_INFORMATIONAL,
+                        resolved_by_user_id=sold_by_user_id,
+                    )
+                )
+
+            if prod is not None and prod.track_batches and unallocated_qty > 0:
+                bang_chung_lo = models.OfflineBatchStockDeficit(
+                    order_item_id=dong.id,
+                    product_id=prod.id,
+                    deficit_quantity=unallocated_qty,
+                    remaining_quantity=unallocated_qty,
+                    state_version=0,
+                )
+                db.add(bang_chung_lo)
+                db.flush()
+                db.add(
+                    _issue_moi(
+                        order_id=don.id,
+                        issue_code=ISSUE_TON_AM,
+                        evidence_kind=EVIDENCE_BATCH_DEFICIT,
+                        severity=SEVERITY_ACTION,
+                        opened_at=now_text,
+                        order_item_id=dong.id,
+                        product_id=prod.id,
+                        evidence_id=bang_chung_lo.id,
+                    )
+                )
+            elif prod is not None and not prod.track_batches and thieu > 0:
+                bang_chung = models.OfflineStockDeficit(
+                    order_item_id=dong.id,
+                    product_id=prod.id,
+                    deficit_quantity=thieu,
+                    remaining_quantity=thieu,
+                    state_version=0,
+                )
+                db.add(bang_chung)
+                db.flush()
+                db.add(
+                    _issue_moi(
+                        order_id=don.id,
+                        issue_code=ISSUE_TON_AM,
+                        evidence_kind=EVIDENCE_STOCK_DEFICIT,
+                        severity=SEVERITY_ACTION,
+                        opened_at=now_text,
+                        order_item_id=dong.id,
+                        product_id=prod.id,
+                        evidence_id=bang_chung.id,
+                    )
+                )
+
+            if prod is not None and prod.track_batches:
+                for allocation in da_lay:
+                    lo = allocation.batch
+                    if lo is None:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=tr("Thiếu provenance lô offline"),
+                        )
+                    db.add(
+                        models.OrderItemBatch(
+                            order_item_id=dong.id,
+                            batch_id=lo.id,
+                            quantity=allocation.quantity,
+                            cost_known_qty=allocation.known_qty,
+                            cost_unknown_qty=allocation.unknown_qty,
+                            cost_basis_vnd=allocation.cost_basis_vnd,
+                        )
+                    )
+
+        # Issues about shift
+        for ma_ca in (ISSUE_CA_DA_CHOT, ISSUE_KHONG_CO_CA):
+            if ma_ca in van_de:
+                db.add(
+                    _issue_moi(
+                        order_id=don.id,
+                        issue_code=ma_ca,
+                        evidence_kind=EVIDENCE_SHIFT,
+                        severity=SEVERITY_ACTION,
+                        opened_at=now_text,
+                    )
+                )
+
+        # FINGERPRINT_LECH issue
+        if fingerprint_lech:
+            db.add(
+                _issue_moi(
+                    order_id=don.id,
+                    issue_code=ISSUE_FINGERPRINT_LECH,
+                    evidence_kind=EVIDENCE_CATALOG,
+                    severity=SEVERITY_INFO,
+                    opened_at=now_text,
+                    resolution_kind=RESOLUTION_INFORMATIONAL,
+                    resolved_by_user_id=sold_by_user_id,
+                )
+            )
+
+        if ISSUE_DONG_HO_LECH in van_de:
+            db.add(
+                _issue_moi(
+                    order_id=don.id,
+                    issue_code=ISSUE_DONG_HO_LECH,
+                    evidence_kind=EVIDENCE_TIME,
+                    severity=SEVERITY_ACTION,
+                    opened_at=now_text,
+                )
+            )
+
+        # Compatible issue string
+        if van_de:
+            don.offline_issue = ",".join(van_de)
+
+        # Cash payment entry
+        _add_offline_cash_payment(
+            db,
+            order_id=don.id,
+            amount=tong,
+            offline_uuid=uuid,
+            actor_user_id=ctx.payment_actor_user_id,
+            shift_id=ca.id if ca else None,
+            sold_at=effective_dt,
+            note="Bán tiền mặt khi mất mạng (contract v1)",
+        )
+
+        # Audit
+        order_service._them_nhat_ky(
+            db,
+            ctx.synced_by_user_id,
+            "OFFLINE_SALE_V1",
+            (
+                f"Đơn #{don.id} bán offline v1 lúc {sold_at_effective[:19]} "
+                f"- {tong:,.0f}đ"
+                + (f" - vướng: {don.offline_issue}" if don.offline_issue else "")
+            ),
+            shop_id=shop_id,
+        )
+
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        message = str(getattr(exc, "orig", exc)).lower()
+        if canonical is not None and _is_uuid_uniqueness_error(exc):
+            fresh = Session(bind=db.get_bind())
+            try:
+                durable = _tim_theo_uuid_v1(fresh, shop_id, canonical)
+                if durable is not None:
+                    order, durable_receipt = durable
+                    return _phan_hoi_v1(
+                        order,
+                        durable_receipt,
+                        canonical_time_text(request_received_at or _utcnow()),
+                        moi=False,
+                    )
+            finally:
+                fresh.close()
+        if canonical is not None and (
+            "offline_receipts.lease_id, offline_receipts.sequence" in message
+            or "ux_offline_receipts_lease_sequence" in message
+        ):
+            fresh = Session(bind=db.get_bind())
+            try:
+                existing = (
+                    fresh.query(models.OfflineReceipt)
+                    .filter(
+                        models.OfflineReceipt.lease_id == phieu.lease_id,
+                        models.OfflineReceipt.sequence == phieu.sequence,
+                    )
+                    .first()
+                )
+                if existing is not None and existing.offline_uuid != canonical.offline_uuid:
+                    raise _xung_dot(
+                        ERROR_SEQUENCE_CONFLICT,
+                        "Sequence đã được dùng với một phiếu khác",
+                    )
+            finally:
+                fresh.close()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+    db.refresh(don)
+    db.refresh(receipt)
+    return _phan_hoi_v1(
+        don,
+        receipt,
+        canonical_time_text(request_received_at or ingested_at),
+        moi=True,
+    )

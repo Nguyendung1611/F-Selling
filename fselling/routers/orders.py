@@ -1,7 +1,11 @@
-from fastapi import APIRouter, Depends
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core.i18n import tr
 from ..dependencies import get_current_user, get_db, require_shop_access
 from ..schemas.order import (
     CashPayment,
@@ -9,6 +13,7 @@ from ..schemas.order import (
     DebtPayment,
     OfflineIssueAcknowledge,
     OfflineOrderCreate,
+    OfflineOrderCreateV1,
     OrderCreate,
     OrderReturnCreate,
     RefundComplete,
@@ -16,6 +21,67 @@ from ..schemas.order import (
 from ..services import offline_service, order_service, return_service, subscription_service
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
+
+# Body cap: 64 KiB actual
+BODY_CAP_BYTES = 64 * 1024
+
+_V1_ONLY_FIELDS = frozenset(
+    {
+        "lease_id",
+        "device_id",
+        "offline_session_id",
+        "sequence",
+        "sold_at_client_utc",
+        "client_monotonic_ms",
+        "monotonic_valid",
+        "server_anchor_id",
+        "catalog_version",
+        "catalog_snapshot_digest",
+        "client_fingerprint",
+    }
+)
+
+
+def _offline_http_error(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": tr(message)},
+    )
+
+
+async def _read_offline_body_bounded(request: Request) -> bytes:
+    """Read at most 64 KiB after FastAPI has completed JWT authentication."""
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            declared_size = int(declared, 10)
+        except ValueError:
+            declared_size = -1
+        if declared_size > BODY_CAP_BYTES:
+            raise _offline_http_error(
+                413,
+                "OFFLINE_BODY_TOO_LARGE",
+                "Body vượt giới hạn 64 KiB",
+            )
+
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > BODY_CAP_BYTES:
+            raise _offline_http_error(
+                413,
+                "OFFLINE_BODY_TOO_LARGE",
+                "Body vượt giới hạn 64 KiB",
+            )
+        body.extend(chunk)
+    return bytes(body)
+
+
+def _malformed() -> HTTPException:
+    return _offline_http_error(
+        422,
+        "OFFLINE_RECEIPT_MALFORMED",
+        "Phiếu offline không hợp lệ",
+    )
 
 
 @router.post("/{shop_id}")
@@ -36,18 +102,53 @@ def create_order(
 
 
 @router.post("/{shop_id}/offline")
-def dong_bo_don_offline(
+async def dong_bo_don_offline(
     shop_id: int,
-    phieu: OfflineOrderCreate,
-    db: Session = Depends(get_db),
+    request: Request,
     current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """Nhận một phiếu đã bán khi mất mạng.
 
-    Gọi lại cùng `offline_uuid` trả về đúng đơn cũ với `created: false` — máy
-    bán mất sóng giữa lúc gửi cứ gửi lại thoải mái, không sinh đơn thứ hai.
+    Body cap 64 KiB. Content-Length early rejection. 200 items max.
+    Contract v1 dùng X-Offline-Lease-Token header (không body/query/fingerprint).
     """
-    return offline_service.dong_bo_phieu(db, current_user, shop_id, phieu)
+    # Because this endpoint accepts Request instead of a Pydantic body, FastAPI
+    # resolves get_current_user first.  Only an authenticated request reaches
+    # this bounded ASGI-stream reader.
+    body = await _read_offline_body_bounded(request)
+    try:
+        raw = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise _malformed()
+    if not isinstance(raw, dict):
+        raise _malformed()
+
+    version = raw.get("offline_contract_version")
+    is_exact_int = isinstance(version, int) and not isinstance(version, bool)
+    if version is None or (is_exact_int and version == 0):
+        # A v0 payload may explicitly say 0, but any v1-only tuple member makes
+        # it malformed rather than silently fabricating/promoting evidence.
+        if _V1_ONLY_FIELDS.intersection(raw):
+            raise _malformed()
+        try:
+            phieu = OfflineOrderCreate.model_validate(raw)
+        except ValidationError:
+            raise _malformed()
+        return offline_service.dong_bo_phieu(db, current_user, shop_id, phieu)
+
+    if is_exact_int and version == 1:
+        try:
+            phieu = OfflineOrderCreateV1.model_validate(raw)
+        except ValidationError:
+            raise _malformed()
+        # Token from X-Offline-Lease-Token header only — never from body/query
+        lease_token = request.headers.get("X-Offline-Lease-Token", "")
+        return offline_service.dong_bo_phieu_v1(
+            db, current_user, shop_id, phieu, lease_token=lease_token
+        )
+
+    raise _malformed()
 
 
 @router.get("/{shop_id}/offline-issues")

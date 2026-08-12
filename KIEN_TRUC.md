@@ -1136,6 +1136,16 @@ bảng bằng chứng vẫn trả retry `created=false` để tương thích, nh
 không dựng fingerprint từ payload gửi lại: lịch sử đó không đủ bằng chứng để
 chứng minh một payload khác hay giống.
 
+Từ I09-E, từng dòng v1 còn có đúng một snapshot trong
+`offline_receipt_items`. `claimed_product_id` ở đó là ID client đã ký, **không
+phải khóa ngoại sản phẩm đã xác minh**. Chỉ khi ID tồn tại và thuộc đúng shop
+thì `order_items.product_id` mới được điền; ID thiếu hoặc thuộc shop khác phải
+để NULL nhưng snapshot vẫn giữ nguyên tên/giá/số lượng/ID và đúng bội số dòng.
+Không được giữ claimed ID chưa xác minh trong `order_items.product_id`: return
+hoặc cancel tra theo ID đó có thể hoàn nhầm tồn kho sang shop khác. Mọi đường
+hoàn kho vẫn phải lọc `Product` theo cả `id` và `order.shop_id`, rồi 409 và
+rollback toàn transaction nếu provenance thiếu hoặc lệch scope.
+
 **Chưa làm:** phần máy bán (hàng chờ trong IndexedDB, khóa về tiền mặt khi mất
 mạng, tự đồng bộ khi có mạng lại). Backend đã sẵn sàng và đứng một mình được —
 gọi thẳng `POST /api/orders/{shop_id}/offline` là ghi được phiếu.
@@ -1678,6 +1688,13 @@ shift owner về claimed seller; normal path không cho owner/ADMIN sync hộ. �
 chỉ là claim của session, không chứng minh người thật nào cầm máy bán từng
 phiếu. Heartbeat vẫn là phép đọc state không bị SALE/Pro gate; endpoint v0 giữ
 nguyên `LEGACY_UNKNOWN`, không fabricate lease và không bị Pro gate hồi tố.
+
+### 43. Trust boundary cho offline time contract I09-E+B2
+
+`performance.now()` chỉ chống chỉnh wall-clock vô ý ở app không bị sửa. Delta
+do client khai; server không xác minh được delta, cũng không xác minh được thời
+điểm con người bán. `sequence` chỉ giữ thứ tự tương đối, không xác minh giờ kế
+toán. Rào chắn thật là cửa sổ lease + revocation.
 
 ## Phiên bản dependency
 
