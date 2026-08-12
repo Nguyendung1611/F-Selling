@@ -355,7 +355,8 @@ async function main() {
     assert.equal(first.user_id, 11);
     assert.equal('lease_token' in first, false);
     assert.equal(issueCount, 1);
-    assert.equal(fake.databases.get('fselling-offline').version, 2);
+    assert.equal(fake.databases.get('fselling-offline').version, 3);
+    assert(fake.databases.get('fselling-offline').stores.has('sync_lock_v1'));
     assert.equal(fake.inspect('fselling-offline', 'phieu')[0].offline_uuid, 'legacy-v0');
     assert.deepEqual(fake.inspect('fselling-offline', 'anhchup')[0].du_lieu, [{ id: 99 }]);
 
@@ -649,7 +650,7 @@ async function main() {
 
     // Opening a forward version triggers production onversionchange and closes cache.
     const closedBefore = fake.closedConnections;
-    const upgrade = indexedDB.open('fselling-offline', 3);
+    const upgrade = indexedDB.open('fselling-offline', 4);
     upgrade.onupgradeneeded = () => {};
     await new Promise((resolve, reject) => {
         upgrade.onsuccess = resolve;
@@ -661,7 +662,11 @@ async function main() {
     console.log('offline-ban-v1 harness: 1 passed');
 }
 
-main().catch(error => {
-    console.error(error && error.stack || error);
-    process.exit(1);
-});
+module.exports = { FakeIndexedDB, clone, keyString };
+
+if (require.main === module) {
+    main().catch(error => {
+        console.error(error && error.stack || error);
+        process.exit(1);
+    });
+}

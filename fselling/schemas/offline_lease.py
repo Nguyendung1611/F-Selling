@@ -24,6 +24,14 @@ class OfflineLeaseRevoke(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
+class OfflineLeaseReclaim(BaseModel):
+    expected_state_version: int = Field(
+        ge=0,
+        le=9_223_372_036_854_775_807,
+        strict=True,
+    )
+
+
 class OfflineLeaseStateResponse(BaseModel):
     lease_id: str
     shop_id: int
@@ -49,6 +57,7 @@ class OfflineLeaseCredentialResponse(OfflineLeaseStateResponse):
 __all__ = [
     "OfflineLeaseCredentialResponse",
     "OfflineLeaseIssue",
+    "OfflineLeaseReclaim",
     "OfflineLeaseRevoke",
     "OfflineLeaseStateResponse",
 ]

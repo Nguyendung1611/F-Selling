@@ -102,6 +102,7 @@ def test_reclaim_rotates_active_and_grace_old_token_dies(client, monkeypatch):
     active = _issue(client, ctx, device_id="device-reclaim-active")
     reclaimed = client.post(
         f"/api/offline/leases/{active['lease_id']}/reclaim",
+        json={"expected_state_version": active["state_version"]},
         headers=auth(ctx["token"]),
     )
     assert reclaimed.status_code == 200, reclaimed.text
@@ -122,10 +123,90 @@ def test_reclaim_rotates_active_and_grace_old_token_dies(client, monkeypatch):
     )
     grace_reclaim = client.post(
         f"/api/offline/leases/{grace['lease_id']}/reclaim",
+        json={"expected_state_version": grace["state_version"]},
         headers=auth(ctx["token"]),
     )
     assert grace_reclaim.status_code == 200
     assert grace_reclaim.json()["status"] == "SYNC_ONLY"
+
+
+def test_reclaim_expected_version_fences_stale_request_and_hides_version(
+    client,
+):
+    ctx = seller_with_shop(client)
+    lease = _issue(client, ctx, device_id="device-reclaim-fence")
+
+    missing = client.post(
+        f"/api/offline/leases/{lease['lease_id']}/reclaim",
+        headers=auth(ctx["token"]),
+    )
+    assert missing.status_code == 422
+
+    winner = client.post(
+        f"/api/offline/leases/{lease['lease_id']}/reclaim",
+        json={"expected_state_version": 0},
+        headers=auth(ctx["token"]),
+    )
+    assert winner.status_code == 200, winner.text
+    winner_body = winner.json()
+    assert winner_body["state_version"] == 1
+
+    stale = client.post(
+        f"/api/offline/leases/{lease['lease_id']}/reclaim",
+        json={"expected_state_version": 0},
+        headers=auth(ctx["token"]),
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"] == {
+        "code": offline_lease_service.ERROR_STATE_CONFLICT,
+        "message": "Credential offline vừa thay đổi; vui lòng tải lại",
+        "current_state_version": 1,
+    }
+
+    # Response của winner có thể mất trên mạng. Owner mới dùng version conflict
+    # đúng một lần để rotate tiếp; token cuối cùng mới là capability còn sống.
+    recovered = client.post(
+        f"/api/offline/leases/{lease['lease_id']}/reclaim",
+        json={"expected_state_version": 1},
+        headers=auth(ctx["token"]),
+    )
+    assert recovered.status_code == 200, recovered.text
+    recovered_body = recovered.json()
+    assert recovered_body["state_version"] == 2
+    assert _heartbeat(
+        client, ctx["token"], winner_body, winner_body["lease_token"]
+    ).status_code == 403
+    assert _heartbeat(client, ctx["token"], recovered_body).status_code == 200
+
+    _, other_staff = new_staff(client, ctx, "CASHIER")
+    hidden = client.post(
+        f"/api/offline/leases/{lease['lease_id']}/reclaim",
+        json={"expected_state_version": 0},
+        headers=auth(other_staff),
+    )
+    assert hidden.status_code == 403
+    assert "current_state_version" not in hidden.json()["detail"]
+
+    for invalid in (-1, True, "2", 1.5, None):
+        rejected = client.post(
+            f"/api/offline/leases/{lease['lease_id']}/reclaim",
+            json={"expected_state_version": invalid},
+            headers=auth(ctx["token"]),
+        )
+        assert rejected.status_code == 422
+
+    with SessionLocal() as session:
+        stored = session.get(models.OfflineLease, lease["lease_id"])
+        assert int(stored.state_version) == 2
+        assert (
+            session.query(models.SystemLog)
+            .filter(
+                models.SystemLog.action == offline_lease_service.AUDIT_RECLAIM,
+                models.SystemLog.details.contains(lease["lease_id"]),
+            )
+            .count()
+            == 2
+        )
 
 
 def test_reclaim_denied_for_revoked_expired_other_user_and_stale_cas(
@@ -136,6 +217,7 @@ def test_reclaim_denied_for_revoked_expired_other_user_and_stale_cas(
     _, other_staff = new_staff(client, ctx, "CASHIER")
     other = client.post(
         f"/api/offline/leases/{lease['lease_id']}/reclaim",
+        json={"expected_state_version": lease["state_version"]},
         headers=auth(other_staff),
     )
     assert other.status_code == 403
@@ -149,6 +231,7 @@ def test_reclaim_denied_for_revoked_expired_other_user_and_stale_cas(
     )
     denied = client.post(
         f"/api/offline/leases/{expired['lease_id']}/reclaim",
+        json={"expected_state_version": expired["state_version"]},
         headers=auth(ctx["token"]),
     )
     assert denied.status_code == 403
@@ -163,6 +246,7 @@ def test_reclaim_denied_for_revoked_expired_other_user_and_stale_cas(
     )
     revoked_denied = client.post(
         f"/api/offline/leases/{revoked['lease_id']}/reclaim",
+        json={"expected_state_version": revoked["state_version"]},
         headers=auth(ctx["token"]),
     )
     assert revoked_denied.status_code == 403
@@ -196,10 +280,12 @@ def test_reclaim_denied_for_revoked_expired_other_user_and_stale_cas(
     )
     conflict = client.post(
         f"/api/offline/leases/{stale['lease_id']}/reclaim",
+        json={"expected_state_version": stale["state_version"]},
         headers=auth(ctx["token"]),
     )
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["code"] == offline_lease_service.ERROR_STATE_CONFLICT
+    assert conflict.json()["detail"]["current_state_version"] == 1
     with SessionLocal() as session:
         winner = session.get(models.OfflineLease, stale["lease_id"])
         assert winner.state_version == 1
@@ -273,6 +359,7 @@ def test_revoked_capability_ignores_backdated_claim(client):
     assert heartbeat.json()["detail"]["code"] == offline_lease_service.ERROR_REVOKED
     reclaim = client.post(
         f"/api/offline/leases/{lease['lease_id']}/reclaim",
+        json={"expected_state_version": lease["state_version"]},
         headers=auth(ctx["token"]),
     )
     assert reclaim.status_code == 403
@@ -313,6 +400,7 @@ def test_beyond_grace_normal_seam_is_409_while_endpoints_keep_403(
     assert heartbeat.json()["detail"]["code"] == offline_lease_service.ERROR_EXPIRED
     reclaim = client.post(
         f"/api/offline/leases/{lease['lease_id']}/reclaim",
+        json={"expected_state_version": lease["state_version"]},
         headers=auth(ctx["token"]),
     )
     assert reclaim.status_code == 403
@@ -374,7 +462,10 @@ def test_audit_failure_rolls_back_every_mutation(client, monkeypatch, operation)
                     models.User.username == ctx["username"]
                 ).one()
                 offline_lease_service.reclaim(
-                    session, user, lease_id=lease["lease_id"]
+                    session,
+                    user,
+                    lease_id=lease["lease_id"],
+                    expected_state_version=lease["state_version"],
                 )
         else:
             with SessionLocal() as session:

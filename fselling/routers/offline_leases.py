@@ -8,6 +8,7 @@ from ..dependencies import get_current_user, get_db
 from ..schemas.offline_lease import (
     OfflineLeaseCredentialResponse,
     OfflineLeaseIssue,
+    OfflineLeaseReclaim,
     OfflineLeaseRevoke,
     OfflineLeaseStateResponse,
 )
@@ -48,10 +49,16 @@ def heartbeat_offline_lease(
 @router.post("/{lease_id}/reclaim", response_model=OfflineLeaseCredentialResponse)
 def reclaim_offline_lease(
     lease_id: str,
+    payload: OfflineLeaseReclaim,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return offline_lease_service.reclaim(db, current_user, lease_id=lease_id)
+    return offline_lease_service.reclaim(
+        db,
+        current_user,
+        lease_id=lease_id,
+        expected_state_version=payload.expected_state_version,
+    )
 
 
 @router.delete("/{lease_id}", response_model=OfflineLeaseStateResponse)

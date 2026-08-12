@@ -115,6 +115,17 @@ def _not_yours() -> HTTPException:
     return _error(403, ERROR_NOT_YOURS, "Credential offline không thuộc phiên này")
 
 
+def _state_conflict(current_state_version: int) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": ERROR_STATE_CONFLICT,
+            "message": tr("Credential offline vừa thay đổi; vui lòng tải lại"),
+            "current_state_version": int(current_state_version),
+        },
+    )
+
+
 def is_valid_lease_id(value: Any) -> bool:
     return isinstance(value, str) and _LEASE_ID_RE.fullmatch(value) is not None
 
@@ -474,6 +485,7 @@ def reclaim(
     current_user: models.User,
     *,
     lease_id: str,
+    expected_state_version: int,
 ) -> dict[str, Any]:
     if not is_valid_lease_id(lease_id):
         raise _not_yours()
@@ -489,12 +501,10 @@ def reclaim(
             ERROR_RECLAIM_DENIED,
             "Credential offline không còn được reclaim",
         )
-    expected_version = int(first.state_version)
     shop_id = int(first.shop_id)
     actor_id = int(current_user.id)
     db.rollback()
 
-    token = generate_lease_token()
     try:
         order_service._lock_shop_for_order(db, shop_id)
         now = _utcnow()
@@ -510,12 +520,6 @@ def reclaim(
                 ERROR_RECLAIM_DENIED,
                 "Credential offline không còn được reclaim",
             )
-        if int(lease.state_version) != expected_version:
-            raise _error(
-                409,
-                ERROR_STATE_CONFLICT,
-                "Credential offline vừa thay đổi; vui lòng tải lại",
-            )
         status = _lease_status(lease, now)
         if status in (STATUS_REVOKED, ERROR_EXPIRED):
             raise _error(
@@ -523,6 +527,10 @@ def reclaim(
                 ERROR_RECLAIM_DENIED,
                 "Credential offline không còn được reclaim",
             )
+        current_version = int(lease.state_version)
+        if current_version != expected_state_version:
+            raise _state_conflict(current_version)
+        token = generate_lease_token()
         result = db.execute(
             text(
                 """UPDATE offline_leases
@@ -535,15 +543,12 @@ def reclaim(
             {
                 "digest": digest_lease_token(token),
                 "lease_id": lease_id,
-                "expected_version": expected_version,
+                "expected_version": expected_state_version,
             },
         )
         if result.rowcount != 1:
-            raise _error(
-                409,
-                ERROR_STATE_CONFLICT,
-                "Credential offline vừa thay đổi; vui lòng tải lại",
-            )
+            db.expire(lease, ["state_version"])
+            raise _state_conflict(int(lease.state_version))
         _add_audit(
             db,
             actor_id=actor_id,
@@ -553,8 +558,8 @@ def reclaim(
             lease_user_id=int(lease.user_id),
             old_status=status,
             new_status=status,
-            old_version=expected_version,
-            new_version=expected_version + 1,
+            old_version=expected_state_version,
+            new_version=expected_state_version + 1,
         )
         db.commit()
     except IntegrityError as exc:

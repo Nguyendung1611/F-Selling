@@ -410,6 +410,7 @@ def test_role_downgrade_denies_reclaim_and_requires_normal_recovery(
 
     denied = client.post(
         f"/api/offline/leases/{lease['lease_id']}/reclaim",
+        json={"expected_state_version": lease["state_version"]},
         headers=auth(fresh_token),
     )
     assert denied.status_code == 403
@@ -453,6 +454,7 @@ def test_pro_expiry_denies_lease_claim_but_v0_sync_still_succeeds(
 
     denied = client.post(
         f"/api/offline/leases/{lease['lease_id']}/reclaim",
+        json={"expected_state_version": lease["state_version"]},
         headers=auth(ctx["token"]),
     )
     assert denied.status_code == 403
@@ -530,6 +532,7 @@ def test_reclaim_rechecks_current_policy_under_shop_write_lock(
     )
     denied = client.post(
         f"/api/offline/leases/{lease['lease_id']}/reclaim",
+        json={"expected_state_version": lease["state_version"]},
         headers=auth(ctx["token"]),
     )
     assert denied.status_code == 403

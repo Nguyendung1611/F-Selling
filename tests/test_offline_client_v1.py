@@ -108,8 +108,8 @@ def test_all_touched_static_files_have_i09_f1_correction_cache_buster():
     index = _read("static/index.html")
     pos = _read("static/pos.html")
     assert '/js/auth.js?v=20260812-i09-f1-c1' in index
-    assert '/js/offline-ban.js?v=20260812-i09-f1-c1' in pos
-    assert '/js/pos.js?v=20260812-i09-f1-c1' in pos
+    assert '/js/offline-ban.js?v=20260813-i09-f2' in pos
+    assert '/js/pos.js?v=20260813-i09-f2' in pos
 
 
 def test_same_tab_login_seals_previous_identity_before_overwrite():

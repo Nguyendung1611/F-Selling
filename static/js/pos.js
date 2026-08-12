@@ -3364,6 +3364,17 @@ loadShop();
 
 // Bán offline: tự gửi hàng chờ khi có mạng lại, và luôn hiện số phiếu đang chờ.
 if (window.OfflineBan) {
+    // V1 có lock/CAS và transport auth-safe riêng; v0 bên dưới vẫn chạy độc lập
+    // cho các phiếu legacy, không bị promote sang contract mới.
+    OfflineBan.batTuDongBoV1(
+        () => ({
+            shop_id: Number(currentShopId),
+            username: localStorage.getItem('username') || ''
+        }),
+        async (kq) => {
+            if (kq.acked) await loadProducts();
+        }
+    );
     OfflineBan.batTuDongBo(
         () => currentShopId,
         async (kq) => {

@@ -1,20 +1,21 @@
 /* Bán hàng khi mất mạng.
  *
  * Store v0 (`phieu`, `anhchup`) là contract đang chạy và không được promote.
- * Store v1 giữ credential, catalog bind, receipt DRAFT/READY và checkpoint
- * riêng. I09-F1 chỉ tạo chứng từ bền; việc gửi v1 thuộc I09-F2.
+ * Store v1 giữ credential, catalog bind, receipt/checkpoint và sync lock riêng.
+ * V1 gửi tuần tự bằng durable state machine; v0 vẫn là contract độc lập.
  */
 (function (global) {
     'use strict';
 
     const TEN_DB = 'fselling-offline';
-    const PHIEN_BAN = 2;
+    const PHIEN_BAN = 3;
     const KHO_PHIEU = 'phieu';
     const KHO_ANH_CHUP = 'anhchup';
     const KHO_CREDENTIAL_V1 = 'credential_v1';
     const KHO_CATALOG_V1 = 'catalog_v1';
     const KHO_PHIEU_V1 = 'receipt_v1';
     const KHO_META_V1 = 'meta_v1';
+    const KHO_KHOA_SYNC_V1 = 'sync_lock_v1';
     const MAX_VND = 9000000000000000;
     const MAX_QUANTITY = 1000000000;
     const MAX_ITEMS = 200;
@@ -23,6 +24,37 @@
     const OFFLINE_SEAL_MARKER_PREFIX = 'fselling.offline-seal.v1:';
     const FIELD_SEP = '\x1f';
     const RECORD_SEP = '\x1e';
+    const SYNC_STALE_MS = 60 * 1000;
+    const SYNC_LOCK_TTL_MS = 15 * 1000;
+    const SYNC_LOCK_HEARTBEAT_MS = 5 * 1000;
+    const ACK_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+    const RETRY_LONG_CYCLE_MS = 30 * 60 * 1000;
+    const RECLAIM_MAX_REQUESTS = 2;
+    const MAX_TIMER_DELAY_MS = 0x7fffffff;
+    const SYNC_STATES = Object.freeze([
+        'DRAFT', 'READY', 'SYNCING', 'ACKED', 'RETRYABLE',
+        'BLOCKED_RECOVERABLE', 'QUARANTINED'
+    ]);
+    const BLOCKED_CODES = new Set([
+        'OFFLINE_LEASE_REVOKED',
+        'OFFLINE_LEASE_EXPIRED',
+        'OFFLINE_LEASE_RECOVERY_REQUIRED',
+        'OFFLINE_TIME_BEFORE_LEASE',
+        'OFFLINE_TIME_FUTURE'
+    ]);
+    const QUARANTINE_CODES = new Set([
+        'OFFLINE_UUID_OTHER_SHOP',
+        'OFFLINE_RECEIPT_FINGERPRINT_CONFLICT',
+        'OFFLINE_SEQUENCE_CONFLICT',
+        'OFFLINE_RECEIPT_REGISTRY_INCONSISTENT',
+        'OFFLINE_RECEIPT_UUID_UNAVAILABLE',
+        'OFFLINE_RECEIPT_MALFORMED',
+        'OFFLINE_UUID_MISSING',
+        'OFFLINE_LEASE_BINDING_MISMATCH',
+        'OFFLINE_BODY_TOO_LARGE',
+        'OFFLINE_TOTAL_OVERFLOW',
+        'OFFLINE_TENDER_TOO_LOW'
+    ]);
 
     let _db = null;
 
@@ -78,6 +110,13 @@
                 if (!db.objectStoreNames.contains(KHO_META_V1)) {
                     db.createObjectStore(KHO_META_V1, { keyPath: 'key' });
                 }
+
+                if (!db.objectStoreNames.contains(KHO_KHOA_SYNC_V1)) {
+                    store = db.createObjectStore(KHO_KHOA_SYNC_V1, { keyPath: 'lock_name' });
+                } else {
+                    store = tx.objectStore(KHO_KHOA_SYNC_V1);
+                }
+                ensureIndex(store, 'expires_at', 'expires_at', { unique: false });
             };
             yc.onsuccess = function () {
                 if (settled) {
@@ -1023,7 +1062,7 @@
             || credential.shop_id !== identity.shop_id
             || credential.user_id !== identity.user_id) return null;
         const hasPending = (await docTatCaStore(KHO_PHIEU_V1)).some(row =>
-            (row.state === 'DRAFT' || row.state === 'READY')
+            ['DRAFT', 'READY', 'SYNCING', 'RETRYABLE', 'BLOCKED_RECOVERABLE'].includes(row.state)
             && row.identity_key === credential.identity_key
             && row.lease_id === credential.lease_id
             && row.shop_id === credential.shop_id
@@ -1047,6 +1086,1121 @@
                 });
             };
         });
+    }
+
+    // ---------- Sync engine v1 (I09-F2) ----------
+    function syncHooksV1() {
+        return global.__FSellingOfflineSyncTestHooks || {};
+    }
+
+    function syncNowMsV1() {
+        const hook = syncHooksV1().now;
+        const value = typeof hook === 'function' ? hook() : Date.now();
+        if (!Number.isFinite(value)) throw new Error('SYNC_CLOCK_INVALID');
+        return Math.floor(value);
+    }
+
+    function syncIsoV1(value) {
+        return new Date(value).toISOString();
+    }
+
+    function syncRandomV1() {
+        const hook = syncHooksV1().random;
+        const value = typeof hook === 'function' ? hook() : Math.random();
+        return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0.5;
+    }
+
+    function syncSetTimeoutV1(callback, delay) {
+        const timer = syncHooksV1().setTimeout || global.setTimeout;
+        return timer(callback, Math.min(MAX_TIMER_DELAY_MS, Math.max(0, Math.ceil(delay))));
+    }
+
+    function syncClearTimeoutV1(timerId) {
+        const clear = syncHooksV1().clearTimeout || global.clearTimeout;
+        clear(timerId);
+    }
+
+    function stableErrorCodeV1(value, fallback) {
+        const code = typeof value === 'string' ? value.trim().toUpperCase() : '';
+        return /^[A-Z][A-Z0-9_]{1,63}$/.test(code) ? code : fallback;
+    }
+
+    function sanitizedErrorV1(code, status) {
+        return {
+            code: stableErrorCodeV1(code, 'SYNC_UNKNOWN_ERROR'),
+            http_status: Number.isInteger(status) ? status : null
+        };
+    }
+
+    function retryDelayV1(attemptCount, retryAfter, nowMs) {
+        if (typeof retryAfter === 'string') {
+            const trimmed = retryAfter.trim();
+            if (/^\d+$/.test(trimmed)) {
+                const seconds = Number(trimmed);
+                const delay = seconds * 1000;
+                if (Number.isSafeInteger(seconds) && Number.isSafeInteger(delay)
+                    && Math.abs(nowMs + delay) <= 8640000000000000) return delay;
+            }
+            const parsed = Date.parse(trimmed);
+            if (Number.isFinite(parsed)) return Math.max(0, parsed - nowMs);
+        }
+        const attempt = Math.max(1, Math.trunc(Number(attemptCount) || 1));
+        if (attempt >= 50) return RETRY_LONG_CYCLE_MS;
+        const base = Math.min(2 * (2 ** Math.min(attempt - 1, 30)) * 1000, 5 * 60 * 1000);
+        return Math.round(base * (0.8 + 0.4 * syncRandomV1()));
+    }
+
+    function exactReceiptBodyV1(receipt) {
+        return {
+            offline_contract_version: 1,
+            lease_id: receipt.lease_id,
+            device_id: receipt.device_id,
+            offline_session_id: receipt.offline_session_id,
+            sequence: receipt.sequence,
+            offline_uuid: receipt.offline_uuid,
+            sold_at_client_utc: receipt.sold_at_client_utc,
+            client_monotonic_ms: receipt.client_monotonic_ms,
+            monotonic_valid: receipt.monotonic_valid,
+            server_anchor_id: receipt.server_anchor_id,
+            catalog_version: receipt.catalog_version,
+            catalog_snapshot_digest: receipt.catalog_snapshot_digest,
+            client_fingerprint: receipt.client_fingerprint,
+            items: receipt.items.map(row => ({
+                product_id: row.product_id,
+                product_name: row.product_name,
+                unit_price_vnd: row.unit_price_vnd,
+                quantity: row.quantity
+            })),
+            cash_tendered: receipt.cash_tendered
+        };
+    }
+
+    function receiptTotalV1(receipt) {
+        let total = 0;
+        for (const row of receipt.items || []) {
+            const line = row.unit_price_vnd * row.quantity;
+            if (!Number.isSafeInteger(line) || line < 0 || total > MAX_VND - line) {
+                throw new Error('SYNC_RECEIPT_TOTAL_INVALID');
+            }
+            total += line;
+        }
+        return total;
+    }
+
+    function canonicalResponseTimeV1(value) {
+        return typeof value === 'string'
+            && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{6}$/.test(value)
+            && Number.isFinite(Date.parse(value.replace(' ', 'T') + 'Z'));
+    }
+
+    function validAckResponseV1(data, receipt) {
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+        let total;
+        try { total = receiptTotalV1(receipt); } catch (e) { return null; }
+        if (
+            data.contract_version !== 1
+            || data.offline_uuid !== receipt.offline_uuid
+            || !Number.isSafeInteger(data.order_id) || data.order_id < 1
+            || typeof data.created !== 'boolean'
+            || data.total !== total
+            || data.sold_by_user_id !== receipt.user_id
+            || data.synced_by_user_id !== receipt.user_id
+            || !canonicalResponseTimeV1(data.sold_at_effective)
+            || !canonicalResponseTimeV1(data.server_time_utc)
+            || !['ANCHORED_CLIENT', 'BOUNDED', 'ANOMALY'].includes(data.time_confidence)
+        ) return null;
+        return {
+            offline_uuid: receipt.offline_uuid,
+            state: 'ACKED',
+            order_id: data.order_id,
+            sold_at: data.sold_at_effective,
+            total,
+            acked_at: syncIsoV1(syncNowMsV1())
+        };
+    }
+
+    async function authSafeFetchV1(path, options) {
+        let token = null;
+        try {
+            token = typeof global.getToken === 'function' ? global.getToken() : null;
+        } catch (e) {
+            token = null;
+        }
+        if (!token) return { status: 401, code: 'SYNC_LOGIN_REQUIRED', data: null, retry_after: null };
+        const fetcher = syncHooksV1().fetch || global.fetch;
+        if (typeof fetcher !== 'function') {
+            return { network_error: true, code: 'SYNC_NETWORK_ERROR' };
+        }
+        const headers = {
+            'Content-Type': 'application/json',
+            'Accept-Language': typeof global.currentLanguage === 'function'
+                ? global.currentLanguage() : 'vi',
+            'Authorization': `Bearer ${token}`
+        };
+        if (options.lease_token) headers['X-Offline-Lease-Token'] = options.lease_token;
+        let response;
+        try {
+            response = await fetcher('/api' + path, {
+                method: 'POST', headers, cache: 'no-store',
+                body: options.body === undefined ? undefined : JSON.stringify(options.body)
+            });
+        } catch (e) {
+            return { network_error: true, code: 'SYNC_NETWORK_ERROR' };
+        }
+        let data = null;
+        let validJson = false;
+        try {
+            const raw = await response.text();
+            data = raw ? JSON.parse(raw) : null;
+            validJson = raw ? true : data === null;
+        } catch (e) {
+            data = null;
+        }
+        const detail = data && typeof data.detail === 'object' && !Array.isArray(data.detail)
+            ? data.detail : null;
+        return {
+            status: Number(response.status),
+            code: stableErrorCodeV1(detail && detail.code, null),
+            data,
+            valid_json: validJson,
+            retry_after: response.headers && typeof response.headers.get === 'function'
+                ? response.headers.get('Retry-After') : null
+        };
+    }
+
+    function receiptBelongsToCredentialV1(receipt, credential) {
+        return Boolean(
+            receipt && credential
+            && receipt.contract_version === 1
+            && receipt.identity_key === credential.identity_key
+            && receipt.username === credential.username
+            && receipt.user_id === credential.user_id
+            && receipt.shop_id === credential.shop_id
+            && receipt.lease_id === credential.lease_id
+            && receipt.device_id === credential.device_id
+            && receipt.offline_session_id === credential.lease_id
+        );
+    }
+
+    function reclaimResponseMatchesV1(data, credential, expectedStateVersion) {
+        return Boolean(
+            data && typeof data === 'object'
+            && data.lease_id === credential.lease_id
+            && data.shop_id === credential.shop_id
+            && data.user_id === credential.user_id
+            && data.device_id === credential.device_id
+            && data.contract_version === 1
+            && ['ACTIVE', 'SYNC_ONLY'].includes(data.status)
+            && data.catalog_version === credential.catalog_version
+            && data.catalog_snapshot_digest === credential.catalog_snapshot_digest
+            && data.server_anchor_id === credential.server_anchor_id
+            && data.anchor_server_time_utc === credential.anchor_server_time_utc
+            && data.issued_at === credential.issued_at
+            && data.expires_at === credential.expires_at
+            && data.state_version === expectedStateVersion + 1
+            && /^[A-Za-z0-9_-]{43}$/.test(data.lease_token || '')
+        );
+    }
+
+    async function persistReclaimedCredentialV1(original, response, lock, expectedStateVersion) {
+        const stores = [KHO_CREDENTIAL_V1, KHO_PHIEU_V1];
+        if (lock.kind === 'idb') stores.push(KHO_KHOA_SYNC_V1);
+        return giaoDich(stores, 'readwrite', function (tx, datKetQua, huy) {
+            const credentials = tx.objectStore(KHO_CREDENTIAL_V1);
+            const receipts = tx.objectStore(KHO_PHIEU_V1);
+            const credentialRequest = credentials.get(original.lease_id);
+            const receiptRequest = receipts.getAll();
+            const lockRequest = lock.kind === 'idb'
+                ? tx.objectStore(KHO_KHOA_SYNC_V1).get(lock.lock_name) : null;
+            let credentialDone = false, receiptsDone = false, lockDone = !lockRequest;
+            function finish() {
+                if (!credentialDone || !receiptsDone || !lockDone) return;
+                const fresh = credentialRequest.result;
+                const ownsLock = lock.kind === 'web'
+                    ? lock.valid()
+                    : ownsDurableLockV1(lock, lockRequest.result, syncNowMsV1());
+                const hasPending = (receiptRequest.result || []).some(row =>
+                    receiptBelongsToCredentialV1(row, fresh)
+                    && !['ACKED', 'QUARANTINED'].includes(row.state)
+                );
+                if (!ownsLock || !fresh || fresh.sealed !== true
+                    || fresh.state_version !== original.state_version
+                    || fresh.identity_key !== original.identity_key || !hasPending
+                    || !reclaimResponseMatchesV1(response, fresh, expectedStateVersion)) {
+                    huy(new Error('SYNC_RECLAIM_CAS_FAILED'));
+                    return;
+                }
+                const updated = {
+                    ...fresh,
+                    ...banSao(response),
+                    identity_key: fresh.identity_key,
+                    username: fresh.username,
+                    sealed: false,
+                    local_state: response.status,
+                    saved_at: syncIsoV1(syncNowMsV1())
+                };
+                credentials.put(updated);
+                datKetQua(updated);
+            }
+            credentialRequest.onsuccess = function () { credentialDone = true; finish(); };
+            receiptRequest.onsuccess = function () { receiptsDone = true; finish(); };
+            if (lockRequest) lockRequest.onsuccess = function () { lockDone = true; finish(); };
+        });
+    }
+
+    function conflictStateVersionV1(result) {
+        const detail = result && result.data && result.data.detail;
+        const value = detail && detail.current_state_version;
+        return Number.isSafeInteger(value) && value >= 0 ? value : null;
+    }
+
+    async function reclaimCredentialForSyncV1(receipt, lock) {
+        const identity = {
+            shop_id: receipt.shop_id,
+            user_id: receipt.user_id,
+            username: receipt.username,
+            lease_id: receipt.lease_id
+        };
+        const sealed = await getCredentialForRecoveryV1(receipt.lease_id, identity);
+        if (!sealed) return {
+            pause: sanitizedErrorV1('SYNC_CREDENTIAL_UNAVAILABLE', null), pause_kind: 'hard'
+        };
+        let expectedStateVersion = sealed.state_version;
+        for (let requestNumber = 1; requestNumber <= RECLAIM_MAX_REQUESTS; requestNumber += 1) {
+            if (!await lockStillOwnedV1(lock)) return { stale: true };
+            const result = await authSafeFetchV1(
+                `/offline/leases/${encodeURIComponent(receipt.lease_id)}/reclaim`,
+                { body: { expected_state_version: expectedStateVersion } }
+            );
+            if (!await lockStillOwnedV1(lock)) return { stale: true };
+            if (result.network_error) return {
+                pause: sanitizedErrorV1(result.code, null), pause_kind: 'transient'
+            };
+            const conflictVersion = result.status === 409
+                && result.code === 'OFFLINE_LEASE_STATE_CONFLICT'
+                ? conflictStateVersionV1(result) : null;
+            if (conflictVersion !== null && conflictVersion > expectedStateVersion
+                && requestNumber < RECLAIM_MAX_REQUESTS) {
+                expectedStateVersion = conflictVersion;
+                continue;
+            }
+            if (result.status !== 200 || !result.valid_json
+                || !reclaimResponseMatchesV1(result.data, sealed, expectedStateVersion)) {
+                return {
+                    pause: sanitizedErrorV1(
+                        result.status === 200
+                            ? 'SYNC_RECLAIM_INVALID_RESPONSE'
+                            : (result.code || 'SYNC_RECLAIM_DENIED'),
+                        result.status
+                    ),
+                    pause_kind: [401, 402, 403].includes(result.status) ? 'hard' : 'transient'
+                };
+            }
+            try {
+                return {
+                    credential: await persistReclaimedCredentialV1(
+                        sealed, result.data, lock, expectedStateVersion
+                    )
+                };
+            } catch (e) {
+                return await lockStillOwnedV1(lock)
+                    ? {
+                        pause: sanitizedErrorV1('SYNC_RECLAIM_CAS_FAILED', null),
+                        pause_kind: 'hard'
+                    }
+                    : { stale: true };
+            }
+        }
+        return {
+            pause: sanitizedErrorV1('SYNC_RECLAIM_STATE_CONFLICT', 409),
+            pause_kind: 'transient'
+        };
+    }
+
+    function syncLockNameV1(shopId) {
+        return `fselling:offline-sync:v1:shop:${shopId}`;
+    }
+
+    function syncTabIdV1() {
+        const hooks = syncHooksV1();
+        if (typeof hooks.tab_id === 'string' && hooks.tab_id) return hooks.tab_id;
+        const key = 'fselling.offline-sync-tab.v1';
+        try {
+            let value = sessionStorage.getItem(key);
+            if (!value) {
+                value = uuidCrypto('tab_');
+                sessionStorage.setItem(key, value);
+            }
+            return value;
+        } catch (e) {
+            if (!syncTabIdV1._fallback) syncTabIdV1._fallback = uuidCrypto('tab_');
+            return syncTabIdV1._fallback;
+        }
+    }
+
+    async function acquireFallbackLockV1(lockName) {
+        const owner = syncTabIdV1();
+        const now = syncNowMsV1();
+        return giaoDich(KHO_KHOA_SYNC_V1, 'readwrite', function (tx, done) {
+            const store = tx.objectStore(KHO_KHOA_SYNC_V1);
+            const request = store.get(lockName);
+            request.onsuccess = function () {
+                const old = request.result;
+                if (old && old.owner_tab_id && old.expires_at > now) {
+                    done(null);
+                    return;
+                }
+                const fence = Math.max(0, Number(old && old.fence) || 0) + 1;
+                const row = {
+                    lock_name: lockName,
+                    owner_tab_id: owner,
+                    fence,
+                    expires_at: now + SYNC_LOCK_TTL_MS,
+                    heartbeat_at: now
+                };
+                store.put(row);
+                done({ lock_name: lockName, owner_tab_id: owner, fence });
+            };
+        });
+    }
+
+    async function refreshFallbackLockV1(lock) {
+        const now = syncNowMsV1();
+        return giaoDich(KHO_KHOA_SYNC_V1, 'readwrite', function (tx, done) {
+            const store = tx.objectStore(KHO_KHOA_SYNC_V1);
+            const request = store.get(lock.lock_name);
+            request.onsuccess = function () {
+                const row = request.result;
+                if (!row || row.owner_tab_id !== lock.owner_tab_id || row.fence !== lock.fence
+                    || !Number.isFinite(row.expires_at) || row.expires_at <= now) {
+                    done(false);
+                    return;
+                }
+                row.expires_at = now + SYNC_LOCK_TTL_MS;
+                row.heartbeat_at = now;
+                store.put(row);
+                done(true);
+            };
+        });
+    }
+
+    async function releaseFallbackLockV1(lock) {
+        return giaoDich(KHO_KHOA_SYNC_V1, 'readwrite', function (tx) {
+            const store = tx.objectStore(KHO_KHOA_SYNC_V1);
+            const request = store.get(lock.lock_name);
+            request.onsuccess = function () {
+                const row = request.result;
+                if (!row || row.owner_tab_id !== lock.owner_tab_id || row.fence !== lock.fence) return;
+                row.owner_tab_id = null;
+                row.expires_at = 0;
+                row.heartbeat_at = syncNowMsV1();
+                store.put(row); // Giữ fence durable để ABA không quay lại số cũ.
+            };
+        });
+    }
+
+    function ownsDurableLockV1(lock, row, now) {
+        return Boolean(
+            lock.valid() && row
+            && row.owner_tab_id === lock.owner_tab_id
+            && row.fence === lock.fence
+            && row.expires_at > now
+        );
+    }
+
+    async function lockStillOwnedV1(lock) {
+        if (!lock || !lock.valid()) return false;
+        if (lock.kind === 'web') return true;
+        const row = await chay(KHO_KHOA_SYNC_V1, 'readonly', store => store.get(lock.lock_name));
+        return ownsDurableLockV1(lock, row, syncNowMsV1());
+    }
+
+    async function runWithSyncLockV1(shopId, work) {
+        const lockName = syncLockNameV1(shopId);
+        if (navigator.locks && typeof navigator.locks.request === 'function') {
+            let ran = false;
+            const value = await navigator.locks.request(
+                lockName,
+                { mode: 'exclusive', ifAvailable: true },
+                async function (lock) {
+                    if (!lock) return null;
+                    ran = true;
+                    return work({
+                        kind: 'web',
+                        lock_name: lockName,
+                        owner_tab_id: syncTabIdV1(),
+                        fence: `web:${syncTabIdV1()}:${syncNowMsV1()}`,
+                        valid: function () { return true; }
+                    });
+                }
+            );
+            return ran ? value : null;
+        }
+
+        const lock = await acquireFallbackLockV1(lockName);
+        if (!lock) return null;
+        let valid = true;
+        const setTimer = syncHooksV1().setInterval || global.setInterval;
+        const clearTimer = syncHooksV1().clearInterval || global.clearInterval;
+        const timer = setTimer(function () {
+            refreshFallbackLockV1(lock).then(function (ok) {
+                if (!ok) valid = false;
+            }).catch(function () { valid = false; });
+        }, SYNC_LOCK_HEARTBEAT_MS);
+        try {
+            return await work({
+                kind: 'idb', ...lock,
+                valid: function () { return valid; }
+            });
+        } finally {
+            clearTimer(timer);
+            if (valid) await releaseFallbackLockV1(lock).catch(function () {});
+        }
+    }
+
+    function syncPauseKeyV1(identity) {
+        return 'sync-pause:' + JSON.stringify([
+            identity.shop_id, identity.user_id || null, identity.username
+        ]);
+    }
+
+    async function persistSyncPauseV1(identity, error, pauseKind, retryAt) {
+        const row = {
+            key: syncPauseKeyV1(identity),
+            shop_id: identity.shop_id,
+            user_id: identity.user_id || null,
+            username: identity.username,
+            pause_kind: pauseKind === 'transient' ? 'TRANSIENT' : 'HARD',
+            retry_at: pauseKind === 'transient' && Number.isFinite(retryAt)
+                ? syncIsoV1(retryAt) : null,
+            error: sanitizedErrorV1(error && error.code, error && error.http_status),
+            paused_at: syncIsoV1(syncNowMsV1())
+        };
+        await chay(KHO_META_V1, 'readwrite', store => store.put(row));
+        return row.error;
+    }
+
+    function clearSyncPauseV1(identity) {
+        return chay(KHO_META_V1, 'readwrite', store => store.delete(syncPauseKeyV1(identity)));
+    }
+
+    function readSyncPauseV1(identity) {
+        return chay(KHO_META_V1, 'readonly', store => store.get(syncPauseKeyV1(identity)));
+    }
+
+    function receiptMatchesIdentityV1(row, identity) {
+        return Boolean(
+            row && row.contract_version === 1
+            && row.shop_id === identity.shop_id
+            && row.username === identity.username
+            && (!identity.user_id || row.user_id === identity.user_id)
+        );
+    }
+
+    async function completeSyncIdentityV1(identity) {
+        if (identity.user_id) return identity;
+        const userIds = new Set((await docTatCaStore(KHO_PHIEU_V1))
+            .filter(row => row.contract_version === 1
+                && row.shop_id === identity.shop_id
+                && row.username === identity.username)
+            .map(row => row.user_id)
+            .filter(value => Number.isSafeInteger(value) && value > 0));
+        if (userIds.size > 1) return null;
+        if (userIds.size === 1) identity.user_id = Array.from(userIds)[0];
+        return identity;
+    }
+
+    async function countPendingV1(identity) {
+        return (await docTatCaStore(KHO_PHIEU_V1)).filter(row =>
+            receiptMatchesIdentityV1(row, identity)
+            && !['ACKED', 'QUARANTINED'].includes(row.state)
+        ).length;
+    }
+
+    async function earliestRetryV1(identity) {
+        let earliest = null;
+        for (const row of await docTatCaStore(KHO_PHIEU_V1)) {
+            if (!receiptMatchesIdentityV1(row, identity) || row.state !== 'RETRYABLE') continue;
+            const value = Date.parse(row.next_attempt_at || '');
+            if (!Number.isFinite(value)) continue;
+            if (!earliest || value < earliest.at) {
+                earliest = { at: value, error: sanitizedErrorV1(
+                    row.last_error && row.last_error.code,
+                    row.last_error && row.last_error.http_status
+                ) };
+            }
+        }
+        return earliest;
+    }
+
+    async function durablePauseGateV1(identity) {
+        const pause = await readSyncPauseV1(identity);
+        if (pause && pause.pause_kind === 'HARD') return pause;
+        const earliest = await earliestRetryV1(identity);
+        const persistedAt = pause && pause.pause_kind === 'TRANSIENT'
+            ? Date.parse(pause.retry_at || '') : NaN;
+        const deadline = earliest ? earliest.at : persistedAt;
+        if (Number.isFinite(deadline) && deadline > syncNowMsV1()) {
+            const error = pause && pause.error ? pause.error : earliest.error;
+            if (!pause || pause.pause_kind !== 'TRANSIENT' || persistedAt !== deadline) {
+                await persistSyncPauseV1(identity, error, 'transient', deadline);
+                return readSyncPauseV1(identity);
+            }
+            return pause;
+        }
+        return null;
+    }
+
+    async function recoverStaleSyncingV1(identity) {
+        const now = syncNowMsV1();
+        return giaoDich(KHO_PHIEU_V1, 'readwrite', function (tx, done) {
+            const store = tx.objectStore(KHO_PHIEU_V1);
+            const request = store.getAll();
+            request.onsuccess = function () {
+                let count = 0;
+                for (const row of request.result || []) {
+                    const started = Date.parse(row.sync_started_at || '');
+                    if (!receiptMatchesIdentityV1(row, identity) || row.state !== 'SYNCING'
+                        || !Number.isFinite(started) || now - started <= SYNC_STALE_MS) continue;
+                    row.state = 'RETRYABLE';
+                    row.next_attempt_at = syncIsoV1(now);
+                    row.last_error = sanitizedErrorV1('SYNC_STALE_ATTEMPT_RECOVERED', null);
+                    clearWorkingFieldsV1(row);
+                    store.put(row);
+                    count += 1;
+                }
+                done(count);
+            };
+        });
+    }
+
+    async function cleanupAckedV1(identity) {
+        const cutoff = syncNowMsV1() - ACK_TOMBSTONE_TTL_MS;
+        return giaoDich(KHO_PHIEU_V1, 'readwrite', function (tx, done) {
+            const store = tx.objectStore(KHO_PHIEU_V1);
+            const request = store.getAll();
+            request.onsuccess = function () {
+                let count = 0;
+                for (const row of request.result || []) {
+                    // Tombstone ACK cố ý không giữ identity/body; ACK là state duy
+                    // nhất được phép cleanup theo tuổi trên toàn store.
+                    if (row.state !== 'ACKED') continue;
+                    const acked = Date.parse(row.acked_at || '');
+                    if (Number.isFinite(acked) && acked <= cutoff) {
+                        store.delete(row.offline_uuid);
+                        count += 1;
+                    }
+                }
+                done(count);
+            };
+        });
+    }
+
+    async function listSyncCandidatesV1(identity) {
+        const now = syncNowMsV1();
+        return (await docTatCaStore(KHO_PHIEU_V1))
+            .filter(row => receiptMatchesIdentityV1(row, identity))
+            .filter(row => row.state === 'READY'
+                || (row.state === 'RETRYABLE' && Date.parse(row.next_attempt_at || '') <= now))
+            .sort((a, b) => String(a.lease_id).localeCompare(String(b.lease_id))
+                || a.sequence - b.sequence)
+            .map(banSao);
+    }
+
+    async function claimReceiptV1(candidate, lock) {
+        const now = syncNowMsV1();
+        const stores = lock.kind === 'idb'
+            ? [KHO_PHIEU_V1, KHO_KHOA_SYNC_V1] : KHO_PHIEU_V1;
+        return giaoDich(stores, 'readwrite', function (tx, done) {
+            const receipts = tx.objectStore(KHO_PHIEU_V1);
+            const receiptRequest = receipts.get(candidate.offline_uuid);
+            const lockRequest = lock.kind === 'idb'
+                ? tx.objectStore(KHO_KHOA_SYNC_V1).get(lock.lock_name) : null;
+            let receiptDone = false;
+            let lockDone = !lockRequest;
+            function finish() {
+                if (!receiptDone || !lockDone) return;
+                const row = receiptRequest.result;
+                const durableLock = lockRequest && lockRequest.result;
+                const ownsDurableLock = !lockRequest || (
+                    durableLock
+                    && durableLock.owner_tab_id === lock.owner_tab_id
+                    && durableLock.fence === lock.fence
+                    && durableLock.expires_at > now
+                );
+                const due = row && (row.state === 'READY'
+                    || (row.state === 'RETRYABLE' && Date.parse(row.next_attempt_at || '') <= now));
+                if (!due || !lock.valid() || !ownsDurableLock) { done(null); return; }
+                row.sync_resume_state = row.state;
+                row.sync_resume_has_attempt_count = Object.prototype.hasOwnProperty.call(
+                    row, 'attempt_count'
+                );
+                row.sync_resume_attempt_count = row.attempt_count;
+                row.sync_resume_has_next_attempt_at = Object.prototype.hasOwnProperty.call(
+                    row, 'next_attempt_at'
+                );
+                row.sync_resume_next_attempt_at = banSao(row.next_attempt_at);
+                row.sync_resume_has_last_error = Object.prototype.hasOwnProperty.call(
+                    row, 'last_error'
+                );
+                row.sync_resume_last_error = banSao(row.last_error);
+                row.state = 'SYNCING';
+                row.attempt_count = Math.max(0, Number(row.attempt_count) || 0) + 1;
+                row.sync_started_at = syncIsoV1(now);
+                row.attempt_token = uuidCrypto('attempt_');
+                row.fence_token = String(lock.fence);
+                receipts.put(row);
+                done(banSao(row));
+            }
+            receiptRequest.onsuccess = function () { receiptDone = true; finish(); };
+            if (lockRequest) lockRequest.onsuccess = function () { lockDone = true; finish(); };
+        });
+    }
+
+    function clearWorkingFieldsV1(row) {
+        delete row.sync_started_at;
+        delete row.attempt_token;
+        delete row.fence_token;
+        delete row.sync_resume_state;
+        delete row.sync_resume_has_attempt_count;
+        delete row.sync_resume_attempt_count;
+        delete row.sync_resume_has_next_attempt_at;
+        delete row.sync_resume_next_attempt_at;
+        delete row.sync_resume_has_last_error;
+        delete row.sync_resume_last_error;
+    }
+
+    async function mutateClaimedReceiptV1(claimed, lock, mutation) {
+        if (!lock.valid()) return false;
+        const stores = lock.kind === 'idb'
+            ? [KHO_PHIEU_V1, KHO_KHOA_SYNC_V1] : KHO_PHIEU_V1;
+        return giaoDich(stores, 'readwrite', function (tx, done) {
+            const receipts = tx.objectStore(KHO_PHIEU_V1);
+            const receiptRequest = receipts.get(claimed.offline_uuid);
+            const lockRequest = lock.kind === 'idb'
+                ? tx.objectStore(KHO_KHOA_SYNC_V1).get(lock.lock_name) : null;
+            let receiptDone = false;
+            let lockDone = !lockRequest;
+            function finish() {
+                if (!receiptDone || !lockDone) return;
+                const row = receiptRequest.result;
+                const durableLock = lockRequest && lockRequest.result;
+                const ownsDurableLock = !lockRequest || (
+                    durableLock
+                    && durableLock.owner_tab_id === lock.owner_tab_id
+                    && durableLock.fence === lock.fence
+                    && durableLock.expires_at > syncNowMsV1()
+                );
+                if (!lock.valid() || !ownsDurableLock || !row || row.state !== 'SYNCING'
+                    || row.attempt_token !== claimed.attempt_token
+                    || row.fence_token !== claimed.fence_token) {
+                    done(false);
+                    return;
+                }
+                const replacement = mutation(row);
+                receipts.put(replacement || row);
+                done(true);
+            }
+            receiptRequest.onsuccess = function () { receiptDone = true; finish(); };
+            if (lockRequest) lockRequest.onsuccess = function () { lockDone = true; finish(); };
+        });
+    }
+
+    function restoreClaimForPauseV1(row) {
+        row.state = row.sync_resume_state === 'RETRYABLE' ? 'RETRYABLE' : 'READY';
+        if (row.sync_resume_has_attempt_count) {
+            row.attempt_count = row.sync_resume_attempt_count;
+        } else {
+            delete row.attempt_count;
+        }
+        if (row.sync_resume_has_next_attempt_at) {
+            row.next_attempt_at = banSao(row.sync_resume_next_attempt_at);
+        } else {
+            delete row.next_attempt_at;
+        }
+        if (row.sync_resume_has_last_error) {
+            row.last_error = banSao(row.sync_resume_last_error);
+        } else {
+            delete row.last_error;
+        }
+        clearWorkingFieldsV1(row);
+        return row;
+    }
+
+    function retryClaimV1(row, error, retryAfter) {
+        const now = syncNowMsV1();
+        row.state = 'RETRYABLE';
+        row.next_attempt_at = syncIsoV1(now + retryDelayV1(row.attempt_count, retryAfter, now));
+        row.last_error = sanitizedErrorV1(error.code, error.http_status);
+        clearWorkingFieldsV1(row);
+        return row;
+    }
+
+    function permanentClaimV1(row, state, error) {
+        row.state = state;
+        row.last_error = sanitizedErrorV1(error.code, error.http_status);
+        delete row.next_attempt_at;
+        clearWorkingFieldsV1(row);
+        return row;
+    }
+
+    function classifySyncResponseV1(result) {
+        if (result.network_error) return { action: 'retry_pause', code: result.code, status: null };
+        const status = result.status;
+        const code = result.code;
+        if (status === 401) return { action: 'restore_pause', code: code || 'SYNC_LOGIN_REQUIRED', status };
+        if (status === 402 || status === 403) {
+            return { action: 'restore_pause', code: code || `SYNC_HTTP_${status}`, status };
+        }
+        if (status === 429) return { action: 'retry_pause', code: code || 'SYNC_RATE_LIMITED', status };
+        if (status >= 500) return { action: 'retry_pause', code: code || 'SYNC_SERVER_ERROR', status };
+        if (BLOCKED_CODES.has(code)) return { action: 'blocked', code, status };
+        if (QUARANTINE_CODES.has(code)) return { action: 'quarantine', code, status };
+        if ([400, 409, 413, 422].includes(status) && code) {
+            // Chỉ code deterministic trong allowlist phía trên được giữ vĩnh viễn.
+            return { action: 'retry_pause', code, status };
+        }
+        return { action: 'retry_pause', code: code || 'SYNC_TRANSIENT_RESPONSE', status };
+    }
+
+    async function resolveCredentialForReceiptV1(receipt, lock) {
+        const identity = {
+            shop_id: receipt.shop_id,
+            user_id: receipt.user_id,
+            username: receipt.username
+        };
+        let credential = await getCredentialV1(receipt.lease_id, identity);
+        if (credential && receiptBelongsToCredentialV1(receipt, credential)
+            && ['ACTIVE', 'SYNC_ONLY'].includes(credential.local_state || credential.status)) {
+            return { credential };
+        }
+        return reclaimCredentialForSyncV1(receipt, lock);
+    }
+
+    async function sendClaimedReceiptV1(receipt, lock) {
+        let body;
+        try {
+            body = exactReceiptBodyV1(receipt);
+            receiptTotalV1(receipt);
+        } catch (e) {
+            const error = sanitizedErrorV1('OFFLINE_RECEIPT_MALFORMED', null);
+            const changed = await mutateClaimedReceiptV1(
+                receipt, lock, row => permanentClaimV1(row, 'QUARANTINED', error)
+            );
+            return changed ? { quarantined: 1 } : { pause: sanitizedErrorV1('SYNC_STALE_RESPONSE', null) };
+        }
+        let resolved;
+        try {
+            resolved = await resolveCredentialForReceiptV1(receipt, lock);
+        } catch (e) {
+            const error = sanitizedErrorV1('SYNC_LOCAL_FAILURE', null);
+            await mutateClaimedReceiptV1(receipt, lock, row => restoreClaimForPauseV1(row));
+            return { pause: error, pause_kind: 'hard' };
+        }
+        if (resolved.stale) {
+            return { pause: sanitizedErrorV1('SYNC_LOCK_LOST', null), stale: true };
+        }
+        if (!resolved.credential) {
+            const error = resolved.pause || sanitizedErrorV1('SYNC_CREDENTIAL_UNAVAILABLE', null);
+            if (resolved.pause_kind === 'transient') {
+                await mutateClaimedReceiptV1(
+                    receipt, lock, row => retryClaimV1(row, error, null)
+                );
+            } else {
+                await mutateClaimedReceiptV1(receipt, lock, row => restoreClaimForPauseV1(row));
+            }
+            return { pause: error, pause_kind: resolved.pause_kind || 'hard' };
+        }
+        const credential = resolved.credential;
+        if (!receiptBelongsToCredentialV1(receipt, credential)) {
+            const error = sanitizedErrorV1('SYNC_IDENTITY_MISMATCH', null);
+            await mutateClaimedReceiptV1(receipt, lock, row => restoreClaimForPauseV1(row));
+            return { pause: error, pause_kind: 'hard' };
+        }
+        const result = await authSafeFetchV1(`/orders/${receipt.shop_id}/offline`, {
+            lease_token: credential.lease_token,
+            body
+        });
+        if (!lock.valid()) return { pause: sanitizedErrorV1('SYNC_LOCK_LOST', null), stale: true };
+        if (result.status === 200) {
+            const tombstone = result.valid_json ? validAckResponseV1(result.data, receipt) : null;
+            if (tombstone) {
+                const changed = await mutateClaimedReceiptV1(receipt, lock, function () {
+                    return tombstone;
+                });
+                return changed ? { acked: 1 } : { pause: sanitizedErrorV1('SYNC_STALE_RESPONSE', null), stale: true };
+            }
+            const error = sanitizedErrorV1('SYNC_INVALID_ACK', 200);
+            await mutateClaimedReceiptV1(receipt, lock, row => retryClaimV1(row, error, null));
+            return { pause: error, pause_kind: 'transient' };
+        }
+
+        const classified = classifySyncResponseV1(result);
+        const error = sanitizedErrorV1(classified.code, classified.status);
+        if (classified.action === 'restore_pause') {
+            await mutateClaimedReceiptV1(receipt, lock, row => restoreClaimForPauseV1(row));
+            return { pause: error, pause_kind: 'hard' };
+        }
+        if (classified.action === 'blocked' || classified.action === 'quarantine') {
+            const state = classified.action === 'blocked' ? 'BLOCKED_RECOVERABLE' : 'QUARANTINED';
+            const changed = await mutateClaimedReceiptV1(
+                receipt, lock, row => permanentClaimV1(row, state, error)
+            );
+            if (!changed) return { pause: sanitizedErrorV1('SYNC_STALE_RESPONSE', null) };
+            return classified.action === 'blocked' ? { blocked: 1 } : { quarantined: 1 };
+        }
+        await mutateClaimedReceiptV1(receipt, lock, row => retryClaimV1(
+            row, error, result.status === 429 ? result.retry_after : null
+        ));
+        return { pause: error, pause_kind: 'transient', retried: 1 };
+    }
+
+    const syncRunsV1 = new Map();
+    const syncSchedulerRefreshV1 = new Set();
+
+    async function runSyncQueueV1(identity) {
+        identity = await completeSyncIdentityV1(identity);
+        if (!identity) {
+            return { acked: 0, blocked: 0, quarantined: 0, pending: 0, paused: true,
+                error: sanitizedErrorV1('SYNC_IDENTITY_AMBIGUOUS', null) };
+        }
+        const durablePause = await durablePauseGateV1(identity);
+        if (durablePause) {
+            return {
+                acked: 0, blocked: 0, quarantined: 0,
+                pending: await countPendingV1(identity), paused: true,
+                pause_kind: durablePause.pause_kind,
+                retry_at: durablePause.retry_at || null,
+                error: sanitizedErrorV1(
+                    durablePause.error && durablePause.error.code,
+                    durablePause.error && durablePause.error.http_status
+                )
+            };
+        }
+        if (dangOffline()) {
+            return { acked: 0, blocked: 0, quarantined: 0,
+                pending: await countPendingV1(identity), paused: true,
+                error: sanitizedErrorV1('SYNC_OFFLINE', null) };
+        }
+        const value = await runWithSyncLockV1(identity.shop_id, async function (lock) {
+            const summary = { acked: 0, blocked: 0, quarantined: 0, pending: 0, paused: false };
+            await recoverStaleSyncingV1(identity);
+            await cleanupAckedV1(identity);
+            const candidates = await listSyncCandidatesV1(identity);
+            for (const candidate of candidates) {
+                if (!lock.valid()) {
+                    summary.paused = true;
+                    summary.error = sanitizedErrorV1('SYNC_LOCK_LOST', null);
+                    break;
+                }
+                const claimed = await claimReceiptV1(candidate, lock);
+                if (!claimed) continue;
+                const result = await sendClaimedReceiptV1(claimed, lock);
+                summary.acked += result.acked || 0;
+                summary.blocked += result.blocked || 0;
+                summary.quarantined += result.quarantined || 0;
+                if (result.pause) {
+                    summary.paused = true;
+                    summary.error = sanitizedErrorV1(result.pause.code, result.pause.http_status);
+                    summary.pause_kind = result.pause_kind === 'transient'
+                        ? 'TRANSIENT' : 'HARD';
+                    if (!result.stale) {
+                        const earliest = result.pause_kind === 'transient'
+                            ? await earliestRetryV1(identity) : null;
+                        await persistSyncPauseV1(
+                            identity,
+                            summary.error,
+                            result.pause_kind,
+                            earliest && earliest.at
+                        );
+                        summary.retry_at = earliest ? syncIsoV1(earliest.at) : null;
+                    }
+                    break;
+                }
+            }
+            summary.pending = await countPendingV1(identity);
+            if (!summary.paused) await clearSyncPauseV1(identity);
+            return summary;
+        });
+        return value || {
+            acked: 0, blocked: 0, quarantined: 0,
+            pending: await countPendingV1(identity), paused: true,
+            error: sanitizedErrorV1('SYNC_LOCK_BUSY', null)
+        };
+    }
+
+    function triggerSyncV1(options) {
+        const identity = {
+            shop_id: Number(options && options.shop_id),
+            user_id: Number(options && options.user_id) || null,
+            username: String(options && options.username || '')
+        };
+        if (!Number.isSafeInteger(identity.shop_id) || identity.shop_id < 1
+            || !identity.username || usernameHienTai() !== identity.username) {
+            return Promise.resolve({
+                acked: 0, blocked: 0, quarantined: 0, pending: 0, paused: true,
+                error: sanitizedErrorV1('SYNC_IDENTITY_UNAVAILABLE', null)
+            });
+        }
+        const key = syncPauseKeyV1(identity);
+        if (syncRunsV1.has(key)) return syncRunsV1.get(key);
+        const run = applyPendingSealsV1()
+            .then(() => finalizeDraftsV1({ username: identity.username }))
+            .then(() => runSyncQueueV1(identity))
+            .catch(function () {
+                return {
+                    acked: 0, blocked: 0, quarantined: 0, pending: 0, paused: true,
+                    error: sanitizedErrorV1('SYNC_LOCAL_FAILURE', null)
+                };
+            })
+            .finally(() => syncRunsV1.delete(key));
+        syncRunsV1.set(key, run);
+        return run;
+    }
+
+    async function getSyncSummaryV1(options) {
+        let identity = {
+            shop_id: Number(options && options.shop_id),
+            user_id: Number(options && options.user_id) || null,
+            username: String(options && options.username || '')
+        };
+        if (!Number.isSafeInteger(identity.shop_id) || identity.shop_id < 1
+            || !identity.username || usernameHienTai() !== identity.username) {
+            return {
+                pending: 0, paused: true, state_counts: {},
+                error: sanitizedErrorV1('SYNC_IDENTITY_UNAVAILABLE', null)
+            };
+        }
+        identity = await completeSyncIdentityV1(identity);
+        if (!identity) {
+            return {
+                pending: 0, paused: true, state_counts: {},
+                error: sanitizedErrorV1('SYNC_IDENTITY_AMBIGUOUS', null)
+            };
+        }
+        const counts = {};
+        SYNC_STATES.forEach(state => { counts[state] = 0; });
+        (await docTatCaStore(KHO_PHIEU_V1))
+            .filter(row => receiptMatchesIdentityV1(row, identity))
+            .forEach(row => {
+                if (SYNC_STATES.includes(row.state)) counts[row.state] += 1;
+            });
+        const pause = await chay(KHO_META_V1, 'readonly', store => store.get(syncPauseKeyV1(identity)));
+        return {
+            pending: counts.DRAFT + counts.READY + counts.SYNCING + counts.RETRYABLE
+                + counts.BLOCKED_RECOVERABLE,
+            paused: Boolean(pause),
+            pause_kind: pause ? pause.pause_kind : null,
+            retry_at: pause ? pause.retry_at : null,
+            state_counts: counts,
+            error: pause ? sanitizedErrorV1(pause.error && pause.error.code,
+                pause.error && pause.error.http_status) : null
+        };
+    }
+
+    async function resumeSyncV1(options) {
+        let identity = {
+            shop_id: Number(options && options.shop_id),
+            user_id: Number(options && options.user_id) || null,
+            username: String(options && options.username || '')
+        };
+        if (!Number.isSafeInteger(identity.shop_id) || identity.shop_id < 1
+            || !identity.username || usernameHienTai() !== identity.username) {
+            return triggerSyncV1(identity);
+        }
+        identity = await completeSyncIdentityV1(identity);
+        if (!identity) return triggerSyncV1(options);
+        await clearSyncPauseV1(identity);
+        const result = await triggerSyncV1(identity);
+        syncSchedulerRefreshV1.forEach(function (refresh) {
+            Promise.resolve().then(refresh).catch(function () {});
+        });
+        return result;
+    }
+
+    function batTuDongBoV1(layIdentity, khiXong) {
+        let timerId = null;
+        let timerAt = null;
+        let activeRun = null;
+
+        function disarm() {
+            if (timerId !== null) syncClearTimeoutV1(timerId);
+            timerId = null;
+            timerAt = null;
+        }
+
+        function arm(deadline) {
+            if (!Number.isFinite(deadline)) return disarm();
+            const safeDeadline = Math.max(syncNowMsV1(), deadline);
+            if (timerId !== null && timerAt === safeDeadline) return;
+            disarm();
+            timerAt = safeDeadline;
+            timerId = syncSetTimeoutV1(function () {
+                timerId = null;
+                timerAt = null;
+                return thu();
+            }, safeDeadline - syncNowMsV1());
+        }
+
+        async function schedule(identity) {
+            identity = await completeSyncIdentityV1({
+                shop_id: Number(identity.shop_id),
+                user_id: Number(identity.user_id) || null,
+                username: String(identity.username || '')
+            });
+            if (!identity) return disarm();
+            const pause = await readSyncPauseV1(identity);
+            if (pause && pause.pause_kind === 'HARD') return disarm();
+            const earliest = await earliestRetryV1(identity);
+            const persisted = pause && pause.pause_kind === 'TRANSIENT'
+                ? Date.parse(pause.retry_at || '') : NaN;
+            const deadline = earliest ? earliest.at : persisted;
+            if (Number.isFinite(deadline) && deadline > syncNowMsV1()) arm(deadline);
+            else disarm();
+        }
+
+        async function thu() {
+            if (activeRun) return activeRun;
+            disarm();
+            activeRun = (async function () {
+                const identity = typeof layIdentity === 'function' ? layIdentity() : null;
+                if (!identity || !identity.shop_id || !identity.username) return null;
+                if (dangOffline()) return null;
+                const result = await triggerSyncV1(identity);
+                if (typeof khiXong === 'function') await khiXong(result);
+                await schedule(identity);
+                return result;
+            })().finally(function () { activeRun = null; });
+            return activeRun;
+        }
+
+        async function refresh(initial) {
+            const identity = typeof layIdentity === 'function' ? layIdentity() : null;
+            if (!identity || !identity.shop_id || !identity.username) {
+                if (initial === true) arm(syncNowMsV1() + 1500);
+                else disarm();
+                return;
+            }
+            const completed = await completeSyncIdentityV1({
+                shop_id: Number(identity.shop_id),
+                user_id: Number(identity.user_id) || null,
+                username: String(identity.username || '')
+            });
+            if (!completed) return disarm();
+            const pause = await readSyncPauseV1(completed);
+            const earliest = await earliestRetryV1(completed);
+            if (pause && pause.pause_kind === 'HARD') return disarm();
+            const persisted = pause && pause.pause_kind === 'TRANSIENT'
+                ? Date.parse(pause.retry_at || '') : NaN;
+            const deadline = earliest ? earliest.at : persisted;
+            if (Number.isFinite(deadline) && deadline > syncNowMsV1()) arm(deadline);
+            else if (initial === true) arm(syncNowMsV1() + 1500);
+            else disarm();
+        }
+        global.addEventListener('online', thu);
+        syncSchedulerRefreshV1.add(refresh);
+        Promise.resolve().then(() => refresh(true)).catch(function () {});
+        return thu;
     }
 
     // ---------- Contract v0 giữ nguyên ----------
@@ -1162,6 +2316,10 @@
         getCredentialForRecoveryV1,
         sealIdentityV1,
         fingerprintV1,
+        triggerSyncV1,
+        getSyncSummaryV1,
+        resumeSyncV1,
+        batTuDongBoV1,
         luuPhieuTuPOS,
         // v0 compatibility
         luuPhieu,
