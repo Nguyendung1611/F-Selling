@@ -118,6 +118,7 @@ def test_co_ban_chup_danh_muc_de_con_ban_duoc():
     ma = _bo_chu_thich(js[dau:dau + 1200])
     assert "luuAnhChupSanPham(" in ma
     assert "docAnhChupSanPham(" in ma
+    assert "prepareV1(" in ma
 
 
 # ---------- Nối vào trang ----------
@@ -139,6 +140,9 @@ def test_da_bump_phien_ban_pos():
     assert "/js/pos.js?v=20260802-bien-the" not in html
     assert "/js/locales/pos.js?v=20260802-bien-the" not in html
     assert "/js/offline-ban.js?v=" in html
+    assert "/js/offline-ban.js?v=20260812-i09-f1-c1" in html
+    assert "/js/pos.js?v=20260812-i09-f1-c1" in html
+    assert "/js/api.js?v=20260812-i09-f1-c1" in html
 
 
 @pytest.mark.parametrize("khoa", CAU_OFFLINE)

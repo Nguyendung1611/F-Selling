@@ -46,6 +46,9 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
 
     try {
         const data = await apiCall('/auth/login', 'POST', { username, password });
+        // Same-tab A -> B không phát storage event. Seal A (hoặc ghi marker
+        // fail-closed nếu trang login chưa nạp OfflineBan) trước khi overwrite B.
+        await prepareAuthIdentityChangeV1(username);
         localStorage.setItem('token', data.access_token);
         localStorage.setItem('role', data.role);
         if (data.role === 'STAFF') {

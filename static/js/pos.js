@@ -236,7 +236,15 @@ async function loadProducts() {
         filterAndRenderProducts();
         // Chụp lại danh mục để còn bán được khi mất mạng. Không có bản chụp thì
         // màn POS trống trơn và hàng chờ offline có cũng vô nghĩa.
-        OfflineBan?.luuAnhChupSanPham(currentShopId, products);
+        await OfflineBan?.luuAnhChupSanPham(currentShopId, products);
+        // F1: bind exact catalog response vào credential lease. Issue bị tắt,
+        // mất quyền/Pro hoặc digest chạy đua với catalog đều chỉ làm v1 không
+        // usable; trước cutoff luồng v0 bên dưới vẫn là fallback tương thích.
+        await OfflineBan?.prepareV1({
+            shop_id: Number(currentShopId),
+            username: localStorage.getItem('username') || '',
+            products: res
+        }).catch(() => null);
     } catch (e) {
         const chup = await OfflineBan?.docAnhChupSanPham(currentShopId).catch(() => null);
         if (chup && chup.length) {
@@ -2233,12 +2241,19 @@ async function luuBanOffline(state) {
     ) {
         throw new Error(dich(khoaThongBaoRetryUuDai(payload)));
     }
-    const phieu = await OfflineBan.luuPhieu(
-        currentShopId,
-        cart,
-        cashTenderedAmount,
-        localStorage.getItem('username') || null
-    );
+    const phieu = await OfflineBan.luuPhieuTuPOS({
+        shop_id: Number(currentShopId),
+        username: localStorage.getItem('username') || '',
+        creation_key: state.operation_id,
+        items: cart,
+        cash_tendered: cashTenderedAmount,
+        device_label: localStorage.getItem('username') || null,
+        payment_method: state.payment_method,
+        voucher_code: payload.voucher_code || null,
+        loyalty_points_to_use: Number(payload.loyalty_points_to_use || 0),
+        qr: false,
+        debt: false
+    });
     xoaCheckoutDangDo();
     checkoutOperationId = null;
     currentOrderId = null;
