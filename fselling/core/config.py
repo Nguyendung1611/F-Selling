@@ -148,6 +148,28 @@ def _bool_env_fail_closed(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+# I10-B sales-QR rollout.  REPORT_ONLY is deliberately only a capability
+# label here: the runtime still installs a disabled adapter.  Issuance becomes
+# possible only when a caller injects the explicit deterministic mock/test
+# runtime from ``qr_sales_service``; an environment variable alone can never
+# select a provider or open network traffic.
+QR_SALES_MODE_OFF = "OFF"
+QR_SALES_MODE_REPORT_ONLY = "REPORT_ONLY"
+QR_SALES_MODES = frozenset({QR_SALES_MODE_OFF, QR_SALES_MODE_REPORT_ONLY})
+
+
+def _qr_sales_mode_from_env() -> str:
+    """Parse the strict sales-QR mode allowlist and fail safe to OFF."""
+    raw = (os.getenv("QR_SALES_MODE") or QR_SALES_MODE_OFF).strip().upper()
+    if raw in QR_SALES_MODES:
+        return raw
+    print("[WARN] QR_SALES_MODE is invalid. Sales QR remains OFF.")
+    return QR_SALES_MODE_OFF
+
+
+QR_SALES_MODE: str = _qr_sales_mode_from_env()
+
+
 # Cấp credential bán offline là capability mới, nên mặc định TẮT. Cờ này chỉ
 # chặn ISSUE; heartbeat/reclaim/revoke của credential đã phát hành vẫn chạy để
 # máy mất hoặc shop vừa tắt rollout không làm mất đường cứu chứng từ đã có.

@@ -1780,6 +1780,60 @@ under/exact/over/late/no-resurrection, issuance/render, webhook application,
 reconciliation handler và account-change lock vẫn thuộc I10-B/C; POS/PWA/UI
 thuộc I10-D; provider traffic và rollout thật thuộc I10-R.
 
+### 46. I10-B: phát hành sales QR nguyên tử, render cùng origin và vẫn mặc định OFF
+
+`QR_SALES_MODE` chỉ nhận đúng `OFF` hoặc `REPORT_ONLY`; thiếu/sai giá trị đều
+fail-safe về `OFF`. Runtime cài sẵn luôn dùng disabled adapter, vì vậy chỉ đặt
+biến môi trường `REPORT_ONLY` cũng **không** phát intent, không render và không
+mở provider/network. I10-B chỉ có seam test tường minh với deterministic mock
+adapter; không có production adapter, lựa chọn provider hay production rollout.
+Ở `OFF`, response/order legacy v0 giữ nguyên hành vi cũ và không được backfill
+hay bịa intent.
+
+Trong seam `REPORT_ONLY`, chỉ đơn online `payment_method=transfer` với
+`total_vnd > 0` được phát đúng một intent v1. Đơn cash, debt, tổng 0, receipt
+offline và subscription tuyệt đối không đi vào đường này. `expected_vnd` là
+integer chính xác và bằng `Order.total_vnd`; reference `FS1-<32 HEX>` không chứa
+secret, sinh đúng một lần cho candidate và bất biến sau commit. Tối đa 5
+candidate; chỉ unique collision của canonical reference được rollback bằng
+nested savepoint rồi thử candidate kế, còn mọi lỗi intent khác fail đóng với mã
+lỗi ổn định.
+
+Biên transaction là biên tạo order hiện hữu: lấy shop write lock, refresh shop
+dưới lock để chụp đồng bộ `bank_code/account_no/account_name`, rồi ghi order,
+items, inventory/cost, voucher/loyalty, intent và đúng một SystemLog phát hành
+trước **một commit duy nhất**. Audit transaction-local có action kỹ thuật
+`QR_PAYMENT_INTENT_ISSUED`; details JSON chỉ giữ entity, intent/order/shop ID,
+contract version và trạng thái `ISSUED`, không giữ account/reference/
+operation_id/request/bytes/provider/token/URL. Không có intermediate commit.
+Lỗi intent, audit flush hoặc commit rollback toàn bộ. Retry/lost response cùng
+`operation_id` đọc winner durable sau cùng shop lock, trả lại đúng order +
+intent + reference cũ và không chạy lại tồn kho/doanh thu hay ghi audit lần
+hai. Việc chặn thay account khi còn intent chưa giải quyết chưa được bật ở đây;
+I10-C sẽ dùng chính hàng rào shop serialization này để thêm policy đó.
+
+Render nằm hoàn toàn sau transaction tiền và chỉ đọc intent đã tồn tại; fetch
+không thể issue/regenerate intent, đổi trạng thái order/payment hay được coi là
+bằng chứng `PAID`. Adapter contract nhỏ chỉ nhận instruction đã chuẩn hóa và trả
+`bytes + media_type`, không trả remote URL. I10-B allowlist duy nhất `image/png`,
+cap 512 KiB; byte rỗng/sai kiểu/quá cap/media lạ đều thành lỗi đã lọc, không ghi
+raw payload, URL hay QR bytes vào DB/log/local storage. Retry render cùng mock
+instruction cho đúng bytes; render failure sau commit không rollback hoặc tạo
+lại order/intent.
+
+Hai endpoint xác thực cùng origin là `GET /api/orders/{order_id}/qr` (metadata
+đã lọc) và `GET /api/orders/{order_id}/qr/render` (bytes). Scope shop được áp
+trước kiểm quyền SALE: owner/cashier/manager/ADMIN hợp lệ được đọc, WAREHOUSE
+cùng shop nhận 403, còn order ngoài scope và ID không có cùng một 404 để không
+lộ existence. Token chỉ qua Authorization convention hiện hữu, không nhận
+query/cookie. Mọi response API là `Cache-Control: no-store`; render, kể cả lỗi,
+có `X-Content-Type-Options: nosniff`. Metadata chỉ có reference, exact amount,
+bank display snapshot, issued time, cờ instruction-only và capability/render
+path tương đối; không có adapter profile/provider/raw payload/secret/external
+URL. UI/PWA blob/object-URL thuộc I10-D; webhook/reconciliation và account-change
+blocking thuộc I10-C; provider/reference negotiation, TTL/grace/auto-cancel,
+enforce/retention/refund SLA và rollout thật thuộc I10-R.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

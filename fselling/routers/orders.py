@@ -1,6 +1,6 @@
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -18,7 +18,13 @@ from ..schemas.order import (
     OrderReturnCreate,
     RefundComplete,
 )
-from ..services import offline_service, order_service, return_service, subscription_service
+from ..services import (
+    offline_service,
+    order_service,
+    qr_sales_service,
+    return_service,
+    subscription_service,
+)
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
@@ -182,6 +188,38 @@ def xac_nhan_van_de_offline(
     """
     return offline_service.xac_nhan_van_de(
         db, current_user, shop_id, issue_id, payload
+    )
+
+
+@router.get("/{order_id}/qr")
+def get_order_qr_intent(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Sanitized metadata for one already-issued immutable sales intent."""
+    return qr_sales_service.authorized_intent_metadata(
+        db, current_user, order_id
+    )
+
+
+@router.get("/{order_id}/qr/render")
+def render_order_qr(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Render existing intent bytes; this endpoint can never issue/regenerate."""
+    rendered = qr_sales_service.render_authorized_intent(
+        db, current_user, order_id
+    )
+    return Response(
+        content=rendered.content,
+        media_type=rendered.media_type,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

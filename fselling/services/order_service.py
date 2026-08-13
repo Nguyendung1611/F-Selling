@@ -30,7 +30,13 @@ from ..schemas.order import (
     OrderCreate,
     RefundComplete,
 )
-from . import inventory_service, loyalty_service, payment_service, voucher_service
+from . import (
+    inventory_service,
+    loyalty_service,
+    payment_service,
+    qr_sales_service,
+    voucher_service,
+)
 from .log_service import log_system_action
 
 
@@ -329,7 +335,8 @@ def _create_order_response(
         if existing.customer_id is not None
         else 0
     )
-    return {
+    qr_intent = qr_sales_service.metadata_for_order(db, existing)
+    response = {
         "order_id": existing.id,
         "status": existing.status,
         "subtotal": total + discount + loyalty_discount,
@@ -339,8 +346,18 @@ def _create_order_response(
         "loyalty_points_earned": int(existing.loyalty_points_earned or 0),
         "loyalty_balance": loyalty_balance,
         "total": total,
-        "qr_url": payment_service.build_qr_url(shop, total, existing.id),
+        # Contract v0/OFF stays byte-for-byte compatible.  A v1 intent never
+        # exposes a browser/provider URL: I10-D will fetch its authenticated
+        # same-origin render endpoint as a blob.
+        "qr_url": (
+            None
+            if qr_intent is not None
+            else payment_service.build_qr_url(shop, total, existing.id)
+        ),
     }
+    if qr_intent is not None:
+        response["qr_intent"] = qr_intent
+    return response
 
 
 def _existing_operation_order(
@@ -520,6 +537,11 @@ def create_order(
     # sau cùng một write lock. Hai cashier có ca khác nhau không thể chỉ dựa
     # vào shift lock vì khi đó cả hai đã kịp đọc cùng snapshot tồn/lượt dùng.
     _lock_shop_for_order(db, shop_id)
+    # ``require_shop_access`` may have populated the identity map before this
+    # transaction obtained the shop write lock.  Refresh under that same lock
+    # so the immutable bank snapshot is coherent with serialized account
+    # updates.  Blocking account changes for unresolved intents is I10-C.
+    db.refresh(shop)
 
     # Một retry có thể đã hoàn tất trong lúc request này chờ shop lock. Kiểm
     # lại ngay sau lock để không resolve/trừ kho/tăng voucher lần thứ hai.
@@ -760,7 +782,16 @@ def create_order(
     if new_order.status == STATUS_PAID:
         _award_loyalty_paid_order(db, new_order, current_user.id)
 
-    db.commit()
+    try:
+        # Intent and its sanitized issuance audit are deliberately the final
+        # writes before the one existing order commit. Any issuance/audit/
+        # commit failure rolls back order, lines, stock, cost, voucher and
+        # loyalty together. Rendering is never called from this transaction.
+        qr_sales_service.issue_intent_if_enabled(db, new_order, shop)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(new_order)
 
     return _create_order_response(db, shop, new_order)
@@ -800,6 +831,9 @@ def get_order(db: Session, current_user: models.User, order_id: int) -> Dict[str
         ),
     }
     result.update(payment_summary(order))
+    qr_intent = qr_sales_service.metadata_for_order(db, order)
+    if qr_intent is not None:
+        result["qr_intent"] = qr_intent
     return result
 
 

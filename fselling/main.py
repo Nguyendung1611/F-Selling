@@ -210,6 +210,13 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
         response = await call_next(request)
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
+        # I10-B render is authenticated binary output.  Apply nosniff to both
+        # success and sanitized error responses; router-local headers alone do
+        # not run when a service raises HTTPException.
+        if request.url.path.startswith("/api/orders/") and request.url.path.endswith(
+            "/qr/render"
+        ):
+            response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
     application.include_router(auth.router)

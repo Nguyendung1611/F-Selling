@@ -3,8 +3,9 @@
 Nguyên tắc:
 - Không bao giờ chạm vào DB thật: DB_PATH trỏ vào file tạm.
 - Không gửi email thật: send_otp_email luôn bị thay bằng fake.
-- Không gọi mạng: VietQR chỉ là chuỗi URL, webhook secret được monkeypatch, và
-  `GEMINI_API_KEY` bị xóa nên trợ lý không bao giờ gọi ra Google thật.
+- Không gọi mạng: QR sales mặc định OFF; test REPORT_ONLY chỉ dùng adapter mock
+  nội bộ, webhook secret được monkeypatch, và `GEMINI_API_KEY` bị xóa nên trợ
+  lý không bao giờ gọi ra Google thật.
 """
 from __future__ import annotations
 
@@ -50,6 +51,8 @@ os.environ["LOG_FILE"] = str(_TMP / "request_log.txt")
 os.environ["SECRET_KEY"] = "test-secret-key-chi-dung-cho-test"
 os.environ["ADMIN_INITIAL_PASSWORD"] = "AdminTest@2026"
 os.environ["ALLOWED_ORIGINS"] = "http://testserver"
+# I10-B fail-closed: mọi test không chủ ý bật seam mock đều giữ hành vi v0.
+os.environ["QR_SALES_MODE"] = "OFF"
 # Chặn mọi khả năng gửi mail thật
 os.environ["SMTP_USER"] = ""
 os.environ["SMTP_PASSWORD"] = ""
