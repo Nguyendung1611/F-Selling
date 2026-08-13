@@ -53,6 +53,7 @@ os.environ["ADMIN_INITIAL_PASSWORD"] = "AdminTest@2026"
 os.environ["ALLOWED_ORIGINS"] = "http://testserver"
 # I10-B fail-closed: mọi test không chủ ý bật seam mock đều giữ hành vi v0.
 os.environ["QR_SALES_MODE"] = "OFF"
+os.environ["QR_WEBHOOK_MODE"] = "OFF"
 # Chặn mọi khả năng gửi mail thật
 os.environ["SMTP_USER"] = ""
 os.environ["SMTP_PASSWORD"] = ""

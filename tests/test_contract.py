@@ -62,6 +62,11 @@ ROUTES_BO_SUNG = {
     # token qua query string.
     ("GET", "/api/orders/{order_id}/qr"),
     ("GET", "/api/orders/{order_id}/qr/render"),
+    # I10-C: durable normalized inbox plus scoped, explicit reconciliation.
+    ("POST", "/api/qr-payments/webhook"),
+    ("GET", "/api/qr-reconciliation/events"),
+    ("GET", "/api/qr-reconciliation/events/{event_id}"),
+    ("POST", "/api/qr-reconciliation/events/{event_id}/actions"),
     ("POST", "/api/orders/{order_id}/cancel"),  # A1d: hủy đơn + hoàn tồn kho
     ("GET", "/api/orders/{order_id}/detail"),   # B3: xem chi tiết đơn kèm dòng hàng
     ("PUT", "/api/products/{product_id}"),      # behavior fix: sửa sản phẩm từ Kho hàng

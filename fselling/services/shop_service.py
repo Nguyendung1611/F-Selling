@@ -4,8 +4,8 @@ from __future__ import annotations
 from typing import Dict, List
 
 from fastapi import HTTPException
-from sqlalchemy import text
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, exists, or_, text
+from sqlalchemy.orm import Session, aliased
 
 from .. import models
 from ..core.config import MAX_SHOPS_PER_USER, log_to_file
@@ -27,6 +27,104 @@ _REQUIRED_FIELDS = [
     ("bank_account_no", "Số tài khoản không được để trống"),
     ("bank_account_name", "Tên chủ tài khoản không được để trống"),
 ]
+
+_BANK_FIELDS = frozenset({"bank_code", "bank_account_no", "bank_account_name"})
+ERROR_QR_BANK_ACCOUNT_CHANGE_BLOCKED = "QR_BANK_ACCOUNT_CHANGE_BLOCKED"
+_PROVIDER_COLLISION_REASON = "PROVIDER_EVENT_COLLISION"
+
+
+def _assert_qr_account_change_allowed(db: Session, shop_id: int) -> None:
+    """Fail closed while any immutable v1 account snapshot is unresolved.
+
+    A v1 intent needs at least one terminal non-collision evidence row. Every
+    directly linked row and every collision in a mapped non-collision root's
+    provider-identity lineage must be terminal. This check runs only after the
+    shared shop write fence has been acquired.
+    """
+    terminal = ("APPLIED", "REJECTED_NOT_OURS", "REFUNDED")
+    terminal_event = exists().where(
+        models.BankWebhookEvent.intent_id == models.QrPaymentIntent.id,
+        models.BankWebhookEvent.reason_code != _PROVIDER_COLLISION_REASON,
+        models.BankWebhookEvent.disposition.in_(terminal),
+    )
+    intent_without_terminal = (
+        db.query(models.QrPaymentIntent.id)
+        .filter(
+            models.QrPaymentIntent.shop_id == shop_id,
+            models.QrPaymentIntent.contract_version == 1,
+            ~terminal_event,
+        )
+        .first()
+        is not None
+    )
+    unresolved_related_event = (
+        db.query(models.BankWebhookEvent.id)
+        .filter(
+            models.BankWebhookEvent.shop_id == shop_id,
+            models.BankWebhookEvent.reason_code != _PROVIDER_COLLISION_REASON,
+            ~models.BankWebhookEvent.disposition.in_(terminal),
+        )
+        .first()
+        is not None
+    )
+
+    # A collision always stays unscoped. Its durable provider identity can
+    # still prove lineage only when a mapped non-collision root supplies the
+    # seed. This provenance is account-fence-only: it never grants visibility
+    # or mutates the collision's nullable shop/intent columns.
+    root = aliased(models.BankWebhookEvent)
+    intent = aliased(models.QrPaymentIntent)
+    lineage = aliased(models.BankWebhookEvent)
+    shop_provider_identities = (
+        db.query(
+            root.provider.label("provider"),
+            root.provider_event_id.label("provider_event_id"),
+        )
+        .join(
+            intent,
+            or_(
+                root.intent_id == intent.id,
+                and_(
+                    root.order_id == intent.order_id,
+                    root.shop_id == intent.shop_id,
+                ),
+            ),
+        )
+        .filter(
+            intent.shop_id == shop_id,
+            intent.contract_version == 1,
+            root.reason_code != _PROVIDER_COLLISION_REASON,
+            root.provider_event_id.is_not(None),
+        )
+        .distinct()
+        .subquery()
+    )
+    unresolved_identity_lineage = (
+        db.query(lineage.id)
+        .join(
+            shop_provider_identities,
+            and_(
+                lineage.provider == shop_provider_identities.c.provider,
+                lineage.provider_event_id
+                == shop_provider_identities.c.provider_event_id,
+            ),
+        )
+        .filter(~lineage.disposition.in_(terminal))
+        .first()
+        is not None
+    )
+    if (
+        intent_without_terminal
+        or unresolved_related_event
+        or unresolved_identity_lineage
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": ERROR_QR_BANK_ACCOUNT_CHANGE_BLOCKED,
+                "message": "Bank account has unresolved QR payment evidence",
+            },
+        )
 
 
 def _clean_and_validate(shop: ShopCreate) -> Dict[str, str]:
@@ -99,6 +197,15 @@ def update_shop(
     _lock_shop_for_write(db, shop_id, owner_id)
     db_shop = require_own_shop(db, shop_id, current_user)
     db.refresh(db_shop)
+    bank_changed = any(
+        getattr(db_shop, field) != data[field] for field in _BANK_FIELDS
+    )
+    if bank_changed:
+        try:
+            _assert_qr_account_change_allowed(db, shop_id)
+        except HTTPException:
+            db.rollback()
+            raise
     for field, value in data.items():
         setattr(db_shop, field, value)
     db.commit()

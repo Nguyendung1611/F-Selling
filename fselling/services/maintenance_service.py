@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from fastapi import HTTPException
+from sqlalchemy import exists
 from sqlalchemy.exc import SQLAlchemyError
 
 from .. import models
@@ -65,6 +66,12 @@ def cancel_expired_pending_orders(timeout_minutes: int = None) -> int:
             .filter(
                 models.Order.status == order_service.STATUS_PENDING,
                 models.Order.created_at < han_chot,
+                # I10-C: a v1 intent has no TTL/grace/auto-cancel policy.
+                # Its immutable account/reference snapshot remains controlled
+                # until explicit reconciliation, even if the legacy job is ON.
+                ~exists().where(
+                    models.QrPaymentIntent.order_id == models.Order.id
+                ),
             )
             .all()
         )

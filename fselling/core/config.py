@@ -170,6 +170,29 @@ def _qr_sales_mode_from_env() -> str:
 QR_SALES_MODE: str = _qr_sales_mode_from_env()
 
 
+# I10-C normalized bank-inbox rollout.  Like I10-B, REPORT_ONLY is only a
+# capability label: the installed webhook runtime remains the disabled adapter.
+# No environment value can install credentials, a provider adapter or network
+# traffic; the deterministic adapter is reachable solely through the explicit
+# test seam in ``qr_webhook_service``.
+QR_WEBHOOK_MODE_OFF = "OFF"
+QR_WEBHOOK_MODE_REPORT_ONLY = "REPORT_ONLY"
+QR_WEBHOOK_MODES = frozenset(
+    {QR_WEBHOOK_MODE_OFF, QR_WEBHOOK_MODE_REPORT_ONLY}
+)
+
+
+def _qr_webhook_mode_from_env() -> str:
+    raw = (os.getenv("QR_WEBHOOK_MODE") or QR_WEBHOOK_MODE_OFF).strip().upper()
+    if raw in QR_WEBHOOK_MODES:
+        return raw
+    print("[WARN] QR_WEBHOOK_MODE is invalid. QR webhook remains OFF.")
+    return QR_WEBHOOK_MODE_OFF
+
+
+QR_WEBHOOK_MODE: str = _qr_webhook_mode_from_env()
+
+
 # Cấp credential bán offline là capability mới, nên mặc định TẮT. Cờ này chỉ
 # chặn ISSUE; heartbeat/reclaim/revoke của credential đã phát hành vẫn chạy để
 # máy mất hoặc shop vừa tắt rollout không làm mất đường cứu chứng từ đã có.

@@ -40,6 +40,7 @@ from .routers import (
     pages,
     products,
     purchase_receipts,
+    qr_reconciliation,
     reports,
     shifts,
     shops,
@@ -90,8 +91,21 @@ def _validation_message(error: dict) -> str:
 
 
 async def localized_validation_error_handler(
-    _request, exc: RequestValidationError
+    request: Request, exc: RequestValidationError
 ) -> JSONResponse:
+    # Financial inbox/reconciliation requests must never echo hostile body or
+    # query values through Pydantic's default ``input`` field.  Keep a stable,
+    # non-reflective error contract for every I10-C route.
+    if request.url.path.startswith(("/api/qr-payments", "/api/qr-reconciliation")):
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": {
+                    "code": "QR_RECONCILIATION_REQUEST_INVALID",
+                    "message": "QR reconciliation request is invalid",
+                }
+            },
+        )
     errors = jsonable_encoder(exc.errors())
     for error in errors:
         error["msg"] = _validation_message(error)
@@ -227,6 +241,7 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
     application.include_router(purchase_receipts.router)
     # webhooks PHẢI đứng trước orders: /api/orders/webhook vs /api/orders/{shop_id}
     application.include_router(webhooks.router)
+    application.include_router(qr_reconciliation.router)
     application.include_router(orders.router)
     application.include_router(offline_leases.router)
     application.include_router(offline_capability.router)

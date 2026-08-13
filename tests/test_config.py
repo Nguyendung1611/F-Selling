@@ -5,7 +5,7 @@ import os
 import pytest
 
 from fselling.core import config
-from fselling.services import qr_sales_service
+from fselling.services import qr_sales_service, qr_webhook_service
 
 
 def test_explicit_environment_takes_precedence_over_dotenv():
@@ -55,6 +55,29 @@ def test_report_only_environment_alone_cannot_enable_issuance(monkeypatch):
     assert runtime.mode == "REPORT_ONLY"
     assert runtime.report_only_mock is False
     assert runtime.render_available is False
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("OFF", "OFF"),
+        (" report_only ", "REPORT_ONLY"),
+        ("ENFORCE", "OFF"),
+        ("1", "OFF"),
+        ("", "OFF"),
+    ],
+)
+def test_qr_webhook_mode_allowlist_is_strict(monkeypatch, raw, expected):
+    monkeypatch.setenv("QR_WEBHOOK_MODE", raw)
+    assert config._qr_webhook_mode_from_env() == expected
+
+
+def test_report_only_environment_alone_cannot_enable_webhook(monkeypatch):
+    monkeypatch.setattr(config, "QR_WEBHOOK_MODE", "REPORT_ONLY")
+    runtime = qr_webhook_service.get_runtime()
+    assert runtime.mode == "REPORT_ONLY"
+    assert runtime.enabled_test_adapter is False
+    assert isinstance(runtime.adapter, qr_webhook_service.DisabledWebhookAdapter)
 
 
 @pytest.mark.parametrize("raw", ["khong-phai-so", "0", "-17"])

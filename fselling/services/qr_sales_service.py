@@ -42,6 +42,7 @@ ERROR_REFERENCE_UNAVAILABLE = "QR_INTENT_REFERENCE_UNAVAILABLE"
 ERROR_RENDER_UNAVAILABLE = "QR_RENDER_UNAVAILABLE"
 ERROR_RENDER_FAILED = "QR_RENDER_FAILED"
 ERROR_RENDER_INVALID_OUTPUT = "QR_RENDER_INVALID_OUTPUT"
+ERROR_RENDER_HIDDEN_UNDERPAYMENT = "QR_RENDER_HIDDEN_UNDERPAYMENT"
 
 
 @dataclass(frozen=True)
@@ -359,10 +360,25 @@ def serialize_intent(
     intent: models.QrPaymentIntent,
     *,
     runtime: QrSalesRuntime | None = None,
+    hidden_underpayment: bool = False,
 ) -> dict:
     """Return approved display fields only; adapter/provider internals stay server-side."""
     selected = runtime or get_runtime()
     render_available = _can_render(intent, selected)
+    if hidden_underpayment:
+        return {
+            "contract_version": int(intent.contract_version),
+            "expected_vnd": int(intent.expected_vnd),
+            "issued_at": intent.issued_at,
+            "instruction_only": True,
+            "hidden": True,
+            "hidden_reason": "UNDERPAYMENT_UNAPPLIED",
+            "capability": {
+                "mode": selected.mode,
+                "render_available": False,
+                "render_endpoint": None,
+            },
+        }
     return {
         "contract_version": int(intent.contract_version),
         "canonical_reference": intent.canonical_reference,
@@ -382,6 +398,21 @@ def serialize_intent(
             ),
         },
     }
+
+
+def _has_unapplied_underpayment(
+    db: Session, intent: models.QrPaymentIntent
+) -> bool:
+    return (
+        db.query(models.BankWebhookEvent.id)
+        .filter(
+            models.BankWebhookEvent.intent_id == intent.id,
+            models.BankWebhookEvent.disposition == "UNAPPLIED",
+            models.BankWebhookEvent.reason_code == "AMOUNT_UNDERPAID",
+        )
+        .first()
+        is not None
+    )
 
 
 def intent_for_order(
@@ -404,7 +435,11 @@ def metadata_for_order(
     intent = intent_for_order(db, order.id)
     if intent is None:
         return None
-    return serialize_intent(intent, runtime=runtime)
+    return serialize_intent(
+        intent,
+        runtime=runtime,
+        hidden_underpayment=_has_unapplied_underpayment(db, intent),
+    )
 
 
 def _authorized_intent(
@@ -446,7 +481,11 @@ def authorized_intent_metadata(
     runtime: QrSalesRuntime | None = None,
 ) -> dict:
     intent = _authorized_intent(db, current_user, order_id)
-    return serialize_intent(intent, runtime=runtime)
+    return serialize_intent(
+        intent,
+        runtime=runtime,
+        hidden_underpayment=_has_unapplied_underpayment(db, intent),
+    )
 
 
 def render_authorized_intent(
@@ -458,6 +497,12 @@ def render_authorized_intent(
 ) -> QrRenderResult:
     """Render an existing intent without issuing, mutating or persisting bytes."""
     intent = _authorized_intent(db, current_user, order_id)
+    if _has_unapplied_underpayment(db, intent):
+        raise _http_error(
+            409,
+            ERROR_RENDER_HIDDEN_UNDERPAYMENT,
+            "QR is hidden while underpayment evidence is unresolved",
+        )
     selected = runtime or get_runtime()
     if not _can_render(intent, selected):
         raise _http_error(

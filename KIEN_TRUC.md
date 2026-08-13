@@ -1809,8 +1809,8 @@ operation_id/request/bytes/provider/token/URL. Không có intermediate commit.
 Lỗi intent, audit flush hoặc commit rollback toàn bộ. Retry/lost response cùng
 `operation_id` đọc winner durable sau cùng shop lock, trả lại đúng order +
 intent + reference cũ và không chạy lại tồn kho/doanh thu hay ghi audit lần
-hai. Việc chặn thay account khi còn intent chưa giải quyết chưa được bật ở đây;
-I10-C sẽ dùng chính hàng rào shop serialization này để thêm policy đó.
+hai. I10-C đặt policy chặn thay account trong `shop_service` dưới chính hàng
+rào serialization này; issuer không lặp policy và chỉ chụp snapshot sau lock.
 
 Render nằm hoàn toàn sau transaction tiền và chỉ đọc intent đã tồn tại; fetch
 không thể issue/regenerate intent, đổi trạng thái order/payment hay được coi là
@@ -1833,6 +1833,125 @@ path tương đối; không có adapter profile/provider/raw payload/secret/exte
 URL. UI/PWA blob/object-URL thuộc I10-D; webhook/reconciliation và account-change
 blocking thuộc I10-C; provider/reference negotiation, TTL/grace/auto-cancel,
 enforce/retention/refund SLA và rollout thật thuộc I10-R.
+
+### 47. I10-C: durable webhook inbox, reconciliation CAS và hàng rào đổi tài khoản
+
+I10-C dùng ba bảng bất biến đã phát hành ở migration `0007`; lát cắt này không
+thêm migration và không sửa DDL/trigger/checksum. `bank_webhook_events` là nguồn
+sự thật của bằng chứng tài chính đã chuẩn hóa. QR/reference/account snapshot chỉ
+là hướng dẫn thanh toán bất biến, không phải bằng chứng tiền về. Ingestion không
+tạo `OrderPayment`, không đổi trạng thái order và mọi evidence parse được đều
+bắt đầu `UNAPPLIED`, `state_version=0`, `payment_id=NULL`.
+
+`QR_WEBHOOK_MODE` chỉ nhận `OFF`/`REPORT_ONLY`, mặc định `OFF`. Runtime cài sẵn
+luôn là disabled adapter; kể cả environment đặt `REPORT_ONLY` cũng không thể bật
+endpoint. Seam test tường minh mới cài deterministic local mock adapter dùng
+HMAC do test truyền trực tiếp. Không có SDK/URL/HTTP client/provider adapter,
+secret loading hay traffic mạng. Endpoint `POST /api/qr-payments/webhook` từ
+chối trước khi đọc body khi runtime disabled; với mock, nó đọc raw ASGI headers
+để loại duplicate content-type/token/signature/content-length không phụ thuộc
+thứ tự/casing, loại mọi `Transfer-Encoding`, chỉ nhận đúng một
+`application/json` không parameter và `Content-Length` decimal canonical nằm
+trong cap. Sau đó nó đếm từng chunk với cap 64 KiB, đối chiếu declared/actual
+length và biến mọi stream exception thành lỗi ổn định không phản chiếu dữ liệu.
+JSON container nesting bị chặn ở độ sâu 32 trước khi dựng object tree.
+Raw bytes chỉ tồn tại tạm để HMAC và tính `envelope_sha256`; raw body, signature,
+token, account/reference/payload và secret không được ghi DB/file/log hay echo.
+
+Adapter output là type đóng và bounded: provider cố định theo adapter, identifier
+theo allowlist, direction chỉ `IN/OUT/UNKNOWN`, timestamp input phải timezone-aware
+rồi canonical UTC, và VND chỉ nhận đúng Python integer trong miền 0007 (bool,
+float và string-coercion bị loại). JSON duplicate key/extra key/sai shape bị loại
+trước DB write. Reference được phân lớp `EXACT/MISSING/TRUNCATED/MULTIPLE/INVALID`;
+chỉ `EXACT` được map theo canonical reference duy nhất. Digest normalized là SHA-256
+của canonical JSON sort-key/compact nên độc lập key order/format; envelope digest
+là SHA-256 của đúng transient bytes. Server tự sinh idempotency key 64-hex từ
+provider identity + hai digest. Exact replay trả đúng row cũ, không ghi/audit lần
+hai; inbox writer fence cho một winner khi concurrent. Cùng provider event ID mà
+normalized/envelope evidence khác được giữ thành row collision riêng với
+`PROVIDER_EVENT_COLLISION`; row gốc không bị ghi đè và mọi MAP liên quan collision
+đều bị chặn. Collision được nhận diện từ provider identity **trước** mọi reference
+lookup và luôn persist với `intent_id/order_id/shop_id=NULL`: kể cả exact reference
+tới shop khác cũng không thể cấp scope, visibility hay action cho tenant đó. Nếu
+driver báo lỗi sau lúc commit có thể đã thành công, request
+session được rollback/reset an toàn và một session đọc sạch chỉ trả winner khớp
+đúng provider/idempotency/hai digest cùng toàn bộ normalized fields; không có
+winner thì trả persistence error, còn collision không bao giờ bị nhầm thành
+exact replay của row gốc.
+
+Truth table report-only là bảo thủ:
+
+| Evidence | Mapping/reason | Ingestion effect |
+|---|---|---|
+| exact reference + account + `IN` + exact positive amount + order PENDING | `READY_TO_MAP`, link intent/order/shop | vẫn `UNAPPLIED` |
+| under/over/zero/missing amount | `AMOUNT_*` | giữ evidence, không payment |
+| account missing/mismatch | `ACCOUNT_*` | giữ mapped evidence, không MAP |
+| outbound/unknown direction | `DIRECTION_*` | giữ mapped evidence, không MAP |
+| missing/truncated/multiple/invalid/unknown reference | `REFERENCE_*`, không đoán scope | admin-only nếu unscoped |
+| provider collision | `PROVIDER_EVENT_COLLISION`, luôn unscoped/admin-only | giữ evidence, không MAP |
+| already paid or duplicate money | payment conflict | giữ evidence, không MAP |
+| late/non-PENDING/final-cancelled | order reason ổn định | không hồi sinh/hủy order |
+
+Một underpayment còn `UNAPPLIED` làm metadata QR hiện hữu chuyển sang trạng thái
+`hidden`, bỏ account/reference và khóa render; không sinh remainder/full replacement
+QR. Job auto-cancel legacy bỏ qua mọi order có intent v1 dù operator bật timeout:
+I10-C không có TTL/grace/auto-cancel/enforce.
+
+Read surface gồm `GET /api/qr-reconciliation/events` (chỉ UNAPPLIED, SQL
+`limit+1/offset` bounded, thứ tự `received_at,id`) và
+`GET /api/qr-reconciliation/events/{id}`. DTO chỉ có ID, disposition/reason,
+integer amount, direction/reference-state, timestamps, state version và mapped
+intent/order/shop IDs; không trả account/reference value, digest, provider hay
+provider event identity. ADMIN thấy cả unscoped; owner và MANAGER chỉ thấy event
+đã map vào shop được phép. CASHIER/WAREHOUSE bị 403; unknown/cross-shop dùng cùng
+404 no-existence-leak. Event/target-intent ID phải là integer dương không vượt
+SQLite signed-int64 `9_223_372_036_854_775_807`; state version riêng dùng miền
+`0..1_000_000_000` đúng migration 0007. Path phải là decimal canonical; body ID
+phải là strict integer. Bool, JSON string/float/null, zero và số quá lớn bị chặn
+ở validation boundary, không đi tới SQLite binder. Mọi API response giữ
+`Cache-Control: no-store`.
+
+`POST /api/qr-reconciliation/events/{id}/actions` nhận strict
+`expected_state_version` và đúng một action allowlist. `KEEP_OPEN` ghi action/audit
+nhưng không đổi event. `REJECT_NOT_OURS` và `MARK_REFUNDED_EXTERNALLY` cần note
+trimmed, bounded, không Unicode control/format/line separator, secret hay evidence
+value. So sánh redaction dùng NFKC + identifier-character fold chỉ để phát hiện
+account/reference/provider identity bị chèn whitespace/punctuation; note được
+lưu nguyên văn, không lưu bản transform, và identifier quá ngắn không dùng để
+match mơ hồ. Hai action này không tạo payment. `MAP_AND_APPLY` là đường duy nhất tạo đúng một ledger `BANK_IN`, sau khi
+re-read dưới shop lock và kiểm lại exact canonical reference, account snapshot,
+direction IN, integer amount bằng `expected_vnd`, v1 scope duy nhất, order PENDING,
+không collision/payment/applied evidence. Nó dùng transition PENDING→PAID và
+loyalty-on-first-paid hiện hữu; không chạy lại inventory, cost, voucher hay tạo
+doanh thu lần hai.
+
+Payment (nếu MAP), order transition, minimal `BANK_RECONCILIATION` SystemLog và
+append-only `BankReconciliationAction` nằm trong một outer transaction/một commit;
+action insert là lệnh duy nhất để trigger chuyển event terminal. Bất kỳ lỗi
+payment/audit/action/trigger/flush/commit đều rollback toàn bộ và giữ evidence
+UNAPPLIED. CAS cho đúng một terminal winner; retry cùng actor/action/version/note/
+mapping trả winner durable, quyết định khác trả conflict kèm current version bounded.
+Sau `KEEP_OPEN`, terminal action dùng durable audit timestamp của KEEP để thỏa đúng
+quan hệ timestamp/verifier bất biến của 0007 mà không sửa migration.
+
+Khi `PUT /api/shops/{id}` thật sự đổi một trong ba bank fields, service dùng đúng
+shop write lock chung với issuance, ingestion mapping và reconciliation, refresh
+rồi kiểm ngay trước update/commit. Mỗi intent v1 phải có ít nhất một evidence
+terminal và mọi event mapped liên quan phải thuộc `APPLIED/REJECTED_NOT_OURS/
+REFUNDED`; intent không evidence hoặc chỉ UNAPPLIED đều chặn fail-closed. Edit
+không đổi bank fields không bị ảnh hưởng; `OFF` không miễn evidence đã tồn tại.
+Collision unscoped không được gán tenant từ reference không tin cậy. Account
+fence chỉ lấy cặp durable `(provider, provider_event_id)` từ một **non-collision
+root event đã map** vào intent/order v1 của shop; sau đó mọi row cùng lineage phải
+terminal trước khi đổi bank fields. Collision/unknown root unscoped tự nó không
+tạo shop seed, exact reference khác shop không chặn shop đó, và provenance này
+không cấp quyền đọc/action cho owner/manager.
+Hai ordering update-vs-issuance và update-vs-terminal action được kiểm bằng
+barrier/event, không sleep, nên không có khe TOCTOU. Snapshot cũ luôn bất biến.
+
+I10-D vẫn sở hữu POS/PWA/UI/service-worker/object-URL. I10-R vẫn sở hữu provider
+contract/credential/traffic production, retention deletion, TTL/grace/enforce,
+refund SLA và rollout; I10-C không mở các capability đó.
 
 ## Phiên bản dependency
 
