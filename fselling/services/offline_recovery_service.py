@@ -22,7 +22,7 @@ from typing import Any, Optional
 
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import exists, text
+from sqlalchemy import and_, exists, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -411,6 +411,68 @@ def _candidate_payload(
     }
 
 
+def _ingested_v0_candidate_payload(
+    db: Session, registry: models.OfflineReceiptRegistry
+) -> dict[str, Any]:
+    """Sanitized read model for an already-ingested legacy catalog issue.
+
+    This is not an import candidate and deliberately contains no recovery file,
+    digest, lease credential, or recomputed financial values.  It only makes the
+    G1 direct MAP/ACCEPT path discoverable to an authorized owner UI.
+    """
+    receipt = (
+        db.query(models.OfflineReceipt)
+        .filter(models.OfflineReceipt.offline_uuid == registry.offline_uuid)
+        .first()
+    )
+    order = db.get(models.Order, registry.order_id)
+    if receipt is None or order is None or not offline_service._receipt_v0_consistent(
+        order, registry, receipt
+    ):
+        raise _error(409, ERROR_STATE_CONFLICT, "Dữ liệu phục hồi không nhất quán")
+    issues = (
+        db.query(models.OfflineReceiptIssue)
+        .filter(
+            models.OfflineReceiptIssue.order_id == int(order.id),
+            models.OfflineReceiptIssue.issue_code == offline_service.ISSUE_SP_KHONG_CON,
+            models.OfflineReceiptIssue.state == offline_service.STATE_OPEN,
+        )
+        .order_by(models.OfflineReceiptIssue.order_item_id.asc(), models.OfflineReceiptIssue.id.asc())
+        .all()
+    )
+    order_lines = (
+        db.query(models.OrderItem)
+        .filter(models.OrderItem.order_id == int(order.id))
+        .order_by(models.OrderItem.id.asc())
+        .all()
+    )
+    lines_by_id = {int(row.id): (index + 1, row) for index, row in enumerate(order_lines)}
+    return {
+        "offline_uuid": registry.offline_uuid,
+        "contract_version": 0,
+        "state": STATE_INGESTED,
+        "state_version": int(registry.state_version),
+        "order_id": int(order.id),
+        "created_at": registry.created_at,
+        "updated_at": registry.updated_at,
+        "time_confidence": receipt.time_confidence,
+        "direct_legacy_resolution": True,
+        "issues": [
+            {
+                "id": int(issue.id),
+                "code": issue.issue_code,
+                "state": issue.state,
+                "state_version": int(issue.state_version),
+                "item_ordinal": lines_by_id[int(issue.order_item_id)][0]
+                if issue.order_item_id in lines_by_id else 0,
+                "product_name": lines_by_id[int(issue.order_item_id)][1].product_name
+                if issue.order_item_id in lines_by_id else "",
+            }
+            for issue in issues
+        ],
+    }
+
+
 def import_candidate(
     db: Session,
     current_user: models.User,
@@ -520,13 +582,33 @@ def list_candidates(
         == models.OfflineReceiptRegistry.offline_uuid,
         models.OfflineRecoveryAction.action_kind == ACTION_IMPORT,
     )
-    query = db.query(models.OfflineReceiptRegistry).filter(
-        models.OfflineReceiptRegistry.shop_id == int(shop_id),
-        models.OfflineReceiptRegistry.state.in_((STATE_ABANDONED, STATE_SUPERSEDED)),
-        imported_exists,
+    open_catalog_issue_exists = exists().where(
+        models.OfflineReceiptIssue.order_id
+        == models.OfflineReceiptRegistry.order_id,
+        models.OfflineReceiptIssue.issue_code == offline_service.ISSUE_SP_KHONG_CON,
+        models.OfflineReceiptIssue.state == offline_service.STATE_OPEN,
     )
+    # One bounded registry query is deliberately used for both candidate kinds.
+    # EXISTS avoids multiplying a receipt that has several open catalog issues.
     rows = (
-        query.order_by(
+        db.query(models.OfflineReceiptRegistry)
+        .filter(
+            models.OfflineReceiptRegistry.shop_id == int(shop_id),
+            or_(
+                and_(
+                    models.OfflineReceiptRegistry.state.in_(
+                        (STATE_ABANDONED, STATE_SUPERSEDED)
+                    ),
+                    imported_exists,
+                ),
+                and_(
+                    models.OfflineReceiptRegistry.state == STATE_INGESTED,
+                    models.OfflineReceiptRegistry.contract_version == 0,
+                    open_catalog_issue_exists,
+                ),
+            ),
+        )
+        .order_by(
             models.OfflineReceiptRegistry.updated_at.desc(),
             models.OfflineReceiptRegistry.offline_uuid.asc(),
         )
@@ -537,7 +619,12 @@ def list_candidates(
     has_more = len(rows) > int(limit)
     rows = rows[: int(limit)]
     return {
-        "items": [_candidate_payload(db, row) for row in rows],
+        "items": [
+            _ingested_v0_candidate_payload(db, row)
+            if row.state == STATE_INGESTED
+            else _candidate_payload(db, row)
+            for row in rows
+        ],
         "limit": int(limit),
         "offset": int(offset),
         "next_offset": int(offset) + len(rows) if has_more else None,
@@ -556,11 +643,20 @@ def read_candidate(
         .filter(
             models.OfflineReceiptRegistry.offline_uuid == offline_uuid,
             models.OfflineReceiptRegistry.shop_id == int(shop_id),
-            models.OfflineReceiptRegistry.state.in_((STATE_ABANDONED, STATE_SUPERSEDED)),
+            models.OfflineReceiptRegistry.state.in_(
+                (STATE_ABANDONED, STATE_SUPERSEDED, STATE_INGESTED)
+            ),
         )
         .first()
     )
-    if registry is None or _import_action(db, shop_id, offline_uuid) is None:
+    if registry is None:
+        raise _not_found()
+    if registry.state == STATE_INGESTED:
+        payload = _ingested_v0_candidate_payload(db, registry)
+        if not payload["issues"]:
+            raise _not_found()
+        return payload
+    if _import_action(db, shop_id, offline_uuid) is None:
         raise _not_found()
     return _candidate_payload(db, registry)
 

@@ -32,7 +32,7 @@
 
 // Doi so nay khi muon xoa sach cache cua moi nguoi dung (vi du sau khi sua mot
 // loi lien quan toi cache). Doi so = moi cache cu bi xoa o buoc activate.
-const PHIEN_BAN = 'v1';
+const PHIEN_BAN = 'v2-i09-g2h8';
 const CACHE_VO = `fselling-vo-${PHIEN_BAN}`;      // khung app, nap san luc cai
 const CACHE_CHAY = `fselling-chay-${PHIEN_BAN}`;  // file gap gi cache nay
 const CACHE_HOP_LE = [CACHE_VO, CACHE_CHAY];

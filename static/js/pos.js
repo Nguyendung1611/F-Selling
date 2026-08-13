@@ -1,7 +1,7 @@
 // POS dùng chung cho chủ shop (SELLER) và nhân viên (STAFF).
 (function () {
     const role = localStorage.getItem('role');
-    if(role !== 'SELLER' && role !== 'STAFF') redirectToLogin();
+    if(role !== 'SELLER' && role !== 'STAFF' && role !== 'ADMIN') redirectToLogin();
 })();
 let allShops = [];
 let currentShopId = parseInt(localStorage.getItem('currentShopId'));
@@ -192,6 +192,9 @@ async function loadShop() {
             localStorage.setItem('currentShopId', currentShopId);
             sel.value = currentShopId;
         }
+        // Capability is independent from catalog success: a warm POS shell must
+        // know whether a legacy receipt may be persisted before it can go offline.
+        await taiChinhSachOfflinePOS();
         await Promise.all([
             loadCategories(),
             loadProducts(),
@@ -220,6 +223,7 @@ async function changeShopPOS() {
     localStorage.setItem('currentShopId', currentShopId);
     resetPOS();
     loyaltyProgram = null;
+    await taiChinhSachOfflinePOS();
     await Promise.all([
         loadCategories(),
         loadProducts(),
@@ -264,6 +268,15 @@ async function loadCategories() {
         categories = res.filter(c => c.is_active !== false);
         renderCategories();
     } catch (e) { console.error(e); }
+}
+
+async function taiChinhSachOfflinePOS(force = false) {
+    const shopId = Number(currentShopId);
+    const username = localStorage.getItem('username') || '';
+    if (!window.OfflineBan || window.OfflineBan.dangOffline()
+        || !Number.isSafeInteger(shopId) || shopId < 1 || !username) return null;
+    // Do not let catalog/lease failures erase a stricter durable policy.
+    return window.OfflineBan.refreshContractPolicy({ shop_id: shopId, username }, force).catch(() => null);
 }
 
 // ===== Điểm khách thân thiết =====
@@ -1975,24 +1988,50 @@ function xacNhan(tieuDe, noiDung) {
         const modal = document.getElementById('xacNhanModal');
         const nutOk = document.getElementById('xnDongY');
         const nutHuy = document.getElementById('xnHuy');
+        const focusTruoc = document.activeElement;
         document.getElementById('xnTieuDe').innerText = tieuDe;
         document.getElementById('xnNoiDung').innerText = noiDung;
         modal.style.display = 'flex';
+        modal.setAttribute('aria-hidden', 'false');
 
         const dong = (ketQua) => {
             modal.style.display = 'none';
+            modal.setAttribute('aria-hidden', 'true');
             nutOk.onclick = null;
             nutHuy.onclick = null;
             modal.onclick = null;
-            document.removeEventListener('keydown', khiNhanPhim);
+            document.removeEventListener('keydown', khiNhanPhim, true);
+            if (focusTruoc && focusTruoc.isConnected && typeof focusTruoc.focus === 'function') {
+                focusTruoc.focus();
+            }
             resolve(ketQua);
         };
-        const khiNhanPhim = (e) => { if (e.key === 'Escape') dong(false); };
+        const khiNhanPhim = (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                dong(false);
+                return;
+            }
+            if (e.key !== 'Tab') return;
+            const controls = [nutHuy, nutOk].filter(control => !control.disabled);
+            if (!controls.length) return;
+            const current = document.activeElement;
+            const index = controls.indexOf(current);
+            const nextIndex = e.shiftKey
+                ? (index <= 0 ? controls.length - 1 : index - 1)
+                : (index === controls.length - 1 ? 0 : index + 1);
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            controls[nextIndex].focus();
+        };
 
         nutOk.onclick = () => dong(true);
         nutHuy.onclick = () => dong(false);
         modal.onclick = (e) => { if (e.target === modal) dong(false); };
-        document.addEventListener('keydown', khiNhanPhim);
+        // Capture before the business-modal Escape listener, so cancelling a
+        // nested confirmation never discards the still-editable recovery form.
+        document.addEventListener('keydown', khiNhanPhim, true);
         nutOk.focus();
     });
 }
@@ -2249,12 +2288,11 @@ async function taiTrangThaiOfflinePOS() {
     if (!window.OfflineBan || !Number.isSafeInteger(Number(currentShopId))) {
         return moHinhTrangThaiOffline(0, 0, null, Boolean(window.OfflineBan?.dangOffline()));
     }
-    const [v0Cho, v0Loi, v1] = await Promise.all([
-        OfflineBan.demCho(currentShopId),
-        OfflineBan.demLoi(currentShopId),
+    const [legacy, v1] = await Promise.all([
+        OfflineBan.demLegacyLocal(currentShopId),
         OfflineBan.getOfflineStatusV1(identityDongBoPOS())
     ]);
-    return moHinhTrangThaiOffline(v0Cho, v0Loi, v1, OfflineBan.dangOffline());
+    return moHinhTrangThaiOffline(legacy.pending_v0, legacy.blocked_v0, v1, OfflineBan.dangOffline());
 }
 
 function capNhatNoiDungTrangThaiOffline(model) {
@@ -2269,7 +2307,8 @@ function capNhatNoiDungTrangThaiOffline(model) {
     counts.replaceChildren();
     themDongTrangThaiOffline(counts, dich('pos.offline.count_v1_pending'), model.ready + model.syncing + model.retrying);
     themDongTrangThaiOffline(counts, dich('pos.offline.count_v0_pending'), model.v0Cho);
-    themDongTrangThaiOffline(counts, dich('pos.offline.count_blocked'), model.blocked + model.quarantined + model.v0Loi);
+    themDongTrangThaiOffline(counts, dich('pos.offline.count_v1_blocked'), model.blocked + model.quarantined);
+    themDongTrangThaiOffline(counts, dich('pos.offline.count_v0_blocked'), model.v0Loi);
     themDongTrangThaiOffline(counts, dich('pos.offline.count_syncing'), model.syncing);
     const details = [];
     if (model.catalogSavedAt) details.push(dich('pos.offline.catalog_saved', { time: dinhDangNgayGio(model.catalogSavedAt) }));
@@ -2289,6 +2328,184 @@ function capNhatNoiDungTrangThaiOffline(model) {
         });
         actions.appendChild(retry);
     }
+    if (localStorage.getItem('role') !== 'STAFF' && !OfflineBan.dangOffline()) {
+        const recovery = document.createElement('button');
+        recovery.type = 'button';
+        recovery.textContent = dich('pos.offline.recovery_open');
+        recovery.addEventListener('click', taiPhucHoiOffline);
+        actions.appendChild(recovery);
+    }
+}
+
+function clearRecoveryPanel() {
+    const panel = document.getElementById('offlineRecoveryPanel');
+    if (panel) { panel.replaceChildren(); panel.hidden = true; }
+    return panel;
+}
+
+function taiXuongPhieuPhucHoi(response) {
+    return response.blob().then(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'offline-recovery.json';
+        a.rel = 'noopener';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+    });
+}
+
+async function xuatPhieuLocalPhucHoi(receipt) {
+    const response = await apiCall(`/offline/recovery/${currentShopId}/export`, 'POST', { receipt });
+    await taiXuongPhieuPhucHoi(response);
+}
+
+function themNhapPhieuPhucHoi(panel, onImported) {
+    const picker = document.createElement('input');
+    picker.type = 'file'; picker.accept = 'application/json,.json'; picker.hidden = true;
+    picker.setAttribute('aria-label', dich('pos.offline.recovery_import_file'));
+    const trigger = document.createElement('button');
+    trigger.type = 'button'; trigger.textContent = dich('pos.offline.recovery_import_file');
+    trigger.addEventListener('click', () => picker.click());
+    picker.addEventListener('change', async () => {
+        const file = picker.files && picker.files[0];
+        picker.value = '';
+        if (!file) return;
+        if (file.size > 64 * 1024) return showToast(dich('pos.offline.recovery_file_large'));
+        trigger.disabled = true;
+        try {
+            const documentValue = JSON.parse(await file.text());
+            const imported = await apiCall(`/offline/recovery/${currentShopId}/import`, 'POST', documentValue);
+            showToast(dich('pos.offline.recovery_imported'));
+            await onImported(imported && imported.offline_uuid);
+        } catch (e) {
+            showToast(e.message || dich('pos.offline.recovery_error'));
+        } finally {
+            trigger.disabled = false;
+        }
+    });
+    panel.append(trigger, picker);
+}
+
+function appendRecoveryDetail(panel, candidate) {
+    const detail = document.createElement('div');
+    detail.className = 'offline-recovery-detail';
+    const heading = document.createElement('strong');
+    heading.textContent = dich('pos.offline.recovery_detail', {
+        version: candidate.contract_version, state: candidate.state
+    });
+    detail.appendChild(heading);
+    const help = document.createElement('p');
+    help.textContent = candidate.direct_legacy_resolution
+        ? dich('pos.offline.recovery_direct_help')
+        : dich('pos.offline.recovery_file_help');
+    detail.appendChild(help);
+    if (candidate.direct_legacy_resolution && Array.isArray(candidate.issues)) {
+        const reason = document.createElement('textarea');
+        reason.rows = 3; reason.maxLength = 500; reason.placeholder = dich('pos.offline.recovery_reason');
+        detail.appendChild(reason);
+        const controls = [];
+        candidate.issues.forEach(issue => {
+            const label = document.createElement('label');
+            label.textContent = `${issue.product_name || dich('pos.offline.recovery_line')} · ${dich('pos.offline.recovery_action')}`;
+            const select = document.createElement('select');
+            const unknown = document.createElement('option'); unknown.value = 'ACCEPT_UNKNOWN'; unknown.textContent = dich('pos.offline.recovery_accept'); select.appendChild(unknown);
+            products.filter(p => p.is_active !== false).forEach(product => {
+                const option = document.createElement('option'); option.value = `MAP:${product.id}`; option.textContent = `${product.code || product.id} — ${product.name}`; select.appendChild(option);
+            });
+            label.appendChild(select); detail.appendChild(label);
+            controls.push({ issue, select });
+        });
+        const resolve = document.createElement('button'); resolve.type = 'button'; resolve.textContent = dich('pos.offline.recovery_resolve');
+        resolve.addEventListener('click', async () => {
+            const normalizedReason = reason.value.trim();
+            if (normalizedReason.length < 10) return showToast(dich('pos.offline.recovery_reason_required'));
+            const confirmed = await xacNhan(dich('pos.offline.recovery_confirm_title'), dich('pos.offline.recovery_confirm_body'));
+            if (!confirmed) return;
+            resolve.disabled = true;
+            try {
+                const line_resolutions = controls.map(({ issue, select }) => select.value.startsWith('MAP:')
+                    ? { item_ordinal: issue.item_ordinal, action: 'MAP', product_id: Number(select.value.slice(4)) }
+                    : { item_ordinal: issue.item_ordinal, action: 'ACCEPT_UNKNOWN' });
+                await apiCall(`/offline/recovery/${currentShopId}/candidates/${encodeURIComponent(candidate.offline_uuid)}/resolve`, 'POST', {
+                    state_version: candidate.state_version, reason: normalizedReason, line_resolutions
+                });
+                showToast(dich('pos.offline.recovery_done')); await taiPhucHoiOffline(); await capNhatHuyHieuOffline();
+            } catch (e) { showToast(e.message || dich('pos.offline.recovery_error')); resolve.disabled = false; }
+        });
+        detail.appendChild(resolve);
+    }
+    panel.appendChild(detail);
+}
+
+async function taiPhucHoiOffline(offset = 0, importedUuid = null) {
+    const panel = clearRecoveryPanel();
+    if (!panel || localStorage.getItem('role') === 'STAFF' || !Number.isSafeInteger(Number(currentShopId))) return;
+    panel.hidden = false;
+    const loading = document.createElement('p'); loading.textContent = dich('pos.offline.recovery_loading'); panel.appendChild(loading);
+    themNhapPhieuPhucHoi(panel, uuid => taiPhucHoiOffline(0, uuid));
+    try {
+        const [server, local] = await Promise.all([
+            apiCall(`/offline/recovery/${currentShopId}/candidates?limit=25&offset=${Math.max(0, Number(offset) || 0)}`),
+            OfflineBan.localReceiptsForRecovery(identityDongBoPOS())
+        ]);
+        panel.replaceChildren();
+        const exportLocal = document.createElement('button'); exportLocal.type = 'button'; exportLocal.textContent = dich('pos.offline.recovery_export_local');
+        exportLocal.disabled = !local.length;
+        exportLocal.addEventListener('click', async () => {
+            exportLocal.disabled = true;
+            try { await xuatPhieuLocalPhucHoi(local[0]); } catch (e) { showToast(e.message || dich('pos.offline.recovery_error')); }
+            exportLocal.disabled = false;
+        });
+        panel.appendChild(exportLocal);
+        themNhapPhieuPhucHoi(panel, uuid => taiPhucHoiOffline(0, uuid));
+        const stocktake = document.createElement('p');
+        stocktake.className = 'offline-recovery-stocktake';
+        stocktake.textContent = dich('pos.offline.recovery_stocktake');
+        panel.appendChild(stocktake);
+        const list = document.createElement('div'); list.className = 'offline-recovery-list';
+        const items = Array.isArray(server.items) ? server.items : [];
+        if (!items.length) { const empty = document.createElement('p'); empty.textContent = dich('pos.offline.recovery_empty'); list.appendChild(empty); }
+        let importedControl = null;
+        items.forEach(candidate => {
+            const row = document.createElement('div'); row.className = 'offline-recovery-item';
+            const text = document.createElement('span'); text.textContent = `${candidate.offline_uuid} · v${candidate.contract_version} · ${candidate.state}`;
+            const open = document.createElement('button'); open.type = 'button'; open.textContent = dich('pos.offline.recovery_view');
+            open.addEventListener('click', async () => {
+                const detail = await apiCall(`/offline/recovery/${currentShopId}/candidates/${encodeURIComponent(candidate.offline_uuid)}`);
+                appendRecoveryDetail(panel, detail);
+            });
+            if (candidate.offline_uuid === importedUuid) importedControl = open;
+            row.append(text, open); list.appendChild(row);
+        });
+        panel.appendChild(list);
+        const pager = document.createElement('div'); pager.className = 'offline-recovery-pager';
+        const previous = document.createElement('button'); previous.type = 'button'; previous.textContent = dich('pos.offline.recovery_previous');
+        const currentOffset = Number(server.offset) || 0;
+        previous.disabled = currentOffset <= 0;
+        previous.addEventListener('click', () => taiPhucHoiOffline(Math.max(0, currentOffset - 25)));
+        const next = document.createElement('button'); next.type = 'button'; next.textContent = dich('pos.offline.recovery_next');
+        next.disabled = server.next_offset === null || server.next_offset === undefined;
+        next.addEventListener('click', () => taiPhucHoiOffline(Number(server.next_offset)));
+        pager.append(previous, next); panel.appendChild(pager);
+        if (importedControl) {
+            importedControl.focus();
+            importedControl.click();
+        } else if (importedUuid) {
+            showToast(dich('pos.offline.recovery_imported'));
+        }
+    } catch (e) {
+        panel.replaceChildren();
+        const err = document.createElement('p'); err.textContent = dich('pos.offline.recovery_error'); panel.appendChild(err);
+        themNhapPhieuPhucHoi(panel, uuid => taiPhucHoiOffline(0, uuid));
+        const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = dich('pos.offline.retry_now');
+        retry.addEventListener('click', () => taiPhucHoiOffline(offset)); panel.appendChild(retry);
+    }
+}
+
+async function moPhucHoiOffline() {
+    await moModalTrangThaiOffline();
+    await taiPhucHoiOffline();
 }
 
 async function moModalTrangThaiOffline() {
@@ -2305,6 +2522,7 @@ function dongModalTrangThaiOffline() {
 /** Cập nhật badge/panel sau mọi callback, nhưng render không bao giờ resume queue. */
 async function capNhatHuyHieuOffline() {
     const o = document.getElementById('offlineBadge');
+    const recoveryButton = document.getElementById('offlineRecoveryButton');
     if (!o || !window.OfflineBan) return;
     try {
         const model = await taiTrangThaiOfflinePOS();
@@ -2320,6 +2538,8 @@ async function capNhatHuyHieuOffline() {
             });
         }
         capNhatNoiDungTrangThaiOffline(model);
+        if (recoveryButton) recoveryButton.style.display = localStorage.getItem('role') === 'STAFF'
+            ? 'none' : 'inline-flex';
     } catch (e) {
         console.warn('[OFFLINE] Không đọc được hàng chờ:', e);
     }
@@ -3468,6 +3688,9 @@ setMethod(paymentMethod);
 // Đồng bộ cả các giá trị tiền tĩnh ban đầu (0 ₫, nút tiền nhanh...) với
 // ngôn ngữ đã lưu ngay lần mở trang, không cần chờ người dùng đổi locale.
 capNhatNgonNguPOS();
+// Run from authenticated/local shop context before any catalog-dependent work.
+// A subsequent loadShop call reuses the bounded fresh cache, not another fetch.
+taiChinhSachOfflinePOS();
 loadShop();
 
 // Bán offline: tự gửi hàng chờ khi có mạng lại, và luôn hiện số phiếu đang chờ.
@@ -3500,7 +3723,10 @@ if (window.OfflineBan) {
             await capNhatHuyHieuOffline();
         }
     );
-    window.addEventListener('online', capNhatTrangThaiMangPOS);
+    window.addEventListener('online', async () => {
+        await taiChinhSachOfflinePOS(true);
+        await capNhatTrangThaiMangPOS();
+    });
     window.addEventListener('offline', capNhatTrangThaiMangPOS);
     document.getElementById('offlineBadge')?.addEventListener('click', moModalTrangThaiOffline);
     capNhatTrangThaiMangPOS();

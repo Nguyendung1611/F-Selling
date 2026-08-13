@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 import secrets as _secrets
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 # BASE_DIR phải trỏ về thư mục `python_app` (nơi chứa app.py, static/, *.db)
@@ -154,6 +154,84 @@ def _bool_env_fail_closed(name: str) -> bool:
 OFFLINE_LEASE_ISSUANCE_ENABLED: bool = _bool_env_fail_closed(
     "OFFLINE_LEASE_ISSUANCE_ENABLED"
 )
+
+
+# I09-H: contract rollout is deliberately a binary configuration, never a
+# database switch.  The default remains Phase A so a newly deployed binary
+# accepts the immutable v0 and v1 contracts.  Phase B has to carry both public
+# UTC timestamps: the configured cutoff must itself be at least 14 days after
+# the beginning of Phase A and must already have arrived.  Any typo is a boot
+# failure, rather than an accidental financial cutoff with an unclear policy.
+OFFLINE_CONTRACT_SUPPORTED_VERSIONS: tuple[int, int] = (0, 1)
+OFFLINE_CONTRACT_PHASE_A = "PHASE_A"
+OFFLINE_CONTRACT_PHASE_B = "PHASE_B"
+OFFLINE_CONTRACT_POLICY_PHASE_A = "OFFLINE_CONTRACT_PHASE_A_V0_V1"
+OFFLINE_CONTRACT_POLICY_PHASE_B = "OFFLINE_CONTRACT_PHASE_B_V1_MINIMUM"
+_OFFLINE_CONTRACT_MIN_PHASE_A_SECONDS = 14 * 24 * 60 * 60
+
+
+def _parse_utc_rollout_timestamp(name: str, raw: str) -> datetime:
+    """Accept one explicit, timezone-aware UTC timestamp for the rollout."""
+    value = raw.strip()
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a valid UTC ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+        raise RuntimeError(f"{name} must include UTC timezone (+00:00 or Z)")
+    return parsed.astimezone(timezone.utc)
+
+
+def _canonical_utc_rollout_timestamp(value: datetime) -> str:
+    return value.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _offline_contract_rollout_from_env() -> tuple[int, str, str | None, str | None, str]:
+    raw_minimum = (os.getenv("OFFLINE_CONTRACT_MIN_VERSION") or "0").strip()
+    if raw_minimum not in {"0", "1"}:
+        raise RuntimeError("OFFLINE_CONTRACT_MIN_VERSION must be exactly 0 or 1")
+    minimum = int(raw_minimum)
+    phase_a_started_raw = os.getenv("OFFLINE_CONTRACT_PHASE_A_STARTED_AT")
+    cutoff_raw = os.getenv("OFFLINE_CONTRACT_CUTOFF_AT")
+    if minimum == 0:
+        # Timestamp values with a Phase-A policy are harmless public history but
+        # a lone/malformed value would make rollback semantics ambiguous.
+        if bool(phase_a_started_raw) != bool(cutoff_raw):
+            raise RuntimeError(
+                "OFFLINE_CONTRACT_PHASE_A_STARTED_AT and OFFLINE_CONTRACT_CUTOFF_AT must be set together"
+            )
+        if phase_a_started_raw and cutoff_raw:
+            started = _parse_utc_rollout_timestamp(
+                "OFFLINE_CONTRACT_PHASE_A_STARTED_AT", phase_a_started_raw
+            )
+            cutoff = _parse_utc_rollout_timestamp("OFFLINE_CONTRACT_CUTOFF_AT", cutoff_raw)
+            if cutoff < started + timedelta(seconds=_OFFLINE_CONTRACT_MIN_PHASE_A_SECONDS):
+                raise RuntimeError("offline Phase A timestamp range is shorter than 14 days")
+            return (minimum, OFFLINE_CONTRACT_PHASE_A, _canonical_utc_rollout_timestamp(started),
+                    _canonical_utc_rollout_timestamp(cutoff), OFFLINE_CONTRACT_POLICY_PHASE_A)
+        return (minimum, OFFLINE_CONTRACT_PHASE_A, None, None, OFFLINE_CONTRACT_POLICY_PHASE_A)
+
+    if not phase_a_started_raw or not cutoff_raw:
+        raise RuntimeError(
+            "Phase B requires OFFLINE_CONTRACT_PHASE_A_STARTED_AT and OFFLINE_CONTRACT_CUTOFF_AT"
+        )
+    started = _parse_utc_rollout_timestamp("OFFLINE_CONTRACT_PHASE_A_STARTED_AT", phase_a_started_raw)
+    cutoff = _parse_utc_rollout_timestamp("OFFLINE_CONTRACT_CUTOFF_AT", cutoff_raw)
+    if cutoff < started + timedelta(seconds=_OFFLINE_CONTRACT_MIN_PHASE_A_SECONDS):
+        raise RuntimeError("offline Phase A must last at least 14 days before Phase B")
+    if cutoff > datetime.now(timezone.utc):
+        raise RuntimeError("OFFLINE_CONTRACT_CUTOFF_AT must not be in the future for Phase B")
+    return (minimum, OFFLINE_CONTRACT_PHASE_B, _canonical_utc_rollout_timestamp(started),
+            _canonical_utc_rollout_timestamp(cutoff), OFFLINE_CONTRACT_POLICY_PHASE_B)
+
+
+(
+    OFFLINE_CONTRACT_MIN_VERSION,
+    OFFLINE_CONTRACT_PHASE,
+    OFFLINE_CONTRACT_PHASE_A_STARTED_AT,
+    OFFLINE_CONTRACT_CUTOFF_AT,
+    OFFLINE_CONTRACT_POLICY_CODE,
+) = _offline_contract_rollout_from_env()
 
 
 # Trần body webhook ORDER ở TẦNG ỨNG DỤNG. 256 KiB là default khởi đầu cho

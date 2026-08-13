@@ -123,6 +123,9 @@ ROUTES_BO_SUNG = {
     ("POST", "/api/offline/leases/{lease_id}/heartbeat"),
     ("POST", "/api/offline/leases/{lease_id}/reclaim"),
     ("DELETE", "/api/offline/leases/{lease_id}"),
+    # I09-H: authenticated public policy; the response intentionally carries no
+    # token, digest, identity or fleet counts.
+    ("GET", "/api/offline/capability"),
     # I09-G1: owner/ADMIN recovery data path. The file checksum is accidental
     # corruption detection only; every operation still requires JWT shop owner.
     ("POST", "/api/offline/recovery/{shop_id}/export"),

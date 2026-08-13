@@ -55,6 +55,13 @@
         'OFFLINE_TOTAL_OVERFLOW',
         'OFFLINE_TENDER_TOO_LOW'
     ]);
+    const V0_RECOVERY_CODE = 'OFFLINE_CONTRACT_V0_RECOVERY_REQUIRED';
+    const POLICY_META_KEY = 'offline-contract-policy-v1';
+    const POLICY_FENCE_KEY = 'offline-contract-policy-fence-v1';
+    const POLICY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+    const policyRefreshInFlight = new Map();
+    const POLICY_CODE_PHASE_A = 'OFFLINE_CONTRACT_PHASE_A_V0_V1';
+    const POLICY_CODE_PHASE_B = 'OFFLINE_CONTRACT_PHASE_B_V1_MINIMUM';
 
     let _db = null;
 
@@ -497,6 +504,210 @@
 
     function docTatCaStore(storeName) {
         return chay(storeName, 'readonly', kho => kho.getAll()).then(ds => ds || []);
+    }
+
+    function publicCutoffTimestamp(value, required, mustHaveArrived) {
+        if (value === null && !required) return null;
+        if (typeof value !== 'string' || value.length < 20 || value.length > 40) return undefined;
+        const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?Z$/.exec(value);
+        if (!match) return undefined;
+        const parsed = Date.parse(value);
+        if (!Number.isFinite(parsed) || (mustHaveArrived && parsed > Date.now())) return undefined;
+        // Date.parse normalizes impossible dates (for example February 31st).
+        // Compare every representable UTC component so a malformed public
+        // capability can never become an authorization for a v0 fallback.
+        const date = new Date(parsed);
+        const milliseconds = Number((match[7] || '').slice(0, 3).padEnd(3, '0'));
+        if (date.getUTCFullYear() !== Number(match[1])
+            || date.getUTCMonth() + 1 !== Number(match[2])
+            || date.getUTCDate() !== Number(match[3])
+            || date.getUTCHours() !== Number(match[4])
+            || date.getUTCMinutes() !== Number(match[5])
+            || date.getUTCSeconds() !== Number(match[6])
+            || date.getUTCMilliseconds() !== milliseconds) return undefined;
+        return value;
+    }
+
+    function boundedPolicy(value) {
+        if (!value || typeof value !== 'object'
+            || !Array.isArray(value.supported_versions)
+            || value.supported_versions.length !== 2
+            || value.supported_versions[0] !== 0 || value.supported_versions[1] !== 1
+            || !Number.isInteger(value.minimum_accepted_version)
+            || typeof value.phase !== 'string' || typeof value.policy_code !== 'string') return null;
+        const phaseA = value.phase === 'PHASE_A'
+            && value.minimum_accepted_version === 0
+            && value.policy_code === POLICY_CODE_PHASE_A;
+        const phaseB = value.phase === 'PHASE_B'
+            && value.minimum_accepted_version === 1
+            && value.policy_code === POLICY_CODE_PHASE_B;
+        if (!phaseA && !phaseB) return null;
+        const cutoff = publicCutoffTimestamp(value.cutoff_at_utc, phaseB, phaseB);
+        if (cutoff === undefined) return null;
+        return {
+            supported_versions: [0, 1],
+            minimum_accepted_version: value.minimum_accepted_version,
+            phase: value.phase,
+            cutoff_at_utc: cutoff,
+            policy_code: value.policy_code
+        };
+    }
+
+    function policyContext(options) {
+        const shopId = Number(options && options.shop_id);
+        const username = String(options && options.username || '').trim();
+        if (!Number.isSafeInteger(shopId) || shopId < 1 || username.length < 1 || username.length > 128) return null;
+        return { shop_id: shopId, username };
+    }
+
+    function policyStorageKey(context) {
+        return `${POLICY_META_KEY}:${context.shop_id}:${encodeURIComponent(context.username)}`;
+    }
+
+    function policyFenceStorageKey(context) {
+        return `${POLICY_FENCE_KEY}:${context.shop_id}:${encodeURIComponent(context.username)}`;
+    }
+
+    function policyFetchedAt(value) {
+        if (typeof value !== 'string' || value.length > 40) return null;
+        const parsed = Date.parse(value);
+        if (!Number.isFinite(parsed) || parsed > Date.now() + 60 * 1000) return null;
+        return parsed;
+    }
+
+    function policyFromCachedRow(row, context) {
+        const fetchedAt = policyFetchedAt(row && row.fetched_at);
+        if (!context || !fetchedAt || Date.now() - fetchedAt > POLICY_MAX_AGE_MS
+            || Number(row && row.shop_id) !== context.shop_id
+            || String(row && row.username || '') !== context.username) return null;
+        return boundedPolicy(row && row.policy);
+    }
+
+    function strongerContractPolicy(first, second) {
+        if (!first) return second || null;
+        if (!second) return first;
+        return second.minimum_accepted_version > first.minimum_accepted_version ? second : first;
+    }
+
+    function readPolicyRows(context) {
+        return giaoDich(KHO_META_V1, 'readonly', function (tx, datKetQua, huy) {
+            const store = tx.objectStore(KHO_META_V1);
+            const scoped = store.get(policyStorageKey(context));
+            scoped.onerror = function () { huy(scoped.error || new Error('Không đọc được policy offline')); };
+            scoped.onsuccess = function () {
+                const legacy = store.get(POLICY_META_KEY);
+                legacy.onerror = function () { huy(legacy.error || new Error('Không đọc được policy offline')); };
+                legacy.onsuccess = function () { datKetQua([scoped.result, legacy.result]); };
+            };
+        });
+    }
+
+    async function cachedContractPolicy(options) {
+        const context = policyContext(options);
+        if (!context) return null;
+        const rows = await readPolicyRows(context);
+        return strongerContractPolicy(
+            policyFromCachedRow(rows && rows[0], context),
+            policyFromCachedRow(rows && rows[1], context)
+        );
+    }
+
+    function validPolicyFence(row, context) {
+        if (!row || Number(row.shop_id) !== context.shop_id
+            || String(row.username || '') !== context.username) return null;
+        const generation = Number(row.generation);
+        return Number.isSafeInteger(generation) && generation > 0 ? generation : null;
+    }
+
+    function reservePolicyRequestFence(context) {
+        return giaoDich(KHO_META_V1, 'readwrite', function (tx, datKetQua, huy) {
+            const store = tx.objectStore(KHO_META_V1);
+            const key = policyFenceStorageKey(context);
+            const current = store.get(key);
+            current.onerror = function () { huy(current.error || new Error('Không reserve được policy offline')); };
+            current.onsuccess = function () {
+                const previous = validPolicyFence(current.result, context) || 0;
+                // A fence is local, bounded and non-secret.  Reaching this
+                // theoretical bound still creates a new latest generation.
+                const generation = previous >= Number.MAX_SAFE_INTEGER - 1 ? 1 : previous + 1;
+                const put = store.put({
+                    key, generation, shop_id: context.shop_id, username: context.username,
+                    requested_at: new Date().toISOString()
+                });
+                put.onerror = function () { huy(put.error || new Error('Không reserve được policy offline')); };
+                put.onsuccess = function () { datKetQua(generation); };
+            };
+        });
+    }
+
+    function storeContractPolicy(context, policy, requestFence) {
+        // The get/compare/put sequence lives in one readwrite transaction.  IDB
+        // serializes that transaction across tabs, so a response which started
+        // before Phase B cannot overwrite the durable stricter policy later.
+        return giaoDich(KHO_META_V1, 'readwrite', function (tx, datKetQua, huy) {
+            const store = tx.objectStore(KHO_META_V1);
+            const scoped = store.get(policyStorageKey(context));
+            scoped.onerror = function () { huy(scoped.error || new Error('Không đọc được policy offline')); };
+            scoped.onsuccess = function () {
+                const legacy = store.get(POLICY_META_KEY);
+                legacy.onerror = function () { huy(legacy.error || new Error('Không đọc được policy offline')); };
+                legacy.onsuccess = function () {
+                    const fence = store.get(policyFenceStorageKey(context));
+                    fence.onerror = function () { huy(fence.error || new Error('Không đọc được policy offline')); };
+                    fence.onsuccess = function () {
+                        const current = strongerContractPolicy(
+                            policyFromCachedRow(scoped.result, context),
+                            policyFromCachedRow(legacy.result, context)
+                        );
+                        if (validPolicyFence(fence.result, context) !== requestFence) {
+                            datKetQua(current);
+                            return;
+                        }
+                        if (current && current.minimum_accepted_version > policy.minimum_accepted_version) {
+                            datKetQua(current);
+                            return;
+                        }
+                        const put = store.put({
+                            key: policyStorageKey(context), policy, shop_id: context.shop_id,
+                            username: context.username, fetched_at: new Date().toISOString()
+                        });
+                        put.onerror = function () { huy(put.error || new Error('Không lưu được policy offline')); };
+                        put.onsuccess = function () { datKetQua(policy); };
+                    };
+                };
+            };
+        });
+    }
+
+    async function refreshContractPolicy(options, force = false) {
+        const context = policyContext(options);
+        if (!context || dangOffline() || typeof global.apiCall !== 'function') return cachedContractPolicy(context);
+        const cached = await cachedContractPolicy(context);
+        if (cached && !force) return cached;
+        const refreshKey = `${context.shop_id}:${context.username}`;
+        if (policyRefreshInFlight.has(refreshKey)) return policyRefreshInFlight.get(refreshKey);
+        const work = (async () => {
+        let requestFence;
+        try {
+            // Reserve before the request, not at response time.  This durable
+            // generation distinguishes a delayed old response from a genuine
+            // later Phase-A rollback after the policy TTL.
+            requestFence = await reservePolicyRequestFence(context);
+            const policy = boundedPolicy(await global.apiCall('/offline/capability'));
+            // Re-read durable state after any invalid response: an in-memory
+            // request-start snapshot must never authorize a relaxed fallback.
+            if (!policy) return cachedContractPolicy(context);
+            return storeContractPolicy(context, policy, requestFence);
+        } catch (e) {
+            return cachedContractPolicy(context);
+        }
+        })();
+        policyRefreshInFlight.set(refreshKey, work);
+        try {
+            return await work;
+        } finally {
+            policyRefreshInFlight.delete(refreshKey);
+        }
     }
 
     async function layDeviceId() {
@@ -2275,8 +2486,20 @@
     }
 
     async function luuPhieuTuPOS(options) {
+        // A cached Phase-B policy may only tighten local behavior.  A stale or
+        // missing Phase-A policy never weakens the server's authoritative gate.
+        const policy = await refreshContractPolicy(options);
         const v1 = await createReceiptV1(options);
         if (v1) return v1;
+        if (!policy || policy.minimum_accepted_version === 1) {
+            const error = new Error(policy
+                ? 'OFFLINE_CONTRACT_V1_REQUIRED'
+                : 'OFFLINE_CONTRACT_POLICY_REQUIRED');
+            error.code = policy
+                ? 'OFFLINE_CONTRACT_V1_REQUIRED'
+                : 'OFFLINE_CONTRACT_POLICY_REQUIRED';
+            throw error;
+        }
         return luuPhieu(
             options.shop_id,
             options.items,
@@ -2289,8 +2512,32 @@
         return docTatCaStore(KHO_PHIEU).then(ds => ds.filter(p => !shopId || Number(p.shop_id) === Number(shopId)));
     }
 
+    async function localReceiptsForRecovery(identity) {
+        const v0 = await docTatCa(identity && identity.shop_id);
+        const v1 = (await docTatCaStore(KHO_PHIEU_V1))
+            .filter(row => receiptMatchesIdentityV1(row, identity || {}))
+            .filter(row => !['ACKED'].includes(row.state))
+            .map(row => exactReceiptBodyV1(row));
+        return v0.map(row => ({
+            contract_version: 0,
+            offline_uuid: row.offline_uuid,
+            sold_at_utc: row.sold_at,
+            items: (row.items || []).map(item => ({
+                product_id: Number(item.product_id), product_name: String(item.product_name || ''),
+                unit_price_vnd: Number(item.unit_price), quantity: Number(item.quantity)
+            })),
+            cash_tendered_vnd: Number(row.cash_tendered)
+        })).concat(v1);
+    }
+
     function demCho(shopId) { return docTatCa(shopId).then(ds => ds.filter(p => !p.loi).length); }
     function demLoi(shopId) { return docTatCa(shopId).then(ds => ds.filter(p => !!p.loi).length); }
+    function demLegacyLocal(shopId) {
+        return docTatCa(shopId).then(ds => ({
+            pending_v0: ds.filter(p => !p.loi).length,
+            blocked_v0: ds.filter(p => !!p.loi).length
+        }));
+    }
     function xoaPhieu(uuid) { return chay(KHO_PHIEU, 'readwrite', kho => kho.delete(uuid)); }
     function danhDauLoi(phieu, ly_do) {
         phieu.loi = String(ly_do || 'không rõ').slice(0, 300);
@@ -2318,6 +2565,15 @@
                     da_gui += 1;
                 } catch (e) {
                     const ma = Number(e && e.status);
+                    if (e && e.code === V0_RECOVERY_CODE) {
+                        // Keep the immutable v0 document untouched.  It is not
+                        // ACKed, deleted, promoted, or retried in a loop.
+                        phieu.recovery_required = true;
+                        phieu.loi_code = V0_RECOVERY_CODE;
+                        await danhDauLoi(phieu, V0_RECOVERY_CODE);
+                        loi += 1;
+                        continue;
+                    }
                     if (ma >= 400 && ma < 500) {
                         await danhDauLoi(phieu, `${ma}: ${e.message || ''}`);
                         loi += 1;
@@ -2368,6 +2624,8 @@
         triggerSyncV1,
         getSyncSummaryV1,
         getOfflineStatusV1,
+        refreshContractPolicy,
+        cachedContractPolicy,
         resumeSyncV1,
         batTuDongBoV1,
         luuPhieuTuPOS,
@@ -2376,6 +2634,8 @@
         docTatCa,
         demCho,
         demLoi,
+        demLegacyLocal,
+        localReceiptsForRecovery,
         xoaPhieu,
         dongBo,
         luuAnhChupSanPham,

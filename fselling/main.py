@@ -34,6 +34,7 @@ from .routers import (
     forecast,
     loyalty,
     offline_leases,
+    offline_capability,
     offline_recovery,
     orders,
     pages,
@@ -203,6 +204,14 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
             response.headers["Cache-Control"] = "no-cache"
         return response
 
+    @application.middleware("http")
+    async def khong_giu_cache_api(request: Request, call_next):
+        """API responses are never a source of offline truth or policy bypass."""
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     application.include_router(auth.router)
     application.include_router(shops.router)
     application.include_router(categories.router)
@@ -213,6 +222,7 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
     application.include_router(webhooks.router)
     application.include_router(orders.router)
     application.include_router(offline_leases.router)
+    application.include_router(offline_capability.router)
     application.include_router(offline_recovery.router)
     application.include_router(shifts.router)
     application.include_router(staff.router)

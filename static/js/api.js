@@ -97,7 +97,9 @@ function hasLocalAccessToPage(pathname) {
         return role === 'ADMIN' || role === 'SELLER' || role === 'STAFF';
     }
     if (pathname === '/pos') {
-        return role === 'SELLER' || role === 'STAFF';
+        // Global ADMIN may open POS solely for owner-authorized offline
+        // recovery; the server remains the authority for every action.
+        return role === 'ADMIN' || role === 'SELLER' || role === 'STAFF';
     }
     return true;
 }
@@ -250,10 +252,15 @@ async function apiCall(endpoint, method = 'GET', body = null) {
         if (Array.isArray(msg) && msg.length > 0 && msg[0].msg) {
             msg = msg[0].msg;
         } else if (typeof msg === 'object') {
-            msg = JSON.stringify(msg);
+            // Public API errors may carry a stable code beside localized text.
+            // Keep that code on Error.code; never render a raw object in POS.
+            msg = typeof msg.message === 'string' ? msg.message : t('common.api_error');
         }
         const error = new Error(msg);
         error.status = res.status;
+        // Stable API codes are intentionally separate from localized text.  The
+        // offline queue needs them to choose a durable, safe local state.
+        error.code = typeof data?.detail?.code === 'string' ? data.detail.code : null;
         throw error;
     }
     return data;

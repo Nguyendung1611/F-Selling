@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..core.i18n import tr
+from ..core import config
 from ..core.money import checked_add, checked_multiply, exact_vnd
 from ..dependencies import (
     PERMISSION_SALE,
@@ -113,6 +114,7 @@ ERROR_UUID_OTHER_SHOP = "OFFLINE_UUID_OTHER_SHOP"
 ERROR_RECEIPT_UUID_OTHER_SHOP = ERROR_UUID_OTHER_SHOP
 ERROR_REGISTRY_INCONSISTENT = "OFFLINE_RECEIPT_REGISTRY_INCONSISTENT"
 ERROR_UUID_UNAVAILABLE = "OFFLINE_RECEIPT_UUID_UNAVAILABLE"
+ERROR_V0_CUTOFF_RECOVERY_REQUIRED = "OFFLINE_CONTRACT_V0_RECOVERY_REQUIRED"
 
 # Bằng chứng exact chỉ đóng được bằng kiểm kê thật; nút "đã xem" không làm số
 # hàng thiếu quay lại. Map lại sản phẩm / chấp nhận giá vốn unknown thuộc I09-G.
@@ -152,6 +154,15 @@ def _xung_dot(code: str, message: str) -> HTTPException:
         status_code=409,
         detail={"code": code, "message": tr(message)},
     )
+
+
+def _reject_new_v0_after_cutoff() -> None:
+    """The caller has already ruled out an idempotent durable v0 winner."""
+    if config.OFFLINE_CONTRACT_MIN_VERSION >= 1:
+        raise _xung_dot(
+            ERROR_V0_CUTOFF_RECOVERY_REQUIRED,
+            "Phiếu offline v0 mới cần chủ shop phục hồi sau đợt chuyển contract",
+        )
 
 
 def _canonical_order_time(value: Optional[datetime]) -> Optional[str]:
@@ -530,6 +541,7 @@ def dong_bo_phieu(
     da_co = _tim_theo_uuid(db, shop_id, uuid, canonical.fingerprint)
     if da_co is not None:
         return _phan_hoi(da_co, moi=False)
+    _reject_new_v0_after_cutoff()
 
     # Close the read snapshot before upgrading to SQLite's write lock.  This is
     # the same pattern used by webhook handling: a concurrent winner may commit
@@ -547,6 +559,9 @@ def dong_bo_phieu(
             response = _phan_hoi(da_co, moi=False)
             db.rollback()
             return response
+        # Recheck only after the write lock: a parallel durable winner remains
+        # idempotent, while a new v0 receipt cannot reach any financial write.
+        _reject_new_v0_after_cutoff()
 
         luc_ban = canonical.sold_at_utc
         ingested_at = datetime.utcnow()

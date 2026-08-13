@@ -427,6 +427,17 @@ button:disabled {
     line-height: 1.5;
 }
 
+.offline-recovery-panel { border-top: 1px solid #e2e8f0; margin-top: 1rem; padding-top: 1rem; }
+.offline-recovery-panel[hidden] { display: none; }
+.offline-recovery-list { display: grid; gap: .5rem; max-height: 34vh; overflow: auto; }
+.offline-recovery-item { display:flex; gap:.5rem; align-items:center; justify-content:space-between; border:1px solid #e2e8f0; border-radius:.5rem; padding:.55rem; }
+.offline-recovery-detail { display:grid; gap:.65rem; margin-top:.75rem; }
+.offline-recovery-detail label { display:grid; gap:.3rem; font-size:.9rem; font-weight:600; }
+.offline-recovery-detail select, .offline-recovery-detail textarea { width:100%; }
+.offline-recovery-pager { display:flex; gap:.5rem; margin-top:.7rem; }
+.offline-recovery-pager button { flex:1; }
+.offline-recovery-stocktake { color:#92400e; font-size:.86rem; margin:.7rem 0; }
+
 /* ===== Modal nghiệp vụ tiền mặt ===== */
 .pos-modal {
     position: fixed;
@@ -648,6 +659,25 @@ body.pos-modal-open {
 #toast {
     z-index: 10050;
     max-width: min(90vw, 420px);
+}
+
+/* Shared confirmation must remain usable above every business modal, including
+   the offline recovery panel. Toasts keep their existing higher layer. */
+#xacNhanModal.pos-confirm-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 10040;
+    background: rgba(15, 23, 42, 0.75);
+    align-items: center;
+    justify-content: center;
+}
+
+#xacNhanModal .pos-confirm-card {
+    width: min(92vw, 430px);
+    background: #0F172A;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    overflow: hidden;
 }
 
 .input-wrapper input{

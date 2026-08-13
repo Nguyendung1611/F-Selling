@@ -8,6 +8,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from sqlalchemy import event
 
 from conftest import (
     _TEST_MIGRATIONS,
@@ -321,6 +322,76 @@ def test_export_deterministic_import_list_read_owner_admin_and_no_leak(client):
     assert admin_resolve.status_code == 200, admin_resolve.text
     assert admin_resolve.json()["created"] is True
     _TEST_MIGRATIONS.verify()
+
+
+def test_candidate_pagination_is_one_bounded_stable_query_without_issue_duplicates(client):
+    """The mixed staged/direct feed must page in SQL, not after an .all()."""
+    ctx = seller_with_shop(client)
+    candidate_uuids = []
+    for ordinal in range(4):
+        receipt = _v0_receipt(product_id=999_990_000 + ordinal)
+        document = _export(client, ctx, receipt).json()
+        assert _import(client, ctx, document).status_code == 200
+        candidate_uuids.append(receipt["offline_uuid"])
+    for ordinal in range(4):
+        receipt = _v0_receipt(product_id=999_991_000 + ordinal)
+        if ordinal == 0:
+            # Two open issues must still yield one candidate (EXISTS, no join fanout).
+            receipt["items"].append(
+                {
+                    "product_id": 999_992_000,
+                    "product_name": "Hàng cũ thứ hai",
+                    "unit_price_vnd": 100_000,
+                    "quantity": 1,
+                }
+            )
+            receipt["cash_tendered_vnd"] = 200_000
+        _normal_ingest_v0(client, ctx, receipt)
+        candidate_uuids.append(receipt["offline_uuid"])
+
+    session = SessionLocal()
+    try:
+        (
+            session.query(models.OfflineReceiptRegistry)
+            .filter(models.OfflineReceiptRegistry.offline_uuid.in_(candidate_uuids))
+            .update({"updated_at": "2026-08-13 08:00:00.000000"}, synchronize_session=False)
+        )
+        session.commit()
+        engine = session.get_bind()
+    finally:
+        session.close()
+
+    statements = []
+
+    def record_sql(_conn, _cursor, statement, _parameters, _context, _many):
+        if "FROM offline_receipt_registry" in statement:
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_sql)
+    try:
+        first = client.get(
+            f"/api/offline/recovery/{ctx['shop_id']}/candidates?limit=3&offset=0",
+            headers=auth(ctx["token"]),
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record_sql)
+    assert first.status_code == 200, first.text
+    assert len(statements) == 1
+    assert " LIMIT " in statements[0].upper()
+    assert " OFFSET " in statements[0].upper()
+
+    pages = [first.json()]
+    while pages[-1]["next_offset"] is not None:
+        page = client.get(
+            f"/api/offline/recovery/{ctx['shop_id']}/candidates?limit=3&offset={pages[-1]['next_offset']}",
+            headers=auth(ctx["token"]),
+        )
+        assert page.status_code == 200, page.text
+        pages.append(page.json())
+    received = [item["offline_uuid"] for page in pages for item in page["items"]]
+    assert received == sorted(candidate_uuids)
+    assert len(received) == len(set(received)) == 8
+    assert [page["next_offset"] for page in pages] == [3, 6, None]
 
 
 def test_map_creates_new_artifact_tombstone_and_exact_known_cost(client):
@@ -1072,6 +1143,21 @@ def test_ingested_v0_catalog_map_is_in_place_idempotent_and_exact_once(client):
     target = _known_cost_product(client, ctx, quantity=5, unit_cost=30_000)
     receipt = _v0_receipt(product_id=999_999_880, quantity=2)
     original = _normal_ingest_v0(client, ctx, receipt)
+    listed = client.get(
+        f"/api/offline/recovery/{ctx['shop_id']}/candidates",
+        headers=auth(ctx["token"]),
+    )
+    assert listed.status_code == 200
+    candidate = next(item for item in listed.json()["items"] if item["offline_uuid"] == receipt["offline_uuid"])
+    assert candidate["direct_legacy_resolution"] is True
+    assert candidate["issues"][0]["item_ordinal"] == 1
+    assert "digest" not in str(candidate).lower()
+    detail = client.get(
+        f"/api/offline/recovery/{ctx['shop_id']}/candidates/{receipt['offline_uuid']}",
+        headers=auth(ctx["token"]),
+    )
+    assert detail.status_code == 200
+    assert detail.json()["direct_legacy_resolution"] is True
     before = _db_counts(ctx["shop_id"])
 
     def attempt(_n):
