@@ -25,6 +25,7 @@ I05 = "0003_i05_integer_vnd_cost_basis"
 I09 = "0004_i09_offline_receipts"
 I09C = "0005_i09c_offline_issue_lifecycle"
 I09E = "0006_i09e_offline_receipt_items"
+I10A = "0007_i10a_qr_payment_domain"
 
 
 def _i05_module(coordinator: MigrationCoordinator):
@@ -149,15 +150,15 @@ def test_fresh_0001_0002_0003_and_i04_upgrade_are_linear(tmp_path):
     assert coordinator.init() == [ROOT]
     assert coordinator.upgrade(I04) == [I04]
     assert coordinator.status().current_revision == I04
-    assert coordinator.upgrade("head") == [I05, I09, I09C, I09E]
+    assert coordinator.upgrade("head") == [I05, I09, I09C, I09E, I10A]
     report = coordinator.verify()
-    assert report.current_revision == report.head_revision == I09E
-    assert report.revision_count == 6
+    assert report.current_revision == report.head_revision == I10A
+    assert report.revision_count == 7
     assert coordinator.upgrade("head") == []
 
     connection = _connect(database)
     try:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (I09E,)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (I10A,)
         assert connection.execute(
             "SELECT type FROM pragma_table_info('orders') WHERE name='total_vnd'"
         ).fetchone() == ("INTEGER",)
@@ -201,7 +202,7 @@ def test_exact_legacy_conversion_allocation_and_unknown_cost(tmp_path):
     finally:
         connection.close()
 
-    assert coordinator.upgrade() == [I05, I09, I09C, I09E]
+    assert coordinator.upgrade() == [I05, I09, I09C, I09E, I10A]
     coordinator.verify()
     connection = _connect(database)
     try:
@@ -247,7 +248,7 @@ def test_i04_tracked_ton_am_gap_migrates_with_exact_durable_evidence(
     finally:
         connection.close()
 
-    assert coordinator.upgrade() == [I05, I09, I09C, I09E]
+    assert coordinator.upgrade() == [I05, I09, I09C, I09E, I10A]
     coordinator.verify()
     connection = _connect(database)
     try:
@@ -613,7 +614,7 @@ def test_nonempty_positive_ledgers_backfill_and_required_triggers_are_durable(tm
         connection.close()
 
 
-    assert coordinator.upgrade() == [I05, I09, I09C, I09E]
+    assert coordinator.upgrade() == [I05, I09, I09C, I09E, I10A]
     coordinator.verify()
     connection = _connect(database)
     try:

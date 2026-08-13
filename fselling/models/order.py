@@ -11,6 +11,8 @@ class Order(Base):
     __tablename__ = "orders"
     __table_args__ = (
         Index("ux_orders_operation_id", "operation_id", unique=True),
+        # I10-A composite parent key for tenant-safe QR intent/event FKs.
+        Index("ux_i10a_orders_id_shop", "id", "shop_id", unique=True),
     )
     id = Column(Integer, primary_key=True, index=True)
     shop_id = Column(Integer, ForeignKey("shops.id"))
@@ -370,6 +372,13 @@ class OrderPayment(Base):
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_order_payments_amount_positive"),
         Index("ux_order_payments_idempotency_key", "idempotency_key", unique=True),
+        # I10-A composite parent key for tenant-safe event/action payment FKs.
+        Index(
+            "ux_i10a_order_payments_id_order",
+            "id",
+            "order_id",
+            unique=True,
+        ),
         Index("ix_order_payments_order_id", "order_id"),
         Index("ix_order_payments_bank_txn_id", "bank_txn_id"),
     )

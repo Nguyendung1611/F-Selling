@@ -31,6 +31,11 @@ from .order import (
     OrderReturnItem,
     OrderReturnItemBatch,
 )
+from .qr_payment import (
+    BankReconciliationAction,
+    BankWebhookEvent,
+    QrPaymentIntent,
+)
 from .shift import CashMovement, CashShift
 from .shop import Shop
 from .supplier import (
@@ -84,6 +89,9 @@ __all__ = [
     "OfflineReceiptIssue",
     "OfflineStockDeficit",
     "OfflineBatchStockDeficit",
+    "QrPaymentIntent",
+    "BankWebhookEvent",
+    "BankReconciliationAction",
     "LoyaltyPointEntry",
     "Supplier",
     "PurchaseReceipt",

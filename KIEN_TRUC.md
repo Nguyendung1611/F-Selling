@@ -1732,6 +1732,54 @@ với reason. Order-item, issue và registry đều CAS dưới shop write lock;
 `LEGACY_INGEST` action + SystemLog commit transaction-local. Retry/lost response
 đọc durable action, còn `TON_AM` exact vẫn không được click-clear qua đường này.
 
+### 45. I10-A: schema QR payment đã có, nhưng runtime vẫn DISABLED/OFF
+
+Revision tuyến tính `0007_i10a_qr_payment_domain` chỉ đặt nền domain cho QR bán
+hàng; nó **không** phát QR, không parse webhook, không tạo payment, không mở
+endpoint/UI/provider và không bật rollout. Trạng thái vận hành mặc định vẫn OFF;
+report-only/enforce, TTL/grace/cancel, provider/reference contract, retention và
+refund SLA chỉ được mở ở I10-B/C/D/R sau approval riêng.
+
+Ba bảng mới có vai trò tách biệt:
+
+- `qr_payment_intents`: đúng một intent v1 cho một đơn online `transfer` có
+  `total_vnd > 0`. Reference toàn cục, `expected_vnd`, bank code/account/name và
+  adapter profile là snapshot bất biến. `expected_vnd` luôn bằng tuyệt đối
+  `orders.total_vnd`; `display_expires_at`/`cancel_after` đều nullable và không
+  có default chính sách. QR chỉ là hướng dẫn chuyển tiền, không phải bằng chứng
+  `PAID`.
+- `bank_webhook_events`: inbox bền vững cho mọi evidence đã chuẩn hóa, kể cả
+  missing/truncated/multiple/unknown/collision. Bảng chỉ giữ account/direction/
+  integer VND/reference state, normalized SHA-256 và envelope SHA-256 lowercase;
+  tuyệt đối không có raw-body/payload column. Evidence tài chính bất biến;
+  direct terminal `UPDATE` luôn bị chặn. Chỉ một terminal reconciliation action
+  đã validate đủ audit/link/payment mới atomically chuyển `UNAPPLIED` tới
+  `APPLIED`, `REJECTED_NOT_OURS` hoặc `REFUNDED` với state version tăng đúng một;
+  lỗi transition rollback luôn cả action.
+- `bank_reconciliation_actions`: ledger append-only chỉ nhận `KEEP_OPEN`,
+  `MAP_AND_APPLY`, `REJECT_NOT_OURS`, `MARK_REFUNDED_EXTERNALLY`.
+  `MAP_AND_APPLY` là action duy nhất được gắn `OrderPayment`; hai action reject/
+  refunded không được có payment và bắt buộc note + `SystemLog`. Event chưa có
+  `shop_id` chỉ nhận action có actor snapshot `ADMIN`; owner/manager chỉ thao tác
+  event đã map đúng shop.
+
+Unique/composite FK/index/trigger giữ một intent mỗi order, reference toàn cục,
+provider-event idempotency, tenant scope order/payment/intent, lookup UNAPPLIED
+theo `(shop_id, received_at)` và tính bất biến của intent/evidence/action. Startup
+verifier dùng `index_xinfo` để kiểm cả key/aux, expression, collation, ASC/DESC,
+partial predicate và kiểm lại shape lẫn data mà không nhìn đồng hồ hiện tại.
+Guard parent-key/delete tự chứa giữ toàn bộ quan hệ 0007 ngay cả khi runtime để
+`PRAGMA foreign_keys=OFF`; row legacy không có child 0007 vẫn giữ hành vi cũ.
+Object bắt buộc phải đúng shape nhưng index/trigger/column do revision tuyến tính
+sau sở hữu vẫn được phép tồn tại.
+
+Revision **không backfill** intent/event/action từ `ORDER{id}`, account hiện tại
+của shop, `created_at`, order/payment cũ hay dữ liệu I09. Những dòng đó giữ
+contract v0; chỉ intent v1 mới đối chiếu snapshot bank bất biến. Truth table
+under/exact/over/late/no-resurrection, issuance/render, webhook application,
+reconciliation handler và account-change lock vẫn thuộc I10-B/C; POS/PWA/UI
+thuộc I10-D; provider traffic và rollout thật thuộc I10-R.
+
 ## Phiên bản dependency
 
 FastAPI **0.139.0** + Starlette **1.3.1** (bản đang cài trong `.venv`).

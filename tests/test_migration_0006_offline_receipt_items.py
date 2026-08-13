@@ -20,6 +20,7 @@ I05 = "0003_i05_integer_vnd_cost_basis"
 I09 = "0004_i09_offline_receipts"
 I09C = "0005_i09c_offline_issue_lifecycle"
 I09E = "0006_i09e_offline_receipt_items"
+I10A = "0007_i10a_qr_payment_domain"
 
 RELEASED = {
     ROOT: "5bdcb5e297ba9eba83474c5415371129c9c3d1498280ee481e37c27fd37e7a5c",
@@ -115,7 +116,7 @@ def _seed_v1_receipt(connection: sqlite3.Connection) -> None:
 def _seed_valid_v1_after_0006(path: Path) -> MigrationCoordinator:
     coordinator = _coordinator(path)
     assert coordinator.init() == [ROOT]
-    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E]
+    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E, I10A]
     with _connect(path) as connection:
         _seed_business_rows(connection)
         connection.execute("UPDATE orders SET offline_issue=NULL")
@@ -140,10 +141,10 @@ def test_fresh_0001_to_0006_restart_and_exact_shape(tmp_path):
     database = tmp_path / "fresh.db"
     coordinator = _coordinator(database)
     assert coordinator.init() == [ROOT]
-    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E]
+    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E, I10A]
     report = coordinator.verify()
-    assert report.current_revision == report.head_revision == I09E
-    assert report.revision_count == 6
+    assert report.current_revision == report.head_revision == I10A
+    assert report.revision_count == 7
     assert coordinator.upgrade("head") == []
     assert coordinator.verify().database_uuid == report.database_uuid
 
@@ -163,12 +164,16 @@ def test_fresh_0001_to_0006_restart_and_exact_shape(tmp_path):
 def test_0005_to_0006_empty_v1_is_forward_only_and_checksummed(tmp_path):
     database = tmp_path / "step.db"
     coordinator = _at_0005(database)
-    assert coordinator.upgrade("head") == [I09E]
-    assert coordinator.verify().current_revision == I09E
+    assert coordinator.upgrade(I09E) == [I09E]
+    with _connect(database) as connection:
+        _module(coordinator).verify(connection)
 
     graph = coordinator._graph()
-    assert [x.revision for x in graph.revisions] == [ROOT, I04, I05, I09, I09C, I09E]
-    assert graph.head.down_revision == I09C
+    assert [x.revision for x in graph.revisions] == [
+        ROOT, I04, I05, I09, I09C, I09E, I10A
+    ]
+    spec = next(x for x in graph.revisions if x.revision == I09E)
+    assert spec.down_revision == I09C
     path = PROJECT_ROOT / f"migrations/versions/{I09E}.py"
     digest = _normalized_digest(path)
     manifest = json.loads((PROJECT_ROOT / "migrations/checksums.json").read_text())
@@ -178,7 +183,7 @@ def test_0005_to_0006_empty_v1_is_forward_only_and_checksummed(tmp_path):
         "sha256": digest,
     }
     with pytest.raises(RuntimeError, match="forward-only"):
-        graph.head.module.downgrade()
+        spec.module.downgrade()
 
 
 def test_released_sources_and_control_fingerprint_unchanged():
@@ -197,7 +202,7 @@ def test_0006_refuses_to_fabricate_preexisting_v1(tmp_path):
         _seed_business_rows(connection)
         _seed_v1_receipt(connection)
     with pytest.raises(RuntimeError, match="I09E_PREEXISTING_V1_RECEIPTS"):
-        coordinator.upgrade("head")
+        coordinator.upgrade(I09E)
     with _connect(database) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (I09C,)
         assert connection.execute(
@@ -283,7 +288,7 @@ def test_verifier_rejects_nullable_column_shape(tmp_path):
     database = tmp_path / "nullable-shape.db"
     coordinator = _coordinator(database)
     assert coordinator.init() == [ROOT]
-    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E]
+    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E, I10A]
     module = _module(coordinator)
     with _connect(database) as connection:
         connection.execute("DROP TABLE offline_receipt_items")
@@ -332,7 +337,7 @@ def test_verifier_rejects_named_index_with_wrong_shape(tmp_path, name, replaceme
     database = tmp_path / f"index-{name}-{hashlib.sha256(replacement.encode()).hexdigest()[:8]}.db"
     coordinator = _coordinator(database)
     assert coordinator.init() == [ROOT]
-    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E]
+    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E, I10A]
     module = _module(coordinator)
     with _connect(database) as connection:
         connection.execute(f'DROP INDEX "{name}"')
