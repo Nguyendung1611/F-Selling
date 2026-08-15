@@ -46,5 +46,10 @@ def test_v1_status_view_never_exports_secret_or_receipt_payload():
 
 def test_i09_f3_cache_busters_cover_every_changed_pos_asset():
     html = _read("static/pos.html")
-    for asset in ("pos.css", "locales/pos.js", "offline-ban.js", "pos.js"):
-        assert f"/{'css/' if asset == 'pos.css' else 'js/'}{asset}?v=20260813-i09-f3" in html
+    for asset, expected_v in [
+        ("pos.css", "20260813-i09-f3&g=20260813-i09-g2h2"),
+        ("locales/pos.js", "20260815-i11-doisoat"),
+        ("offline-ban.js", "20260813-i09-f3&g=20260813-i09-g2h6"),
+        ("pos.js", "20260815-i12b-doisoat2"),
+    ]:
+        assert f"/{'css/' if asset == 'pos.css' else 'js/'}{asset}?v={expected_v}" in html

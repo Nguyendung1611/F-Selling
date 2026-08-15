@@ -68,6 +68,300 @@ function dinhDangSoPOS(value) {
     return Math.round(Number(value) || 0).toLocaleString('vi-VN');
 }
 
+// ── I10-D: QR v1 presentation lifecycle owner ─────────────────────────────────
+//
+// Owns the ephemeral display state for one active v1 transfer intent.
+// NEVER persists intent metadata — the canonical reference lives on the server.
+//
+// State machine:
+//   null          → no v1 intent active
+//   'loading'     → fetching authenticated metadata for the current order
+//   'rendered'    → object-URL image active, total shown
+//   'manual'      → render unavailable, sanitised bank fields shown
+//   'hidden'      → underpayment evidence; image+fields cleared
+//   'unavailable' → recovery failed; polite message shown
+//
+// Cleanup is idempotent and MUST be called on every path that ends a transfer
+// session: PAID, CANCELLED, reset, shop change, logout, 404, and pagehide.
+
+let _qr1OrderId = null;          // order this state belongs to
+let _qr1Generation = 0;          // monotonically increasing stale-response fence
+let _qr1Controller = null;       // active AbortController for in-flight fetches
+let _qr1ObjectUrl = null;         // current blob URL — revoke exactly once
+let _qr1State = null;            // 'loading'|'rendered'|'manual'|'hidden'|'unavailable'|null
+let _qr1Fingerprint = null;       // last serialised fingerprint shown; avoids re-render
+
+function _qr1GetToken() {
+    return (typeof getToken === 'function') ? getToken() : null;
+}
+
+function _qr1Cleanup() {
+    if (_qr1Controller) {
+        _qr1Controller.abort();
+        _qr1Controller = null;
+    }
+    if (_qr1ObjectUrl) {
+        URL.revokeObjectURL(_qr1ObjectUrl);
+        _qr1ObjectUrl = null;
+    }
+    _qr1Generation++;
+    _qr1OrderId = null;
+    _qr1State = null;
+    _qr1Fingerprint = null;
+    const img = document.getElementById('qrImage');
+    if (img) img.src = '';
+    const statusEl = document.getElementById('qr1Status');
+    if (statusEl) statusEl.innerText = '';
+    const manualEl = document.getElementById('qr1Manual');
+    if (manualEl) manualEl.style.display = 'none';
+    const bCode = document.getElementById('qr1BankCode');
+    const acctNo = document.getElementById('qr1AccountNo');
+    const acctName = document.getElementById('qr1AccountName');
+    const ref = document.getElementById('qr1Reference');
+    if (bCode) bCode.textContent = '';
+    if (acctNo) acctNo.textContent = '';
+    if (acctName) acctName.textContent = '';
+    if (ref) ref.textContent = '';
+}
+
+function _qr1ClearManual() {
+    const manualEl = document.getElementById('qr1Manual');
+    if (manualEl) manualEl.style.display = 'none';
+    const bCode = document.getElementById('qr1BankCode');
+    const acctNo = document.getElementById('qr1AccountNo');
+    const acctName = document.getElementById('qr1AccountName');
+    const ref = document.getElementById('qr1Reference');
+    if (bCode) bCode.textContent = '';
+    if (acctNo) acctNo.textContent = '';
+    if (acctName) acctName.textContent = '';
+    if (ref) ref.textContent = '';
+}
+
+function _qr1RefreshLabels() {
+    // Re-apply status text and image alt from current state after language change.
+    // No network, no object-URL, no mutation of payload.
+    if (_qr1State === 'loading') {
+        const el = document.getElementById('qr1Status');
+        if (el) el.textContent = dich('pos.payment.v1_loading');
+    } else if (_qr1State === 'hidden') {
+        const el = document.getElementById('qr1Status');
+        if (el) el.textContent = dich('pos.payment.v1_hidden');
+    } else if (_qr1State === 'unavailable') {
+        const el = document.getElementById('qr1Status');
+        if (el) el.textContent = dich('pos.payment.v1_unavailable');
+    }
+    if (_qr1State === 'rendered') {
+        const img = document.getElementById('qrImage');
+        if (img) img.alt = dich('pos.payment.v1_img_alt');
+    }
+}
+
+// Internal: revoke owned URL and clear image/status without touching order/generation.
+// Used when entering a new display state so old image/loading text never lingers.
+function _qr1ClearVisuals() {
+    if (_qr1ObjectUrl) {
+        URL.revokeObjectURL(_qr1ObjectUrl);
+        _qr1ObjectUrl = null;
+    }
+    const img = document.getElementById('qrImage');
+    if (img) img.src = '';
+    const statusEl = document.getElementById('qr1Status');
+    if (statusEl) statusEl.innerText = '';
+}
+
+function _qr1RenderManual(intent) {
+    // Display sanitised instruction fields only — never HTML.
+    _qr1ClearVisuals();
+    _qr1ClearManual();
+    const manualEl = document.getElementById('qr1Manual');
+    if (manualEl) manualEl.style.display = 'block';
+    const bCode = document.getElementById('qr1BankCode');
+    const acctNo = document.getElementById('qr1AccountNo');
+    const acctName = document.getElementById('qr1AccountName');
+    const ref = document.getElementById('qr1Reference');
+    if (bCode) bCode.textContent = intent.bank_code || '';
+    if (acctNo) acctNo.textContent = intent.bank_account_no || '';
+    if (acctName) acctName.textContent = intent.bank_account_name || '';
+    if (ref) ref.textContent = intent.canonical_reference || '';
+    _qr1State = 'manual';
+}
+
+function _qr1RenderUnavailable() {
+    // Clear image/URL and account/reference fields before showing unavailable status.
+    // Does not call _qr1Cleanup so _qr1OrderId/_qr1Generation stay valid.
+    _qr1ClearVisuals();
+    _qr1ClearManual();
+    _qr1State = 'unavailable';
+    const el = document.getElementById('qr1Status');
+    if (el) el.textContent = dich('pos.payment.v1_unavailable');
+}
+
+function _qr1RenderBlob(blob, intent) {
+    if (_qr1ObjectUrl) {
+        URL.revokeObjectURL(_qr1ObjectUrl);
+        _qr1ObjectUrl = null;
+    }
+    _qr1ObjectUrl = URL.createObjectURL(blob);
+    const img = document.getElementById('qrImage');
+    if (img) {
+        img.src = _qr1ObjectUrl;
+        img.alt = dich('pos.payment.v1_img_alt');
+    }
+    const statusEl = document.getElementById('qr1Status');
+    if (statusEl) statusEl.innerText = '';
+    _qr1ClearManual();
+    _qr1State = 'rendered';
+}
+
+async function _qr1FetchAndRender(intent, orderId, generation) {
+    // Stale: wrong generation or order → silent, abandon.
+    if (generation !== _qr1Generation || _qr1OrderId !== orderId) return;
+    // Per-request identity fence: one local controller per call.
+    // Abort predecessor first, then claim identity before any await.
+    if (_qr1Controller) _qr1Controller.abort();
+    const localController = new AbortController();
+    _qr1Controller = localController;
+
+    // Render is payment instruction only; never evidence of payment.
+    if (!intent.capability?.render_available) {
+        if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) return;
+        _qr1RenderManual(intent);
+        // Only clear global if we still own it.
+        if (_qr1Controller === localController) _qr1Controller = null;
+        return;
+    }
+
+    const endpoint = intent.capability.render_endpoint;
+    if (
+        typeof endpoint !== 'string' ||
+        endpoint !== `/api/orders/${orderId}/qr/render`
+    ) {
+        if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) return;
+        _qr1RenderUnavailable();
+        if (_qr1Controller === localController) _qr1Controller = null;
+        return;
+    }
+
+    const token = _qr1GetToken();
+    if (!token) {
+        if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) return;
+        _qr1RenderUnavailable();
+        if (_qr1Controller === localController) _qr1Controller = null;
+        return;
+    }
+
+    let blob;
+    try {
+        const res = await fetch(endpoint, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: 'image/png',
+            },
+            signal: localController.signal,
+            cache: 'no-store',
+            credentials: 'omit',
+            redirect: 'error',
+        });
+        if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) return;
+        if (!res.ok) throw new Error('non-ok');
+        const ct = res.headers.get('content-type') || '';
+        if (ct !== 'image/png') throw new Error('wrong-type');
+        blob = await res.blob();
+        if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) return;
+        if (blob.size === 0 || blob.size > 512 * 1024) throw new Error('size');
+        if (blob.type !== 'image/png') throw new Error('type-mismatch');
+    } catch (_) {
+        if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) return;
+        _qr1RenderManual(intent);
+        if (_qr1Controller === localController) _qr1Controller = null;
+        return;
+    }
+
+    if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) {
+        if (_qr1Controller === localController) _qr1Controller = null;
+        return;
+    }
+    _qr1RenderBlob(blob, intent);
+    if (_qr1Controller === localController) _qr1Controller = null;
+}
+
+// Exposed for call-sites that need to inject a v1 intent at display time.
+// Never persists intent to sessionStorage.
+function qr1ShowTransient(intent, orderId, serverTotalVnd) {
+    _qr1Cleanup();
+    _qr1OrderId = orderId;
+    const gen = _qr1Generation;
+    const el = document.getElementById('qr1Status');
+    if (el) el.textContent = dich('pos.payment.v1_loading');
+    _qr1State = 'loading';
+    const totalEl = document.getElementById('qrTotalTxt');
+    if (totalEl) totalEl.innerText = dinhDangTien(serverTotalVnd);
+    _qr1Fingerprint = _qr1FingerprintFor(intent);
+    _qr1FetchAndRender(intent, orderId, gen);
+}
+
+// Canonical hidden-state transition: aborts controller, clears visuals+manual,
+// preserves _qr1OrderId so identical repeated hidden polls are ignored by fingerprint
+// while a genuine later metadata change is still observable.
+function _qr1RenderHidden(metadataFingerprint) {
+    if (_qr1Controller) {
+        _qr1Controller.abort();
+        _qr1Controller = null;
+    }
+    // Revoke BEFORE clearVisuals so we control the exact sequence.
+    if (_qr1ObjectUrl) {
+        URL.revokeObjectURL(_qr1ObjectUrl);
+        _qr1ObjectUrl = null;
+    }
+    _qr1ClearVisuals();
+    _qr1ClearManual();
+    _qr1Fingerprint = metadataFingerprint;
+    _qr1State = 'hidden';
+    const el = document.getElementById('qr1Status');
+    if (el) el.textContent = dich('pos.payment.v1_hidden');
+}
+
+// Builds fingerprint from any qr_intent-like object; keeps the shape in one place.
+function _qr1FingerprintFor(intent) {
+    return JSON.stringify({
+        cv: intent.contract_version,
+        amt: intent.expected_vnd,
+        ref: intent.canonical_reference,
+        hidden: Boolean(intent.hidden),
+    });
+}
+
+// Called on reload of a transfer_pending order with no persisted qr_url.
+// Fetches authenticated metadata once; does NOT poll or re-render every 5 s.
+async function _qr1RecoverV1(orderId) {
+    _qr1Cleanup();
+    _qr1OrderId = orderId;
+    const gen = _qr1Generation;
+    const el = document.getElementById('qr1Status');
+    if (el) el.textContent = dich('pos.payment.v1_loading');
+    _qr1State = 'loading';
+    try {
+        const metadata = await apiCall(`/orders/${orderId}/qr`);
+        // Stale: order changed or cleanup ran while we awaited.
+        if (gen !== _qr1Generation || _qr1OrderId !== orderId) return;
+        if (!metadata || !metadata.contract_version) {
+            _qr1RenderUnavailable();
+            return;
+        }
+        if (metadata.hidden) {
+            _qr1RenderHidden(_qr1FingerprintFor(metadata));
+            return;
+        }
+        const fingerprint = _qr1FingerprintFor(metadata);
+        _qr1Fingerprint = fingerprint;
+        _qr1FetchAndRender(metadata, orderId, gen);
+    } catch (_) {
+        if (gen !== _qr1Generation || _qr1OrderId !== orderId) return;
+        _qr1RenderUnavailable();
+    }
+}
+
 function htmlNut(icon, key, options = {}) {
     return `<i class="ph ${icon}"></i> ${dichHtml(key, options)}`;
 }
@@ -1567,9 +1861,16 @@ function phucHoiCheckoutDangDo() {
     updateUI();
 
     if (state.phase === 'transfer_pending' && currentOrderId) {
-        if (state.qr_url) document.getElementById('qrImage').src = state.qr_url;
-        document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total ?? total);
         document.getElementById('qrSection').style.display = 'block';
+        if (state.qr_url) {
+            document.getElementById('qrImage').src = state.qr_url;
+            document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total ?? total);
+        } else {
+            // v1: fetch authenticated metadata once, then attempt render.
+            let _qr1V1Branch = true;  // I10-D v1 reload anchor
+            document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total ?? total);
+            _qr1RecoverV1(currentOrderId);
+        }
         startPaymentPolling();
         showToast(dich('pos.payment.restored_transfer', { id: currentOrderId }));
     } else if (state.phase === 'cash_pending' && currentOrderId) {
@@ -1609,6 +1910,7 @@ function capNhatThanhCa(state = activeShift ? 'open' : 'closed', message = '') {
         meta.innerText = dich('pos.shift.server_status');
         openButton.style.display = 'none';
         movementButton.style.display = 'none';
+        document.getElementById('btnDoiSoat').style.display = 'none';
         closeButton.style.display = 'none';
     } else if (state === 'open' && activeShift) {
         const nguoiMo = activeShift.opened_by_username
@@ -1621,6 +1923,7 @@ function capNhatThanhCa(state = activeShift ? 'open' : 'closed', message = '') {
         });
         openButton.style.display = 'none';
         movementButton.style.display = '';
+        document.getElementById('btnDoiSoat').style.display = '';
         closeButton.style.display = '';
     } else if (state === 'error') {
         text.innerText = dich('pos.shift.unknown');
@@ -1633,6 +1936,7 @@ function capNhatThanhCa(state = activeShift ? 'open' : 'closed', message = '') {
         meta.innerText = dich('pos.shift.not_open_help');
         openButton.style.display = '';
         movementButton.style.display = 'none';
+        document.getElementById('btnDoiSoat').style.display = 'none';
         closeButton.style.display = 'none';
     }
     capNhatNutCheckout();
@@ -2192,11 +2496,15 @@ async function guiYeuCauTaoDonDangDo(state) {
         state.phase = 'transfer_pending';
         state.qr_url = res.qr_url || state.qr_url || null;
         luuCheckoutDangDo(state);
-        if (state.qr_url) document.getElementById('qrImage').src = state.qr_url;
         total = state.server_total;
         updateUI();
-        document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total);
         document.getElementById('qrSection').style.display = 'block';
+        if (res.qr_intent) {
+            qr1ShowTransient(res.qr_intent, currentOrderId, state.server_total);
+        } else if (state.qr_url) {
+            document.getElementById('qrImage').src = state.qr_url;
+            document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total);
+        }
         showToast(dich('pos.checkout.created_transfer'));
         DocTien.chuanBiSoTien(res.total);
         startPaymentPolling();
@@ -2847,6 +3155,7 @@ async function cancelOrder() {
             // Kết quả xác định: order không còn tồn tại. Bỏ khóa durable nhưng
             // giữ giỏ hiện tại để thu ngân có thể kiểm tra và tạo lại.
             stopPaymentPolling();
+            _qr1Cleanup();
             xoaCheckoutDangDo();
             currentOrderId = null;
             pendingCashOrderId = null;
@@ -2875,8 +3184,31 @@ async function kiemTraThanhToan() {
         if(idDon !== currentOrderId) return;
         lastPaymentStatus = statusRes;
 
+        // I10-D: apply v1 qr_intent from poll — only state transitions matter.
+        // Do not re-fetch/re-render the same fingerprint every 5 s.
+        if (statusRes.qr_intent && _qr1OrderId === idDon) {
+            const fingerprint = _qr1FingerprintFor(statusRes.qr_intent);
+            if (fingerprint !== _qr1Fingerprint) {
+                if (statusRes.qr_intent.hidden) {
+                    // Hidden: abort and clear all sensitive details immediately.
+                    _qr1RenderHidden(_qr1FingerprintFor(statusRes.qr_intent));
+                } else {
+                    // Visible: clear visuals, then assign fingerprint only after reactivation.
+                    _qr1ClearVisuals();
+                    _qr1OrderId = idDon;
+                    const gen = _qr1Generation;
+                    const el = document.getElementById('qr1Status');
+                    if (el) el.textContent = dich('pos.payment.v1_loading');
+                    _qr1State = 'loading';
+                    _qr1Fingerprint = _qr1FingerprintFor(statusRes.qr_intent);
+                    _qr1FetchAndRender(statusRes.qr_intent, idDon, gen);
+                }
+            }
+        }
+
         if(statusRes.status === 'PAID') {
             stopPaymentPolling();
+            _qr1Cleanup();
             // Đọc TRƯỚC khi vẽ hóa đơn. Nếu chuyển thừa, vẫn xuất hóa đơn ngay
             // nhưng lời cảnh báo nêu rõ số cần hoàn.
             if(statusRes.refund_pending) {
@@ -3184,6 +3516,7 @@ function dongHoaDon() {
 function resetPOS() {
     stopPaymentPolling();
     dongHoaDon();
+    _qr1Cleanup();
     xoaCheckoutDangDo();
     // Mọi response voucher cũ về sau thời điểm reset đều đã hết giá trị.
     voucherRequestId += 1;
@@ -3215,6 +3548,189 @@ function resetPOS() {
     boChonKhach();  // trả về khách vãng lai cho đơn tiếp theo
     calcCart();
     loadProducts(); // refresh stock
+}
+
+// Wipe transient v1 QR state on pagehide — prevents stale display on BFCache restore.
+window.addEventListener('pagehide', () => {
+    _qr1Cleanup();
+});
+
+// Restore QR display after BFCache restore.
+// - v0: if state.qr_url exists, restore image and total directly (no metadata fetch).
+// - v1: if transfer_pending with no qr_url, call _qr1RecoverV1 once.
+// Auth loss (no token) wipes everything; api.js redirect authority is untouched.
+window.addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    if (!localStorage.getItem('token')) {
+        _qr1Cleanup();
+        return;
+    }
+    const state = docSessionJson(sessionKey('checkout_dang_do'));
+    if (!state || state.phase !== 'transfer_pending') return;
+    if (state.qr_url) {
+        // v0: restore image and total from persisted URL.
+        document.getElementById('qrImage').src = state.qr_url;
+        document.getElementById('qrTotalTxt').innerText =
+            dinhDangTien(state.server_total ?? total);
+    } else if (currentOrderId) {
+        // v1: recover once; do not start another polling interval.
+        _qr1RecoverV1(currentOrderId);
+    }
+});
+
+// ===== Đối Soát ngân hàng =====
+// Tiền về cho đơn nợ: hiện danh sách BANK_UNAPPLIED, cho phép gán vào đơn.
+
+// ponytail: global modal state, singleton per session
+let _doiSoatDangChon = null; // { eventId, soTien }
+
+function dongModalDoiSoat() {
+    const m = document.getElementById('doiSoatModal');
+    if (m) m.style.display = 'none';
+}
+
+function dongModalGanDonNo() {
+    _doiSoatDangChon = null;
+    const m = document.getElementById('ganDonNoModal');
+    if (m) m.style.display = 'none';
+}
+
+async function moModalGanDonNo() {
+    const modal = document.getElementById('ganDonNoModal');
+    const ds = document.getElementById('ganDonNoDanhSach');
+    if (!modal || !ds) return;
+    const ctx = _doiSoatDangChon;
+    if (!ctx) return;
+
+    const soTienLabel = dinhDangTien(ctx.soTien);
+    const tomTat = document.getElementById('ganDonNoSoTien');
+    if (tomTat) tomTat.innerText = `Đang gán ${soTienLabel}`;
+
+    modal.style.display = 'flex';
+    ds.innerHTML = `<div style="color:#94A3B8;">${dichHtml('pos.reconciliation.assign_loading')}</div>`;
+
+    try {
+        const res = await apiCall(`/orders?shop_id=${currentShopId}&status=DEBT`);
+        const donNo = (res.orders || []).filter(o => Number(o.remaining || o.total_amount || 0) > 0);
+        if (!donNo.length) {
+            ds.innerHTML = `<div style="color:#94A3B8;">${dichHtml('pos.reconciliation.assign_none')}</div>`;
+            return;
+        }
+        ds.innerHTML = donNo.map(o => {
+            const conNo = dinhDangTien(Number(o.remaining || o.total_amount || 0));
+            const khach = o.customer_name || o.customer_phone || '—';
+            return `<div style="border-bottom:1px solid #334155; padding:0.65rem 0; display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
+    <div style="flex:1; min-width:0;">
+        <strong style="color:#fff;">#${o.id}</strong>
+        <div style="color:#94A3B8; font-size:0.8rem;">${escapeHtml(khach)} · ${dich('pos.reconciliation.order_remaining', { amount: conNo })}</div>
+    </div>
+    <button onclick="ganKhoanVaoDonNo(${o.id})" style="padding:0.35rem 0.8rem; white-space:nowrap;">${dichHtml('pos.reconciliation.assign')}</button>
+</div>`;
+        }).join('');
+    } catch (e) {
+        ds.innerHTML = `<div style="color:#EF4444;">${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function ganKhoanVaoDonNo(orderId) {
+    const ctx = _doiSoatDangChon;
+    if (!ctx) return;
+    const dongY = await xacNhan(
+        dich('pos.reconciliation.assign_title'),
+        dich('pos.reconciliation.assign_confirm', { amount: dinhDangTien(ctx.soTien), id: orderId })
+    );
+    if (!dongY) return;
+    // Xóa context NGAY để tránh double-submit nếu API chậm hoặc retry nhanh.
+    _doiSoatDangChon = null;
+    try {
+        await apiCall(`/qr-reconciliation/events/${ctx.eventId}/actions`, 'POST', {
+            action: 'MAP_AND_APPLY',
+            target_intent_id: orderId,
+            operation_id: ctx.eventId
+        });
+        showToast(dich('pos.reconciliation.assign_success'));
+        dongModalGanDonNo();
+        await moModalDoiSoat();
+    } catch (e) {
+        showToast(dich('pos.reconciliation.assign_error', { reason: e.message }));
+    }
+}
+
+async function moModalDoiSoat() {
+    const modal = document.getElementById('doiSoatModal');
+    const ds = document.getElementById('doiSoatDanhSach');
+    if (!modal || !ds) return;
+    modal.style.display = 'flex';
+    ds.innerHTML = `<div style="color:#94A3B8;">${dichHtml('pos.reconciliation.loading')}</div>`;
+    try {
+        const res = await apiCall('/qr-reconciliation/events');
+        const items = res.items || [];
+        const tomTat = document.getElementById('doiSoatTomTat');
+        if (tomTat) {
+            tomTat.innerText = dich('pos.reconciliation.summary', { count: items.length });
+        }
+        if (!items.length) {
+            ds.innerHTML = `<div style="color:#94A3B8;">${dichHtml('pos.reconciliation.empty')}</div>`;
+            return;
+        }
+        ds.innerHTML = items.map(ev => {
+            const soTien = Number(ev.amount) || 0;
+            const ngay = ev.received_at
+                ? dinhDangNgayGio(ev.received_at)
+                : '';
+            const taiKhoan = ev.account_number || '—';
+            const nganHang = ev.bank_code || '';
+            const maThamChieu = ev.canonical_reference || ev.raw_id || '';
+            return `
+<div style="border-bottom:1px solid #334155; padding:0.7rem 0;">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:0.5rem;">
+        <div style="flex:1; min-width:0;">
+            <strong style="color:#fff;">${dinhDangTien(soTien)}</strong>
+            <div style="color:#94A3B8; font-size:0.78rem;">${ngay}</div>
+            <div style="color:#94A3B8; font-size:0.78rem; margin-top:0.2rem;">
+                ${nganHang ? escapeHtml(nganHang) + ' · ' : ''}${escapeHtml(taiKhoan)}
+            </div>
+            ${maThamChieu ? `<div style="color:#64748B; font-size:0.75rem; margin-top:0.15rem;">Ref: ${escapeHtml(maThamChieu)}</div>` : ''}
+        </div>
+        <div style="display:flex; gap:0.4rem; flex-shrink:0;">
+            <button onclick="doiSoatGanDon(${ev.id}, ${soTien})" style="padding:0.4rem 0.7rem; white-space:nowrap;">
+                ${dichHtml('pos.reconciliation.assign')}
+            </button>
+            <button onclick="doiSoatTuChoi(${ev.id})" class="btn-outline" style="padding:0.4rem 0.7rem;">
+                ${dichHtml('pos.reconciliation.reject')}
+            </button>
+        </div>
+    </div>
+</div>`;
+        }).join('');
+    } catch (e) {
+        ds.innerHTML = `<div style="color:#EF4444;">${escapeHtml(e.message)}</div>`;
+    }
+}
+
+/** Mở modal chọn đơn ghi nợ để gán khoản tiền ngân hàng. */
+async function doiSoatGanDon(eventId, soTien) {
+    _doiSoatDangChon = { eventId, soTien };
+    dongModalDoiSoat();
+    await moModalGanDonNo();
+}
+
+async function doiSoatTuChoi(eventId) {
+    const dongY = await xacNhan(
+        dich('pos.reconciliation.reject_title'),
+        dich('pos.reconciliation.reject_confirm')
+    );
+    if (!dongY) return;
+    try {
+        await apiCall(`/qr-reconciliation/events/${eventId}/actions`, 'POST', {
+            expected_state_version: 0,
+            action: 'REJECT_NOT_OURS'
+        });
+        showToast(dich('pos.reconciliation.rejected'));
+        await moModalDoiSoat();
+    } catch (e) {
+        showToast(e.message);
+    }
 }
 
 // ===== F2: khách trả hàng =====
@@ -3679,6 +4195,7 @@ function capNhatNgonNguPOS() {
                 : '—';
         capNhatChenhLechKetCa();
     }
+    _qr1RefreshLabels();
 }
 
 document.addEventListener('fselling:localechange', capNhatNgonNguPOS);
