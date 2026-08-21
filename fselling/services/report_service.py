@@ -25,11 +25,16 @@ from ..dependencies import (
     require_staff_permission,
 )
 from . import (
+    clearance_service,
+    customer_service,
     expense_service,
+    forecast_service,
+    offline_service,
     order_service,
     return_service,
     shift_service,
     subscription_service,
+    supplier_service,
     write_off_service,
 )
 
@@ -57,6 +62,184 @@ def _paid_revenue(db: Session, shop_id: int) -> int:
         .all()
     )
     return _sum_python(value for (value,) in values)
+
+
+def _action_center_unapplied_event_count(db: Session, shop_id: int) -> int:
+    return int(
+        db.query(models.BankWebhookEvent)
+        .filter(
+            models.BankWebhookEvent.shop_id == shop_id,
+            models.BankWebhookEvent.disposition == "UNAPPLIED",
+        )
+        .count()
+    )
+
+
+def _action_center_overdue_order_count(
+    db: Session, shop_id: int, today_iso: str
+) -> int:
+    return int(
+        db.query(models.PurchaseOrder)
+        .filter(
+            models.PurchaseOrder.shop_id == shop_id,
+            models.PurchaseOrder.status == supplier_service.ORDER_ORDERED,
+            models.PurchaseOrder.expected_date.isnot(None),
+            models.PurchaseOrder.expected_date < today_iso,
+        )
+        .count()
+    )
+
+
+def _action_center_item(
+    kind: str,
+    severity: str,
+    count: int,
+    **metrics: int,
+) -> Dict[str, Any]:
+    return {
+        "kind": kind,
+        "severity": severity,
+        "count": int(count),
+        **{key: int(value) for key, value in metrics.items()},
+    }
+
+
+def action_center(
+    db: Session, current_user: models.User, shop_id: int
+) -> Dict[str, Any]:
+    """Computed owner work queue; every downstream service remains read-only."""
+    shop = require_shop_access(db, shop_id, current_user)
+    require_cost_visibility(shop, current_user)
+    today = _today_vietnam()
+    items: List[Dict[str, Any]] = []
+
+    reconciliation = seller_dashboard(
+        db,
+        current_user,
+        shop_id,
+        page=1,
+        per_page=1,
+        reconciliation_only=True,
+    )
+    reconciliation_count = int(reconciliation.get("reconciliation_count") or 0)
+    if reconciliation_count:
+        items.append(_action_center_item(
+            "ORDER_RECONCILIATION", "CRITICAL", reconciliation_count
+        ))
+
+    unapplied_count = _action_center_unapplied_event_count(db, shop_id)
+    if unapplied_count:
+        items.append(_action_center_item(
+            "UNAPPLIED_BANK_EVENTS", "CRITICAL", unapplied_count
+        ))
+
+    offline = offline_service.danh_sach_can_xu_ly(db, shop_id)
+    if offline:
+        items.append(_action_center_item(
+            "OFFLINE_ISSUES",
+            "CRITICAL",
+            len(offline),
+            detail_count=sum(len(row.get("issue_details") or []) for row in offline),
+        ))
+
+    clearance = clearance_service.de_xuat_xa_hang(db, current_user, shop_id)
+    expiry_warning_days = int(clearance.get("so_ngay_canh_bao_han") or 7)
+    stock_risk = [
+        row
+        for row in clearance.get("danh_sach", [])
+        if int(row.get("so_luong_da_het_han") or 0) > 0
+        or (
+            row.get("so_ngay_con_han") is not None
+            and int(row["so_ngay_con_han"]) <= expiry_warning_days
+        )
+    ]
+    if stock_risk:
+        expired_quantity = sum(
+            int(row.get("so_luong_da_het_han") or 0) for row in stock_risk
+        )
+        items.append(_action_center_item(
+            "STOCK_RISK",
+            "CRITICAL" if expired_quantity else "ATTENTION",
+            len(stock_risk),
+            quantity=expired_quantity,
+        ))
+
+    forecast = forecast_service.du_bao_nhap_hang(db, current_user, shop_id)
+    reorder = [
+        row for row in forecast.get("danh_sach", [])
+        if int(row.get("can_nhap") or 0) > 0
+    ]
+    if reorder:
+        items.append(_action_center_item(
+            "REORDER",
+            "ATTENTION",
+            len(reorder),
+            quantity=sum(int(row.get("can_nhap") or 0) for row in reorder),
+            incoming_quantity=sum(int(row.get("dang_ve") or 0) for row in reorder),
+        ))
+
+    overdue_orders = _action_center_overdue_order_count(db, shop_id, today.isoformat())
+    if overdue_orders:
+        items.append(_action_center_item(
+            "OVERDUE_PURCHASE_ORDERS", "ATTENTION", overdue_orders
+        ))
+
+    reminders = expense_service.reminders(db, current_user, shop_id)
+    reminder_items = reminders.get("items", [])
+    if reminder_items:
+        due_now = sum(
+            1 for row in reminder_items
+            if int(row.get("day_of_month") or 1) <= today.day
+        )
+        items.append(_action_center_item(
+            "EXPENSE_REMINDERS",
+            "ATTENTION" if due_now else "PLAN",
+            len(reminder_items),
+            amount_vnd=int(reminders.get("total_missing") or 0),
+            due_count=due_now,
+        ))
+
+    suppliers = supplier_service.list_suppliers(
+        db, current_user, shop_id
+    ).get("suppliers", [])
+    overdue_suppliers = [
+        row for row in suppliers if int(row.get("overdue_amount") or 0) > 0
+    ]
+    if overdue_suppliers:
+        items.append(_action_center_item(
+            "SUPPLIER_OVERDUE",
+            "ATTENTION",
+            len(overdue_suppliers),
+            amount_vnd=sum(
+                int(row.get("overdue_amount") or 0) for row in overdue_suppliers
+            ),
+        ))
+
+    customers = customer_service.list_customers(
+        db, current_user, shop_id, include_inactive=True
+    )
+    debt_customers = [
+        row for row in customers if int(row.get("debt_amount") or 0) > 0
+    ]
+    if debt_customers:
+        items.append(_action_center_item(
+            "CUSTOMER_DEBT",
+            "PLAN",
+            len(debt_customers),
+            amount_vnd=sum(int(row.get("debt_amount") or 0) for row in debt_customers),
+        ))
+
+    summary = {"total": 0, "critical": 0, "attention": 0, "plan": 0}
+    for item in items:
+        count = int(item["count"])
+        summary["total"] += count
+        summary[item["severity"].lower()] += count
+    return {
+        "shop_id": int(shop_id),
+        "generated_at": datetime.now(_VIETNAM_TZ).isoformat(timespec="seconds"),
+        "summary": summary,
+        "items": items,
+    }
 
 
 DEFAULT_PAGE_SIZE = 50

@@ -242,8 +242,69 @@
             overflow-y: auto;
         }
 
+        .action-center-summary,
+        .action-center-list {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.85rem;
+        }
+        .action-center-summary { margin: 1.1rem 0; }
+        .action-center-summary-card,
+        .action-center-card {
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            background: #fff;
+        }
+        .action-center-summary-card { padding: 0.85rem 1rem; }
+        .action-center-summary-card small {
+            display: block;
+            color: var(--text-muted);
+            margin-bottom: 0.25rem;
+        }
+        .action-center-summary-card strong { font-size: 1.45rem; }
+        .action-center-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .action-center-card {
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+            padding: 1rem;
+            border-left-width: 5px;
+        }
+        .action-center-card.critical { border-left-color: #DC2626; }
+        .action-center-card.attention { border-left-color: #D97706; }
+        .action-center-card.plan { border-left-color: #2563EB; }
+        .action-center-card-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 0.75rem;
+        }
+        .action-center-card h4 { margin: 0; }
+        .action-center-card p {
+            margin: 0;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+        .action-center-severity {
+            flex: 0 0 auto;
+            padding: 0.2rem 0.5rem;
+            border-radius: 999px;
+            background: #F1F5F9;
+            font-size: 0.72rem;
+            font-weight: 700;
+        }
+        .action-center-card button { align-self: flex-start; margin-top: auto; }
+        .action-center-state {
+            display: none;
+            padding: 2rem 1rem;
+            text-align: center;
+            color: var(--text-muted);
+        }
+
         @media (max-width: 760px) {
-            .doi-soat-list { grid-template-columns: 1fr; }
+            .doi-soat-list,
+            .action-center-summary,
+            .action-center-list { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 480px) {
@@ -295,6 +356,10 @@
         <!-- Tabs Header -->
         <div class="tabs-wrapper">
             <button class="tab-btn active" data-main-tab="dashboard" onclick="switchTab('dashboard', this)"><i class="ph ph-chart-bar"></i> <span data-i18n="seller.tabs.dashboard">Thống Kê</span></button>
+            <button class="tab-btn" id="tabActionCenter" data-main-tab="action-center" onclick="switchTab('action-center', this)" style="display:none;">
+                <i class="ph ph-list-checks"></i> <span data-i18n="seller.tabs.action_center">Cần xử lý</span>
+                <span id="actionCenterBadge" class="doi-soat-badge" data-i18n-aria-label="seller.action_center.badge_aria">0</span>
+            </button>
             <button class="tab-btn" id="tabDoiSoat" data-main-tab="reconciliation" onclick="switchTab('reconciliation', this)">
                 <i class="ph ph-warning-diamond"></i> <span data-i18n="seller.tabs.reconciliation">Cần Đối Soát</span>
                 <span id="doiSoatBadge" class="doi-soat-badge" data-i18n-aria-label="seller.reconciliation.badge_aria">0</span>
@@ -439,6 +504,33 @@
                 <p style="color: var(--text-muted); margin-bottom: 1.5rem;" data-i18n="seller.shops.none_help">Vui lòng vào mục Cài đặt để tạo cửa hàng đầu tiên.</p>
                 <button onclick="switchTab('settings')" data-i18n="seller.shops.go_settings">Đi tới Cài Đặt</button>
             </div>
+        </div>
+
+        <!-- Action Center chỉ tổng hợp và điều hướng; mọi mutation vẫn ở màn gốc. -->
+        <div id="action-center" class="tab-content glass-card">
+            <div class="doi-soat-toolbar">
+                <div>
+                    <h3 style="margin-bottom:0.35rem;"><i class="ph ph-list-checks"></i> <span data-i18n="seller.action_center.title">Cần xử lý hôm nay</span></h3>
+                    <p style="margin:0; color:var(--text-muted); font-size:0.88rem; line-height:1.55;" data-i18n="seller.action_center.description">Một nơi để thấy việc cần chú ý; bấm xem sẽ mở đúng màn xử lý và không tự thay đổi dữ liệu.</p>
+                </div>
+                <button class="btn-outline" type="button" onclick="loadActionCenter()">
+                    <i class="ph ph-arrows-clockwise"></i> <span data-i18n="seller.actions.reload">Tải lại</span>
+                </button>
+            </div>
+
+            <div class="action-center-summary">
+                <div class="action-center-summary-card"><small data-i18n="seller.action_center.critical">Khẩn cấp</small><strong id="actionCenterCritical">0</strong></div>
+                <div class="action-center-summary-card"><small data-i18n="seller.action_center.attention">Cần chú ý</small><strong id="actionCenterAttention">0</strong></div>
+                <div class="action-center-summary-card"><small data-i18n="seller.action_center.plan">Kế hoạch</small><strong id="actionCenterPlan">0</strong></div>
+            </div>
+
+            <div id="actionCenterLoading" class="action-center-state"><i class="ph ph-spinner-gap"></i> <span data-i18n="seller.action_center.loading">Đang tổng hợp việc cần xử lý...</span></div>
+            <div id="actionCenterError" class="action-center-state">
+                <i class="ph ph-warning-circle"></i> <span id="actionCenterErrorText" data-i18n="seller.action_center.error">Không tải được danh sách.</span>
+                <button class="btn-outline" type="button" onclick="loadActionCenter()" data-i18n="seller.action_center.retry">Thử lại</button>
+            </div>
+            <div id="actionCenterEmpty" class="action-center-state"><i class="ph ph-check-circle" style="display:block; color:var(--success); font-size:2.2rem; margin-bottom:0.45rem;"></i><span data-i18n="seller.action_center.empty">Hiện không có việc nào cần xử lý.</span></div>
+            <div id="actionCenterList" class="action-center-list"></div>
         </div>
 
         <!-- TAB: CẦN ĐỐI SOÁT -->
@@ -2283,7 +2375,7 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260821-purchase-orders-r1"></script>
+    <script src="/js/locales/seller.js?v=20260821-action-center-r1"></script>
     <script src="/js/locales/subscriptions.js?v=20260807-goi-cuoc-f3"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
 <script src="/js/api.js?v=20260812-i09-f1-c1&g=20260813-i09-g2h2"></script>
@@ -2291,7 +2383,7 @@
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260821-purchase-orders-r1"></script>
+    <script src="/js/seller.js?v=20260821-action-center-r1"></script>
     <script src="/js/purchasing.js?v=20260821-purchase-orders-r1"></script>
     <!-- Nạp SAU seller.js: expenses.js dùng apiCall/showToast/showCustomConfirm
          và các helper định dạng tiền của trang. -->

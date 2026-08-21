@@ -216,6 +216,9 @@ ROUTES_BO_SUNG = {
     # và log máy chủ. CHỈ ĐỌC: nó chỉ chọn một báo cáo có sẵn rồi gọi lại, không
     # tự sinh câu lệnh và không ghi gì.
     ("POST", "/api/assistant/{shop_id}"),
+    # Action Center R1: một GET read-only tổng hợp các nguồn sự thật hiện có;
+    # không notification table, background job hay mutation tự động.
+    ("GET", "/api/action-center/{shop_id}"),
 }
 
 

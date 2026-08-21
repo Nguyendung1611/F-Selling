@@ -180,8 +180,8 @@ def test_module_nap_sau_seller_va_moi_file_dung_dung_phien_ban():
     html = _read("static/seller.html")
     purchasing_version = "20260821-purchase-orders-r1"
     cashflow_version = "20260808-dong-tien-k1"
-    locale_version = "20260821-purchase-orders-r1"
-    seller_version = "20260821-purchase-orders-r1"
+    locale_version = "20260821-action-center-r1"
+    seller_version = "20260821-action-center-r1"
 
     expected = (
         f"/css/seller.css?v={cashflow_version}",

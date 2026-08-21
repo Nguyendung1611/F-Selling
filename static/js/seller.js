@@ -96,6 +96,19 @@ let loyaltyProgramCache = null;
 let loyaltyProgramShopId = null;
 let loyaltyRequestId = 0;
 let loyaltySaveBusy = false;
+let actionCenterRequestId = 0;
+
+const ACTION_CENTER_TARGETS = Object.freeze({
+    ORDER_RECONCILIATION: Object.freeze({ tab: 'reconciliation', icon: 'ph-warning-diamond' }),
+    UNAPPLIED_BANK_EVENTS: Object.freeze({ tab: 'reconciliation', icon: 'ph-bank' }),
+    OFFLINE_ISSUES: Object.freeze({ tab: 'reconciliation', icon: 'ph-cloud-slash' }),
+    STOCK_RISK: Object.freeze({ tab: 'warehouse', subTab: 'expiry', icon: 'ph-calendar-x' }),
+    REORDER: Object.freeze({ tab: 'warehouse', subTab: 'forecast', icon: 'ph-trend-up' }),
+    OVERDUE_PURCHASE_ORDERS: Object.freeze({ tab: 'purchasing', subTab: 'orders', icon: 'ph-truck' }),
+    EXPENSE_REMINDERS: Object.freeze({ tab: 'cashflow', icon: 'ph-calendar-dots' }),
+    SUPPLIER_OVERDUE: Object.freeze({ tab: 'purchasing', subTab: 'suppliers', icon: 'ph-hand-coins' }),
+    CUSTOMER_DEBT: Object.freeze({ tab: 'customers', icon: 'ph-users' })
+});
 
 function dinhDangSoSeller(value, options = {}) {
     return window.FSellingI18n?.formatNumber(value, options)
@@ -157,6 +170,7 @@ function xoaDuLieuShopCuKhoiGiaoDien() {
     productsRequestId += 1;
     vouchersRequestId += 1;
     loyaltyRequestId += 1;
+    actionCenterRequestId += 1;
     loyaltyProgramCache = null;
     loyaltyProgramShopId = null;
     window.FSellingSubscriptions?.resetSellerForShopChange?.();
@@ -182,6 +196,14 @@ function xoaDuLieuShopCuKhoiGiaoDien() {
     if (productList) productList.innerHTML = '';
     const voucherList = document.getElementById('voucherList');
     if (voucherList) voucherList.innerHTML = '';
+    const actionList = document.getElementById('actionCenterList');
+    if (actionList) actionList.innerHTML = '';
+    const actionBadge = document.getElementById('actionCenterBadge');
+    if (actionBadge) actionBadge.style.display = 'none';
+    ['actionCenterCritical', 'actionCenterAttention', 'actionCenterPlan'].forEach(id => {
+        const value = document.getElementById(id);
+        if (value) value.textContent = '0';
+    });
 }
 
 function batDauDungShopHienTai() {
@@ -205,6 +227,10 @@ function renderBankOptions() {
 }
 
 function switchTab(tabId, buttonEl = null) {
+    if (tabId === 'action-center' && MY_ROLE !== 'SELLER') {
+        showToast(t('seller.action_center.owner_only'));
+        return;
+    }
     if (tabId === 'loyalty' && MY_ROLE !== 'SELLER') {
         showToast(t('seller.loyalty.owner_only'));
         return;
@@ -231,6 +257,7 @@ function switchTab(tabId, buttonEl = null) {
     tab.classList.add('active');
     const nutTab = buttonEl || document.querySelector(`.tab-btn[data-main-tab="${tabId}"]`);
     if (nutTab) nutTab.classList.add('active');
+    if (tabId === 'action-center') loadActionCenter();
     if (tabId === 'reconciliation') loadDoiSoat();
     if (tabId === 'assistant') moTroLy();
     if (tabId === 'nhatky') loadNhatKy();
@@ -244,6 +271,115 @@ function switchTab(tabId, buttonEl = null) {
         window.FSellingSubscriptions?.loadSeller?.(currentShopId, currentShopGeneration);
     }
     window.FSellingSubscriptions?.onSellerTabChange?.(tabId);
+}
+
+function actionCenterMetric(value) {
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number >= 0 ? number : 0;
+}
+
+function actionCenterDescription(item) {
+    return t(`seller.action_center.kind.${item.kind}.description`, {
+        count: dinhDangSoSeller(actionCenterMetric(item.count)),
+        detailCount: dinhDangSoSeller(actionCenterMetric(item.detail_count)),
+        quantity: dinhDangSoSeller(actionCenterMetric(item.quantity)),
+        incoming: dinhDangSoSeller(actionCenterMetric(item.incoming_quantity)),
+        amount: dinhDangTienDoiSoat(actionCenterMetric(item.amount_vnd))
+    });
+}
+
+function renderActionCenter(data) {
+    const list = document.getElementById('actionCenterList');
+    const empty = document.getElementById('actionCenterEmpty');
+    const error = document.getElementById('actionCenterError');
+    const loading = document.getElementById('actionCenterLoading');
+    if (!list || !empty || !error || !loading) return;
+
+    const items = (Array.isArray(data?.items) ? data.items : []).filter(item => (
+        item && Object.prototype.hasOwnProperty.call(ACTION_CENTER_TARGETS, item.kind)
+    ));
+    const summary = data?.summary || {};
+    const values = {
+        critical: actionCenterMetric(summary.critical),
+        attention: actionCenterMetric(summary.attention),
+        plan: actionCenterMetric(summary.plan),
+        total: actionCenterMetric(summary.total)
+    };
+    document.getElementById('actionCenterCritical').textContent = dinhDangSoSeller(values.critical);
+    document.getElementById('actionCenterAttention').textContent = dinhDangSoSeller(values.attention);
+    document.getElementById('actionCenterPlan').textContent = dinhDangSoSeller(values.plan);
+    const badge = document.getElementById('actionCenterBadge');
+    if (badge) {
+        badge.textContent = dinhDangSoSeller(values.total);
+        badge.style.display = values.total > 0 ? 'inline-flex' : 'none';
+        badge.title = t('seller.action_center.badge_aria');
+    }
+
+    loading.style.display = 'none';
+    error.style.display = 'none';
+    empty.style.display = items.length ? 'none' : 'block';
+    list.innerHTML = '';
+    for (const item of items) {
+        const target = ACTION_CENTER_TARGETS[item.kind];
+        const severity = ['CRITICAL', 'ATTENTION', 'PLAN'].includes(item.severity)
+            ? item.severity
+            : 'PLAN';
+        const severityKey = severity.toLowerCase();
+        const title = t(`seller.action_center.kind.${item.kind}.title`);
+        list.insertAdjacentHTML('beforeend', `<article class="action-center-card ${severityKey}">
+            <div class="action-center-card-head">
+                <h4><i class="ph ${target.icon}"></i> ${escapeHtml(title)}</h4>
+                <span class="action-center-severity">${escapeHtml(t(`seller.action_center.${severityKey}`))}</span>
+            </div>
+            <p>${escapeHtml(actionCenterDescription(item))}</p>
+            <button class="btn-outline" type="button" data-action-center-kind="${item.kind}">${escapeHtml(t('seller.action_center.view'))}</button>
+        </article>`);
+    }
+    list.querySelectorAll('[data-action-center-kind]').forEach(button => {
+        button.addEventListener('click', () => openActionCenterItem(button.dataset.actionCenterKind));
+    });
+}
+
+async function loadActionCenter() {
+    if (MY_ROLE !== 'SELLER') return;
+    const shopId = Number(currentShopId);
+    if (!Number.isInteger(shopId) || shopId <= 0) return;
+    const generation = currentShopGeneration;
+    const requestId = ++actionCenterRequestId;
+    const loading = document.getElementById('actionCenterLoading');
+    const error = document.getElementById('actionCenterError');
+    const empty = document.getElementById('actionCenterEmpty');
+    if (loading) loading.style.display = 'block';
+    if (error) error.style.display = 'none';
+    if (empty) empty.style.display = 'none';
+    try {
+        const data = await apiCall(`/action-center/${shopId}`);
+        if (
+            Number(currentShopId) !== shopId
+            || generation !== currentShopGeneration
+            || requestId !== actionCenterRequestId
+        ) return;
+        renderActionCenter(data);
+    } catch (exception) {
+        if (
+            Number(currentShopId) !== shopId
+            || generation !== currentShopGeneration
+            || requestId !== actionCenterRequestId
+        ) return;
+        if (loading) loading.style.display = 'none';
+        if (error) error.style.display = 'block';
+        const message = document.getElementById('actionCenterErrorText');
+        if (message) message.textContent = exception?.message || t('seller.action_center.error');
+    }
+}
+
+function openActionCenterItem(kind) {
+    const target = ACTION_CENTER_TARGETS[kind];
+    if (!target) return;
+    switchTab(target.tab, document.querySelector(`.tab-btn[data-main-tab="${target.tab}"]`));
+    if (target.tab === 'warehouse' && target.subTab) switchWarehouseSubTab(target.subTab);
+    if (target.tab === 'purchasing' && target.subTab) switchPurchasingSubTab(target.subTab);
+    if (target.tab === 'customers') loadCustomers();
 }
 
 // Live Preview Logic
@@ -419,6 +555,7 @@ function doiCuaHangChung(giaTri) {
     // năm màn hình không ai đang nhìn.
     const tab = document.querySelector('.tab-content.active')?.id;
     if (tab === 'dashboard') loadDashboardShop(id);
+    else if (tab === 'action-center') loadActionCenter();
     else if (tab === 'reconciliation') loadDoiSoat();
     else if (tab === 'nhatky') loadNhatKy();
     else if (tab === 'customers') loadCustomers();
@@ -1435,6 +1572,9 @@ function loadDataForCurrentShop() {
         loadProducts();
         window.FSellingPurchasing?.load?.();
         return;
+    }
+    if (!document.getElementById('action-center')?.classList.contains('active')) {
+        loadActionCenter();
     }
     const canReport = coQuyenNhanVien('REPORT');
     const canInventory = coQuyenNhanVien('INVENTORY');
@@ -4560,6 +4700,8 @@ async function saveLoyaltyProgram() {
 
 // ===== C1d: phân biệt vai trò SELLER / STAFF trên giao diện =====
 function applyRoleUI() {
+    const tabActionCenter = document.getElementById('tabActionCenter');
+    if (tabActionCenter && MY_ROLE === 'SELLER') tabActionCenter.style.display = '';
     const tabLoyalty = document.getElementById('tabLoyalty');
     if (tabLoyalty && MY_ROLE === 'SELLER') tabLoyalty.style.display = '';
     const tabPurchasing = document.getElementById('tabPurchasing');

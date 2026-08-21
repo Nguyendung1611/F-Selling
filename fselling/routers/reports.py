@@ -36,6 +36,16 @@ def get_seller_dashboard(
     )
 
 
+@router.get("/api/action-center/{shop_id}")
+def get_action_center(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Read-only owner workspace assembled from existing source-of-truth data."""
+    return report_service.action_center(db, current_user, shop_id)
+
+
 @router.get("/api/logs/shop/{shop_id}")
 def nhat_ky_shop(
     shop_id: int,
