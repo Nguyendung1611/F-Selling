@@ -39,6 +39,8 @@ from .qr_payment import (
 from .shift import CashMovement, CashShift
 from .shop import Shop
 from .supplier import (
+    PurchaseOrder,
+    PurchaseOrderItem,
     PurchaseReceipt,
     PurchaseReceiptItem,
     Supplier,
@@ -96,6 +98,8 @@ __all__ = [
     "Supplier",
     "PurchaseReceipt",
     "PurchaseReceiptItem",
+    "PurchaseOrder",
+    "PurchaseOrderItem",
     "SupplierPayableEntry",
     "SupplierPayment",
     "SupplierPaymentAllocation",

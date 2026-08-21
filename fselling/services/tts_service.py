@@ -30,6 +30,7 @@ from ..core.config import (
     TTS_CACHE_DIR,
     TTS_MAX_CHARS,
     TTS_PROVIDER,
+    TTS_SERVER_ENABLED,
     TTS_VOICE,
     log_to_file,
 )
@@ -39,7 +40,7 @@ _TIMEOUT = 15
 
 
 def dang_bat() -> bool:
-    return bool(TTS_PROVIDER and TTS_API_KEY)
+    return bool(TTS_SERVER_ENABLED and TTS_PROVIDER and TTS_API_KEY)
 
 
 def _kiem_tra_cau_hinh() -> None:
@@ -47,7 +48,7 @@ def _kiem_tra_cau_hinh() -> None:
         raise HTTPException(
             status_code=503,
             detail=tr(
-                "Server chưa cấu hình giọng đọc (thiếu TTS_PROVIDER/TTS_API_KEY)"
+                "Server chưa cấu hình hoặc chưa bật giọng đọc"
             ),
         )
     if TTS_PROVIDER == "azure" and not TTS_AZURE_REGION:

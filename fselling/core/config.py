@@ -64,9 +64,8 @@ TTS_CACHE_DIR: str = os.getenv("TTS_CACHE_DIR") or os.path.join(
 # hỏi thường gặp ngay tại máy chủ: 0 đồng, không ra mạng, dưới 50ms. Gemini chỉ
 # vào cuộc khi bộ đó chịu thua.
 #
-# Chưa cấu hình key thì tính năng TẮT HẲN: câu lạ nhận câu trả lời "chưa hiểu"
-# kèm gợi ý, đúng như trước khi có phần này. Không có chế độ "bật một nửa", và
-# quan trọng hơn: không có đường nào phát sinh chi phí ngoài ý muốn.
+# P0A thêm kill switch riêng, mặc định OFF. Chỉ có key vẫn chưa đủ để mở kết
+# nối ngoài; câu lạ tiếp tục nhận câu trả lời "chưa hiểu" như trước.
 #
 # Gemini KHÔNG nhận dữ liệu cửa hàng. Nó chỉ thấy câu hỏi và danh sách tên báo
 # cáo, rồi trả về một tên. Mọi con số vẫn do service trong app tính.
@@ -146,6 +145,12 @@ def _positive_int_env(name: str, default: int) -> int:
 def _bool_env_fail_closed(name: str) -> bool:
     """Chỉ giá trị bật tường minh mới mở capability nhạy cảm."""
     return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Hai capability ngoài mạng luôn OFF trừ khi operator bật tường minh. Credentials
+# có thể còn trong môi trường deploy nhưng tự chúng không được phép mở kết nối.
+GEMINI_ENABLED: bool = _bool_env_fail_closed("GEMINI_ENABLED")
+TTS_SERVER_ENABLED: bool = _bool_env_fail_closed("TTS_SERVER_ENABLED")
 
 
 # I10-B sales-QR rollout.  REPORT_ONLY is deliberately only a capability

@@ -16,6 +16,7 @@
     ]);
     const PENDING_OPERATION_CONFIG = Object.freeze({
         supplier_create: 'pendingSupplierCreate',
+        order_create: 'pendingOrderCreate',
         receipt_create: 'pendingReceiptCreate',
         receipt_confirm: 'pendingReceiptConfirm',
         supplier_payment: 'pendingSupplierPayment'
@@ -39,6 +40,13 @@
         receipts: [],
         receiptShopId: null,
         receiptRequestId: 0,
+        orders: [],
+        orderShopId: null,
+        orderRequestId: 0,
+        editingOrderId: null,
+        orderLines: [],
+        nextOrderLineKey: 1,
+        receiptPurchaseOrderId: null,
         editingSupplierId: null,
         editingReceiptId: null,
         receiptLines: [],
@@ -49,10 +57,12 @@
         confirmReceipt: null,
         supplierBusy: false,
         receiptBusy: false,
+        orderBusy: false,
         confirmBusy: false,
         paymentBusy: false,
         pendingSupplierCreate: null,
         pendingReceiptCreate: null,
+        pendingOrderCreate: null,
         pendingReceiptConfirm: null,
         pendingSupplierPayment: null
     };
@@ -279,6 +289,7 @@
     function hasUnknownOperation() {
         return Boolean(
             state.pendingSupplierCreate
+            || state.pendingOrderCreate
             || state.pendingReceiptCreate
             || state.pendingReceiptConfirm
             || state.pendingSupplierPayment
@@ -289,6 +300,7 @@
         setGlobalShopLocked(
             hasUnknownOperation()
             || state.supplierBusy
+            || state.orderBusy
             || state.receiptBusy
             || state.confirmBusy
             || state.paymentBusy
@@ -329,10 +341,20 @@
         return receipt?.code || receipt?.receipt_number || `PN-${receipt?.id || '?'}`;
     }
 
+    function orderStatus(order) {
+        return String(order?.status || 'DRAFT').toUpperCase();
+    }
+
+    function orderCode(order) {
+        return `DH-${order?.id || '?'}`;
+    }
+
     function statusBadge(status) {
         const normalized = String(status || '').toUpperCase();
         const config = {
             DRAFT: ['seller.purchasing.status_draft', 'is-draft'],
+            ORDERED: ['seller.purchasing.status_ordered', 'is-confirmed'],
+            RECEIVED: ['seller.purchasing.status_received', 'is-confirmed'],
             POSTED: ['seller.purchasing.status_confirmed', 'is-confirmed'],
             CONFIRMED: ['seller.purchasing.status_confirmed', 'is-confirmed'],
             CANCELLED: ['seller.purchasing.status_cancelled', 'is-cancelled']
@@ -382,6 +404,7 @@
         const payload = pending.payload;
         const savedLines = Array.isArray(pending.lines) ? pending.lines : [];
         state.editingReceiptId = null;
+        state.receiptPurchaseOrderId = Number(payload.purchase_order_id) || null;
         state.receiptLines = (Array.isArray(payload.items) ? payload.items : [])
             .map((item, index) => {
                 const saved = savedLines[index] || {};
@@ -408,6 +431,29 @@
         renderReceiptLines();
         lockReceiptEditor(true, true);
         $('purchaseReceiptEditor').scrollIntoView({ behavior: 'auto', block: 'start' });
+    }
+
+    function restoreOrderCreateUi(pending) {
+        const payload = pending.payload;
+        const savedLines = Array.isArray(pending.lines) ? pending.lines : [];
+        state.editingOrderId = null;
+        state.orderLines = (Array.isArray(payload.items) ? payload.items : []).map((item, index) => ({
+            line_key: index + 1,
+            product_id: Number(item.product_id),
+            product_name: savedLines[index]?.product_name || '',
+            product_code: savedLines[index]?.product_code || '',
+            quantity: Number(item.quantity)
+        }));
+        state.nextOrderLineKey = state.orderLines.length + 1;
+        fillOrderSupplierSelect();
+        $('purchaseOrderSupplierSelect').value = String(payload.supplier_id || '');
+        $('purchaseOrderExpectedDate').value = payload.expected_date || '';
+        $('purchaseOrderNote').value = payload.note || '';
+        $('purchaseOrderFormTitle').textContent = t('seller.purchasing.new_order');
+        setActionLabel('[data-purchase-order-action-label="save"]', 'common.retry');
+        $('purchaseOrderEditor').style.display = 'block';
+        renderOrderLines();
+        lockOrderEditor(true, true);
     }
 
     function restoreReceiptConfirmUi(pending) {
@@ -449,6 +495,7 @@
         const shopId = selectedShopId();
         const pendingEntries = [
             ['supplier_create', state.pendingSupplierCreate, restoreSupplierCreateUi],
+            ['order_create', state.pendingOrderCreate, restoreOrderCreateUi],
             ['receipt_create', state.pendingReceiptCreate, restoreReceiptCreateUi],
             ['receipt_confirm', state.pendingReceiptConfirm, restoreReceiptConfirmUi],
             ['supplier_payment', state.pendingSupplierPayment, restoreSupplierPaymentUi]
@@ -482,12 +529,16 @@
     function resetForShopChange() {
         state.supplierRequestId += 1;
         state.receiptRequestId += 1;
+        state.orderRequestId += 1;
         state.suppliers = [];
         state.receipts = [];
+        state.orders = [];
         state.supplierShopId = null;
         state.receiptShopId = null;
+        state.orderShopId = null;
         if (!hasUnknownOperation()) {
             closePurchaseReceiptForm(true);
+            closePurchaseOrderForm(true);
             closeSupplierForm(true);
             closePurchaseConfirmModal(true);
             closeSupplierPaymentModal(true);
@@ -496,12 +547,13 @@
         }
         renderSuppliers();
         renderReceipts();
+        renderPurchaseOrders();
         updateSummaryCards();
     }
 
     async function loadSuppliers() {
         const shopId = selectedShopId();
-        if (!shopId || !canUsePurchasing()) return;
+        if (!shopId || !canUsePurchasing()) return false;
         const generation = selectedGeneration();
         const requestId = ++state.supplierRequestId;
         try {
@@ -518,11 +570,14 @@
             state.supplierShopId = shopId;
             renderSuppliers();
             fillSupplierSelect();
+            fillOrderSupplierSelect();
             updateSummaryCards();
+            return true;
         } catch (error) {
             if (requestId === state.supplierRequestId && stillCurrent(shopId, generation)) {
                 showToast(error.message);
             }
+            return false;
         }
     }
 
@@ -550,11 +605,30 @@
         }
     }
 
+    async function loadPurchaseOrders() {
+        const shopId = selectedShopId();
+        if (!shopId || !canUsePurchasing()) return;
+        const generation = selectedGeneration();
+        const requestId = ++state.orderRequestId;
+        try {
+            const response = await apiCall(`/purchase-orders/${shopId}`);
+            if (requestId !== state.orderRequestId || !stillCurrent(shopId, generation)) return;
+            state.orders = Array.isArray(response?.orders) ? response.orders : [];
+            state.orderShopId = shopId;
+            renderPurchaseOrders();
+        } catch (error) {
+            if (requestId === state.orderRequestId && stillCurrent(shopId, generation)) {
+                showToast(error.message);
+            }
+        }
+    }
+
     function load() {
         if (!canUsePurchasing() || !selectedShopId()) return;
         restorePendingUi(false);
         loadSuppliers();
         loadPurchaseReceipts();
+        loadPurchaseOrders();
         if (!cacheThuocShop(currentProductsShopId, selectedShopId())) loadProducts();
     }
 
@@ -563,8 +637,9 @@
             restorePendingUi(true);
             return;
         }
-        state.subTab = tab === 'suppliers' ? 'suppliers' : 'receipts';
+        state.subTab = ['receipts', 'orders', 'suppliers'].includes(tab) ? tab : 'receipts';
         $('purchaseSubTabReceipts')?.classList.toggle('active', state.subTab === 'receipts');
+        $('purchaseSubTabOrders')?.classList.toggle('active', state.subTab === 'orders');
         $('purchaseSubTabSuppliers')?.classList.toggle('active', state.subTab === 'suppliers');
         if ($('purchaseReceiptsSection')) {
             $('purchaseReceiptsSection').style.display = state.subTab === 'receipts' ? 'block' : 'none';
@@ -572,7 +647,11 @@
         if ($('purchaseSuppliersSection')) {
             $('purchaseSuppliersSection').style.display = state.subTab === 'suppliers' ? 'block' : 'none';
         }
+        if ($('purchaseOrdersPanel')) {
+            $('purchaseOrdersPanel').style.display = state.subTab === 'orders' ? 'block' : 'none';
+        }
         if (state.subTab === 'suppliers') loadSuppliers();
+        else if (state.subTab === 'orders') loadPurchaseOrders();
         else loadPurchaseReceipts();
     }
 
@@ -659,6 +738,39 @@
         });
     }
 
+    function renderPurchaseOrders() {
+        const body = $('purchaseOrdersList');
+        const empty = $('purchaseOrdersEmpty');
+        if (!body || !empty) return;
+        body.innerHTML = '';
+        const current = state.orderShopId === selectedShopId() ? state.orders : [];
+        empty.style.display = current.length ? 'none' : 'block';
+        current.forEach(order => {
+            const id = Number(order.id);
+            if (!Number.isInteger(id)) return;
+            const status = orderStatus(order);
+            let actions = `<button class="btn-outline" type="button" onclick="copyPurchaseOrder(${id})" title="${escapeHtml(t('seller.purchasing.copy_order'))}" aria-label="${escapeHtml(t('seller.purchasing.copy_order'))}"><i class="ph ph-copy"></i></button>`;
+            if (status === 'DRAFT') {
+                actions += `<button class="btn-outline" type="button" onclick="editPurchaseOrder(${id})" title="${escapeHtml(t('common.edit'))}"><i class="ph ph-pencil"></i></button>
+                    <button type="button" onclick="placePurchaseOrder(${id})" title="${escapeHtml(t('seller.purchasing.place_order'))}"><i class="ph ph-paper-plane-tilt"></i></button>
+                    <button class="btn-outline" type="button" onclick="deletePurchaseOrder(${id})" title="${escapeHtml(t('common.delete'))}" style="color:#B91C1C;"><i class="ph ph-trash"></i></button>`;
+            } else if (status === 'ORDERED') {
+                actions += `<button type="button" onclick="receivePurchaseOrder(${id})" title="${escapeHtml(t('seller.purchasing.receive_order'))}"><i class="ph ph-package"></i></button>
+                    <button class="btn-outline" type="button" onclick="cancelPurchaseOrder(${id})" title="${escapeHtml(t('seller.purchasing.cancel_order'))}" style="color:#B91C1C;"><i class="ph ph-x-circle"></i></button>`;
+            } else if (status === 'RECEIVED' && Number(order.receipt_id) > 0) {
+                actions += `<button class="btn-outline" type="button" onclick="openPurchaseReceiptDetail(${Number(order.receipt_id)})" title="${escapeHtml(t('seller.actions.view_detail'))}"><i class="ph ph-receipt"></i></button>`;
+            }
+            body.insertAdjacentHTML('beforeend', `<tr>
+                <td><strong>${escapeHtml(orderCode(order))}</strong><br><small>${escapeHtml(dateOnly(order.created_at))}</small></td>
+                <td>${escapeHtml(order.supplier_name || '')}</td>
+                <td>${escapeHtml(order.expected_date ? dateOnly(order.expected_date) : '—')}</td>
+                <td>${escapeHtml(dinhDangSoSeller(Array.isArray(order.items) ? order.items.length : 0))}</td>
+                <td>${statusBadge(status)}</td>
+                <td><div class="purchase-table-actions">${actions}</div></td>
+            </tr>`);
+        });
+    }
+
     function fillSupplierSelect() {
         const select = $('purchaseSupplierSelect');
         if (!select) return;
@@ -675,6 +787,22 @@
         if ([...select.options].some(option => option.value === valueToRestore)) {
             select.value = valueToRestore;
         }
+    }
+
+    function fillOrderSupplierSelect() {
+        const select = $('purchaseOrderSupplierSelect');
+        if (!select) return;
+        const previous = select.value;
+        const options = state.suppliers
+            .filter(supplier => supplier.is_active !== false || String(supplier.id) === previous)
+            .map(supplier => `<option value="${Number(supplier.id)}">${escapeHtml(supplier.name || '')}</option>`)
+            .join('');
+        select.innerHTML = `<option value="">${escapeHtml(t('seller.purchasing.choose_supplier'))}</option>${options}`;
+        const pendingSupplierId = state.pendingOrderCreate?.payload?.supplier_id;
+        const valueToRestore = pendingSupplierId && Number(state.pendingOrderCreate?.shopId) === selectedShopId()
+            ? String(pendingSupplierId)
+            : previous;
+        if ([...select.options].some(option => option.value === valueToRestore)) select.value = valueToRestore;
     }
 
     function clearSupplierForm() {
@@ -1004,6 +1132,7 @@
 
     function clearReceiptEditor() {
         state.editingReceiptId = null;
+        state.receiptPurchaseOrderId = null;
         state.receiptLines = [];
         state.nextLineKey = 1;
         if ($('purchaseSupplierSelect')) $('purchaseSupplierSelect').value = '';
@@ -1014,6 +1143,408 @@
         if ($('purchaseProductSearch')) $('purchaseProductSearch').value = '';
         renderReceiptLines();
         filterPurchaseProductOptions();
+    }
+
+    function filterPurchaseOrderProductOptions() {
+        const select = $('purchaseOrderProductSelect');
+        if (!select) return;
+        const query = String($('purchaseOrderProductSearch')?.value || '').trim().toLocaleLowerCase('vi');
+        const previous = select.value;
+        const products = productOptions().filter(product => {
+            if (!query) return true;
+            return [product.name, product.code, product.barcode]
+                .filter(Boolean)
+                .some(value => String(value).toLocaleLowerCase('vi').includes(query));
+        });
+        select.innerHTML = `<option value="">${escapeHtml(t('seller.purchasing.choose_product'))}</option>`
+            + products.map(product => `<option value="${Number(product.id)}">${escapeHtml(product.name)} · ${escapeHtml(product.code || '—')}</option>`).join('');
+        if ([...select.options].some(option => option.value === previous)) select.value = previous;
+    }
+
+    function clearPurchaseOrderEditor() {
+        state.editingOrderId = null;
+        state.orderLines = [];
+        state.nextOrderLineKey = 1;
+        if ($('purchaseOrderSupplierSelect')) $('purchaseOrderSupplierSelect').value = '';
+        if ($('purchaseOrderExpectedDate')) $('purchaseOrderExpectedDate').value = '';
+        if ($('purchaseOrderNote')) $('purchaseOrderNote').value = '';
+        if ($('purchaseOrderProductSearch')) $('purchaseOrderProductSearch').value = '';
+        renderOrderLines();
+        filterPurchaseOrderProductOptions();
+    }
+
+    async function prefillPurchaseOrderFromForecast(request = {}) {
+        if (!canUsePurchasing()) return showToast(t('seller.purchasing.owner_only'));
+        if (blockForOtherPendingOperation('order_create') || state.pendingOrderCreate) return;
+        if ($('purchaseOrderEditor')?.style.display === 'block') {
+            showToast(t('seller.purchasing.editor_already_open'));
+            return;
+        }
+
+        const shopId = Number(request.shopId);
+        const generation = selectedGeneration();
+        const supplierId = Number(request.supplierId);
+        if (
+            !Number.isInteger(shopId)
+            || !Number.isInteger(supplierId)
+            || Number(request.generation) !== generation
+            || !stillCurrent(shopId, generation)
+        ) return showToast(t('seller.purchasing.forecast_unavailable'));
+
+        if (!await loadSuppliers() || !stillCurrent(shopId, generation)) return;
+        const supplier = state.suppliers.find(supplier => (
+            Number(supplier.id) === supplierId && supplier.is_active !== false
+        ));
+        if (!supplier || !cacheThuocShop(currentProductsShopId, shopId)) {
+            showToast(t('seller.purchasing.forecast_unavailable'));
+            return;
+        }
+
+        const products = productOptions();
+        const lines = [];
+        for (const item of Array.isArray(request.items) ? request.items : []) {
+            const quantity = Number(item.quantity);
+            const product = products.find(
+                candidate => Number(candidate.id) === Number(item.product_id)
+            );
+            if (
+                !product
+                || !Number.isInteger(quantity)
+                || quantity <= 0
+                || quantity > MAX_PURCHASE_QUANTITY
+            ) continue;
+
+            lines.push({
+                line_key: lines.length + 1,
+                product_id: Number(product.id),
+                product_name: product.name,
+                product_code: product.code,
+                quantity
+            });
+        }
+        if (!lines.length || !stillCurrent(shopId, generation)) {
+            showToast(t('seller.purchasing.forecast_unavailable'));
+            return;
+        }
+
+        switchTab('purchasing', $('tabPurchasing'));
+        switchPurchasingSubTab('orders');
+        clearPurchaseOrderEditor();
+        fillOrderSupplierSelect();
+        $('purchaseOrderSupplierSelect').value = String(supplierId);
+        const leadDays = Math.max(0, Math.min(365, Number(request.leadDays) || 0));
+        if (leadDays > 0) {
+            const expected = new Date();
+            expected.setDate(expected.getDate() + leadDays);
+            $('purchaseOrderExpectedDate').value = `${expected.getFullYear()}-${String(expected.getMonth() + 1).padStart(2, '0')}-${String(expected.getDate()).padStart(2, '0')}`;
+        }
+        state.orderLines = lines;
+        state.nextOrderLineKey = lines.length + 1;
+        $('purchaseOrderFormTitle').textContent = t('seller.purchasing.new_order');
+        setActionLabel('[data-purchase-order-action-label="save"]', 'seller.purchasing.save_order_draft');
+        $('purchaseOrderRetryNotice').style.display = 'none';
+        renderOrderLines();
+        lockOrderEditor(false);
+        $('purchaseOrderEditor').style.display = 'block';
+        $('purchaseOrderEditor').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        showToast(t('seller.purchasing.forecast_prefilled', { count: lines.length }));
+    }
+
+    function openPurchaseOrderForm() {
+        if (!canUsePurchasing()) return showToast(t('seller.purchasing.owner_only'));
+        if (blockForOtherPendingOperation('order_create')) return;
+        if (state.pendingOrderCreate) return restoreOrderCreateUi(state.pendingOrderCreate);
+        if (!state.suppliers.some(supplier => supplier.is_active !== false)) {
+            showToast(t('seller.purchasing.create_supplier_first'));
+            switchPurchasingSubTab('suppliers');
+            openSupplierForm();
+            return;
+        }
+        clearPurchaseOrderEditor();
+        fillOrderSupplierSelect();
+        $('purchaseOrderFormTitle').textContent = t('seller.purchasing.new_order');
+        setActionLabel('[data-purchase-order-action-label="save"]', 'seller.purchasing.save_order_draft');
+        $('purchaseOrderRetryNotice').style.display = 'none';
+        lockOrderEditor(false);
+        $('purchaseOrderEditor').style.display = 'block';
+        $('purchaseOrderEditor').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function closePurchaseOrderForm(force = false) {
+        if (!force && state.pendingOrderCreate) return showToast(t('seller.purchasing.retry_before_close'));
+        if ($('purchaseOrderEditor')) $('purchaseOrderEditor').style.display = 'none';
+        if (!state.pendingOrderCreate) clearPurchaseOrderEditor();
+    }
+
+    function lockOrderEditor(locked, retry = false) {
+        ['purchaseOrderSupplierSelect', 'purchaseOrderExpectedDate', 'purchaseOrderNote',
+            'purchaseOrderProductSearch', 'purchaseOrderProductSelect'].forEach(id => {
+            if ($(id)) $(id).disabled = Boolean(locked);
+        });
+        document.querySelectorAll('#purchaseOrderEditor .purchase-line-picker button, #purchaseOrderLines input, #purchaseOrderLines button')
+            .forEach(element => { element.disabled = Boolean(locked); });
+        if ($('purchaseOrderSaveButton')) $('purchaseOrderSaveButton').disabled = Boolean(locked && !retry);
+        if ($('purchaseOrderCancelEditButton')) $('purchaseOrderCancelEditButton').disabled = Boolean(retry);
+        if ($('purchaseOrderRetryNotice')) $('purchaseOrderRetryNotice').style.display = retry ? 'block' : 'none';
+    }
+
+    function addPurchaseOrderLine() {
+        if (state.pendingOrderCreate) return;
+        const productId = Number($('purchaseOrderProductSelect')?.value);
+        const product = productOptions().find(item => Number(item.id) === productId);
+        if (!product) return showToast(t('seller.purchasing.choose_product_error'));
+        if (state.orderLines.some(line => Number(line.product_id) === productId)) {
+            return showToast(t('seller.purchasing.product_already_added'));
+        }
+        state.orderLines.push({
+            line_key: state.nextOrderLineKey++,
+            product_id: productId,
+            product_name: product.name,
+            product_code: product.code,
+            quantity: 1
+        });
+        renderOrderLines();
+    }
+
+    function updatePurchaseOrderLine(lineKey, rawValue) {
+        if (state.pendingOrderCreate) return;
+        const line = state.orderLines.find(item => Number(item.line_key) === Number(lineKey));
+        if (line) line.quantity = rawValue;
+    }
+
+    function removePurchaseOrderLine(lineKey) {
+        if (state.pendingOrderCreate) return;
+        state.orderLines = state.orderLines.filter(line => Number(line.line_key) !== Number(lineKey));
+        renderOrderLines();
+    }
+
+    function renderOrderLines() {
+        const body = $('purchaseOrderLines');
+        const empty = $('purchaseOrderNoLines');
+        if (!body || !empty) return;
+        body.innerHTML = '';
+        empty.style.display = state.orderLines.length ? 'none' : 'block';
+        state.orderLines.forEach(line => {
+            const key = Number(line.line_key);
+            body.insertAdjacentHTML('beforeend', `<tr>
+                <td><strong>${escapeHtml(line.product_name || '')}</strong><br><small>${escapeHtml(line.product_code || '—')}</small></td>
+                <td><input type="number" inputmode="numeric" min="1" max="${MAX_PURCHASE_QUANTITY}" step="1" value="${escapeHtml(line.quantity)}" oninput="updatePurchaseOrderLine(${key}, this.value)"></td>
+                <td><button class="btn-outline" type="button" onclick="removePurchaseOrderLine(${key})" style="color:#B91C1C;"><i class="ph ph-trash"></i></button></td>
+            </tr>`);
+        });
+        if (state.pendingOrderCreate) lockOrderEditor(true, true);
+    }
+
+    function buildPurchaseOrderPayload(includeOperationId) {
+        const supplierId = Number($('purchaseOrderSupplierSelect')?.value);
+        if (!Number.isInteger(supplierId) || supplierId <= 0) {
+            showToast(t('seller.purchasing.supplier_required_error'));
+            return null;
+        }
+        if (!state.orderLines.length) {
+            showToast(t('seller.purchasing.order_lines_required'));
+            return null;
+        }
+        const items = [];
+        for (const line of state.orderLines) {
+            const quantity = Number(line.quantity);
+            if (!Number.isInteger(quantity) || quantity <= 0 || quantity > MAX_PURCHASE_QUANTITY) {
+                showToast(t('seller.purchasing.quantity_invalid', { name: line.product_name }));
+                return null;
+            }
+            items.push({ product_id: Number(line.product_id), quantity });
+        }
+        const payload = {
+            supplier_id: supplierId,
+            expected_date: String($('purchaseOrderExpectedDate')?.value || '').trim() || null,
+            note: String($('purchaseOrderNote')?.value || '').trim() || null,
+            items
+        };
+        if (includeOperationId) payload.operation_id = operationId('purchase-order');
+        return payload;
+    }
+
+    async function sendNewPurchaseOrder(pending) {
+        pending = persistPendingOperation('order_create', pending);
+        if (!pending) return;
+        state.orderBusy = true;
+        syncGlobalShopLock();
+        lockOrderEditor(true);
+        try {
+            await apiCall(`/purchase-orders/${pending.shopId}`, 'POST', pending.payload);
+            clearPendingOperation('order_create', pending);
+            closePurchaseOrderForm(true);
+            showToast(t('seller.purchasing.order_saved'));
+            await loadPurchaseOrders();
+        } catch (error) {
+            if (unknownOutcome(error)) {
+                state.pendingOrderCreate = pending;
+                lockOrderEditor(true, true);
+                setActionLabel('[data-purchase-order-action-label="save"]', 'common.retry');
+                showToast(t('seller.purchasing.order_retry_notice'));
+            } else {
+                clearPendingOperation('order_create', pending);
+                lockOrderEditor(false);
+                showToast(error.message);
+            }
+        } finally {
+            state.orderBusy = false;
+            syncGlobalShopLock();
+        }
+    }
+
+    async function savePurchaseOrderDraft() {
+        if (state.orderBusy) return;
+        if (state.pendingOrderCreate) return sendNewPurchaseOrder(state.pendingOrderCreate);
+        const shopId = selectedShopId();
+        if (!shopId) return;
+        const isNew = state.editingOrderId === null;
+        const payload = buildPurchaseOrderPayload(isNew);
+        if (!payload) return;
+        if (isNew) {
+            return sendNewPurchaseOrder({ shopId, payload: exactCopy(payload), lines: exactCopy(state.orderLines) });
+        }
+        state.orderBusy = true;
+        syncGlobalShopLock();
+        lockOrderEditor(true);
+        try {
+            await apiCall(`/purchase-orders/order/${state.editingOrderId}`, 'PUT', payload);
+            closePurchaseOrderForm(true);
+            showToast(t('seller.purchasing.order_updated'));
+            await loadPurchaseOrders();
+        } catch (error) {
+            showToast(error.message);
+        } finally {
+            state.orderBusy = false;
+            syncGlobalShopLock();
+            lockOrderEditor(false);
+        }
+    }
+
+    async function editPurchaseOrder(id) {
+        if (state.pendingOrderCreate) return showToast(t('seller.purchasing.retry_before_close'));
+        const shopId = selectedShopId();
+        const generation = selectedGeneration();
+        try {
+            const order = await apiCall(`/purchase-orders/order/${id}`);
+            if (!stillCurrent(shopId, generation) || orderStatus(order) !== 'DRAFT') return;
+            state.editingOrderId = Number(order.id);
+            fillOrderSupplierSelect();
+            $('purchaseOrderSupplierSelect').value = String(order.supplier_id || '');
+            $('purchaseOrderExpectedDate').value = order.expected_date || '';
+            $('purchaseOrderNote').value = order.note || '';
+            state.orderLines = (order.items || []).map((item, index) => ({
+                line_key: index + 1,
+                product_id: Number(item.product_id),
+                product_name: item.product_name || '',
+                product_code: productOptions().find(p => Number(p.id) === Number(item.product_id))?.code || '',
+                quantity: Number(item.quantity)
+            }));
+            state.nextOrderLineKey = state.orderLines.length + 1;
+            $('purchaseOrderFormTitle').textContent = t('seller.purchasing.edit_order', { code: orderCode(order) });
+            setActionLabel('[data-purchase-order-action-label="save"]', 'seller.purchasing.update_order_draft');
+            renderOrderLines();
+            lockOrderEditor(false);
+            $('purchaseOrderEditor').style.display = 'block';
+        } catch (error) {
+            showToast(error.message);
+        }
+    }
+
+    function deletePurchaseOrder(id) {
+        const order = state.orders.find(item => Number(item.id) === Number(id));
+        if (!order || orderStatus(order) !== 'DRAFT') return;
+        showCustomConfirm(t('seller.purchasing.delete_order_title'), t('seller.purchasing.delete_order_confirm', { code: orderCode(order) }), async () => {
+            try {
+                await apiCall(`/purchase-orders/order/${id}`, 'DELETE');
+                showToast(t('seller.purchasing.order_deleted'));
+                loadPurchaseOrders();
+            } catch (error) { showToast(error.message); }
+        }, t('common.delete'));
+    }
+
+    function placePurchaseOrder(id) {
+        const order = state.orders.find(item => Number(item.id) === Number(id));
+        if (!order || orderStatus(order) !== 'DRAFT') return;
+        showCustomConfirm(t('seller.purchasing.place_order'), t('seller.purchasing.place_order_confirm', { code: orderCode(order) }), async () => {
+            try {
+                await apiCall(`/purchase-orders/order/${id}/place`, 'POST', {
+                    operation_id: operationId('place-order'),
+                    draft_fingerprint: order.draft_fingerprint
+                });
+                showToast(t('seller.purchasing.order_placed'));
+                loadPurchaseOrders();
+            } catch (error) { showToast(error.message); loadPurchaseOrders(); }
+        }, t('seller.purchasing.place_order'));
+    }
+
+    function cancelPurchaseOrder(id) {
+        const order = state.orders.find(item => Number(item.id) === Number(id));
+        if (!order || orderStatus(order) !== 'ORDERED') return;
+        showCustomConfirm(t('seller.purchasing.cancel_order'), t('seller.purchasing.cancel_order_confirm', { code: orderCode(order) }), async () => {
+            try {
+                await apiCall(`/purchase-orders/order/${id}/cancel`, 'POST', { operation_id: operationId('cancel-order') });
+                showToast(t('seller.purchasing.order_cancelled'));
+                loadPurchaseOrders();
+            } catch (error) { showToast(error.message); loadPurchaseOrders(); }
+        }, t('seller.purchasing.cancel_order'));
+    }
+
+    async function copyPurchaseOrder(id) {
+        const order = state.orders.find(item => Number(item.id) === Number(id));
+        if (!order) return;
+        const lines = [
+            `${orderCode(order)} · ${order.supplier_name || ''}`,
+            order.expected_date ? `${t('seller.purchasing.expected_date')}: ${dateOnly(order.expected_date)}` : '',
+            ...(order.items || []).map((item, index) => `${index + 1}. ${item.product_name}: ${item.quantity}`),
+            order.note ? `${t('seller.fields.note')}: ${order.note}` : ''
+        ].filter(Boolean);
+        try {
+            await navigator.clipboard.writeText(lines.join('\n'));
+            showToast(t('seller.purchasing.order_copied'));
+        } catch (_error) {
+            showToast(t('seller.purchasing.copy_failed'));
+        }
+    }
+
+    async function receivePurchaseOrder(id) {
+        const shopId = selectedShopId();
+        const generation = selectedGeneration();
+        if (blockForOtherPendingOperation('receipt_create') || state.pendingReceiptCreate) return;
+        if ($('purchaseReceiptEditor')?.style.display === 'block') return showToast(t('seller.purchasing.editor_already_open'));
+        try {
+            const order = await apiCall(`/purchase-orders/order/${id}`);
+            if (!stillCurrent(shopId, generation) || order.status !== 'ORDERED') return;
+            const products = productOptions();
+            const lines = (order.items || []).map((item, index) => {
+                const product = products.find(p => Number(p.id) === Number(item.product_id));
+                return {
+                    line_key: index + 1,
+                    product_id: Number(item.product_id),
+                    product_name: item.product_name || product?.name || '',
+                    product_code: product?.code || '',
+                    track_batches: Boolean(product?.track_batches),
+                    quantity: Number(item.quantity),
+                    unit_cost: '',
+                    expiry_date: ''
+                };
+            });
+            if (!lines.length) return;
+            switchPurchasingSubTab('receipts');
+            clearReceiptEditor();
+            state.receiptPurchaseOrderId = Number(order.id);
+            fillSupplierSelect();
+            $('purchaseSupplierSelect').value = String(order.supplier_id);
+            $('purchaseReceivedDate').value = todayLocal();
+            state.receiptLines = lines;
+            state.nextLineKey = lines.length + 1;
+            renderReceiptLines();
+            $('purchaseReceiptEditor').style.display = 'block';
+            $('purchaseReceiptEditor').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            showToast(t('seller.purchasing.order_receipt_prefilled'));
+        } catch (error) {
+            showToast(error.message);
+        }
     }
 
     function openPurchaseReceiptForm() {
@@ -1263,6 +1794,7 @@
             });
         }
         const payload = {
+            purchase_order_id: state.receiptPurchaseOrderId,
             supplier_id: supplierId,
             supplier_invoice_number: String($('purchaseInvoiceNumber')?.value || '').trim() || null,
             received_date: receivedDate,
@@ -1342,6 +1874,7 @@
 
     function receiptToEditor(receipt) {
         state.editingReceiptId = Number(receipt.id);
+        state.receiptPurchaseOrderId = Number(receipt.purchase_order_id) || null;
         $('purchaseSupplierSelect').value = String(receipt.supplier_id || '');
         $('purchaseInvoiceNumber').value = receipt.supplier_invoice_number || '';
         $('purchaseReceivedDate').value = String(receipt.received_date || '').slice(0, 10) || todayLocal();
@@ -1857,9 +2390,13 @@
     function rerender() {
         renderSuppliers();
         renderReceipts();
+        renderPurchaseOrders();
         renderReceiptLines();
+        renderOrderLines();
         fillSupplierSelect();
+        fillOrderSupplierSelect();
         filterPurchaseProductOptions();
+        filterPurchaseOrderProductOptions();
         updateSummaryCards();
         if (state.currentSupplierDetail) renderSupplierHistory(state.currentSupplierDetail);
         if (state.currentReceiptDetail) renderReceiptDetail(state.currentReceiptDetail);
@@ -1886,6 +2423,14 @@
                 { code: state.editingReceiptId || '' }
             );
         }
+        if ($('purchaseOrderEditor')?.style.display !== 'none') {
+            $('purchaseOrderFormTitle').textContent = t(
+                state.editingOrderId === null
+                    ? 'seller.purchasing.new_order'
+                    : 'seller.purchasing.edit_order',
+                { code: state.editingOrderId || '' }
+            );
+        }
         if ($('supplierFormModal')?.style.display === 'flex') {
             $('supplierFormTitle').textContent = t(
                 state.editingSupplierId === null
@@ -1900,6 +2445,14 @@
                 : (state.editingReceiptId === null
                     ? 'seller.purchasing.save_draft'
                     : 'seller.purchasing.update_draft')
+        );
+        setActionLabel(
+            '[data-purchase-order-action-label="save"]',
+            state.pendingOrderCreate
+                ? 'common.retry'
+                : (state.editingOrderId === null
+                    ? 'seller.purchasing.save_order_draft'
+                    : 'seller.purchasing.update_order_draft')
         );
         setActionLabel(
             '[data-supplier-action-label="save"]',
@@ -1962,6 +2515,7 @@
         switchPurchasingSubTab,
         loadSuppliers,
         loadPurchaseReceipts,
+        loadPurchaseOrders,
         openSupplierForm,
         closeSupplierForm,
         saveSupplier,
@@ -1989,13 +2543,30 @@
         updatePurchaseConfirmPaymentRules,
         confirmPurchaseReceipt,
         openPurchaseReceiptDetail,
-        closePurchaseReceiptDetail
+        closePurchaseReceiptDetail,
+        openPurchaseOrderForm,
+        closePurchaseOrderForm,
+        filterPurchaseOrderProductOptions,
+        addPurchaseOrderLine,
+        updatePurchaseOrderLine,
+        removePurchaseOrderLine,
+        savePurchaseOrderDraft,
+        editPurchaseOrder,
+        deletePurchaseOrder,
+        placePurchaseOrder,
+        cancelPurchaseOrder,
+        copyPurchaseOrder,
+        receivePurchaseOrder
     });
 
     global.FSellingPurchasing = Object.freeze({
         load,
         rerender,
         resetForShopChange,
-        productsUpdated: filterPurchaseProductOptions
+        prefillPurchaseOrderFromForecast,
+        productsUpdated() {
+            filterPurchaseProductOptions();
+            filterPurchaseOrderProductOptions();
+        }
     });
 })(window);

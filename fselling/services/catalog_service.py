@@ -1897,13 +1897,18 @@ def delete_product(db: Session, current_user: models.User, product_id: int) -> D
         .filter(models.PurchaseReceiptItem.product_id == product_id)
         .first()
         is not None
+    ) or (
+        db.query(models.PurchaseOrderItem.id)
+        .filter(models.PurchaseOrderItem.product_id == product_id)
+        .first()
+        is not None
     )
     if has_purchase_history:
         db.rollback()
         raise HTTPException(
             status_code=409,
             detail=tr(
-                "Sản phẩm đã nằm trong phiếu nhập nên không thể xóa. "
+                "Sản phẩm đã nằm trong chứng từ nhập hàng nên không thể xóa. "
                 "Hãy bấm Ẩn để giữ đúng lịch sử chứng từ."
             ),
         )

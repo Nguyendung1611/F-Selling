@@ -229,13 +229,6 @@ _MA_SANG_CHU = {
     "N_NGAY": "7 ngay qua",
 }
 
-# Nhớ câu đã hỏi: Gemini giải được một cách hỏi lạ thì lần sau ai hỏi y hệt là
-# dùng lại, không tốn lượt. CHỈ nhớ "câu hỏi -> tên báo cáo", không nhớ dữ liệu
-# và không nhớ câu trả lời, nên cache dùng chung được cho mọi shop mà không lộ
-# gì. Nằm trong RAM: mất khi restart cũng chỉ là tốn lại vài lượt.
-_NHO_CAU_HOI: Dict[str, Tuple[str, str]] = {}
-_NHO_TOI_DA = 500
-
 # Chống giữ Enter. CỐ Ý để trong RAM chứ không trong DB, khác với bộ đếm ngày:
 # đây là chống bấm dồn trong vài giây, còn hàng rào tiền thật là trần mỗi ngày.
 _DAU_VET_PHUT: Dict[Tuple[int, int], List[float]] = {}
@@ -305,8 +298,6 @@ def _thu_hoi_gemini(
         return None                       # chưa cắm key -> tính năng không tồn tại
     if _dang_rac(cau_khong_dau):
         return None
-    if cau_khong_dau in _NHO_CAU_HOI:
-        return _NHO_CAU_HOI[cau_khong_dau]
     try:
         subscription_service.require_pro(db, shop_id)
     except HTTPException:
@@ -321,8 +312,6 @@ def _thu_hoi_gemini(
     )
     if ket is None:
         return None
-    if len(_NHO_CAU_HOI) < _NHO_TOI_DA:
-        _NHO_CAU_HOI[cau_khong_dau] = ket
     return ket
 
 
@@ -799,10 +788,6 @@ def hoi_dap(
                 khong_dau = f"{khong_dau} {_MA_SANG_CHU[ma_khoang]}"
 
     if y_dinh is None:
-        # Ghi lại câu bị trượt để còn biết nên thêm mẫu nào. Đây là thứ làm lớp
-        # phòng thủ mạnh dần lên: mỗi mẫu thêm vào là bớt một loại câu phải gọi
-        # ra Google. Chỉ ghi CÂU HỎI, không ghi dữ liệu cửa hàng.
-        log_to_file(f"[TRO LY] Chua hieu (shop {shop_id}): {cau}")
         return {
             "cau_hoi": cau,
             "hieu_duoc": False,

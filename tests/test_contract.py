@@ -166,6 +166,15 @@ ROUTES_BO_SUNG = {
     ("PUT", "/api/purchase-receipts/receipt/{receipt_id}"),
     ("DELETE", "/api/purchase-receipts/receipt/{receipt_id}"),
     ("POST", "/api/purchase-receipts/receipt/{receipt_id}/confirm"),
+    # Purchase Order is a commitment only; receipt confirmation remains the
+    # sole stock/payable mutation.
+    ("POST", "/api/purchase-orders/{shop_id}"),
+    ("GET", "/api/purchase-orders/{shop_id}"),
+    ("GET", "/api/purchase-orders/order/{order_id}"),
+    ("PUT", "/api/purchase-orders/order/{order_id}"),
+    ("DELETE", "/api/purchase-orders/order/{order_id}"),
+    ("POST", "/api/purchase-orders/order/{order_id}/place"),
+    ("POST", "/api/purchase-orders/order/{order_id}/cancel"),
     # J1: gói Free/Pro theo shop. Tiền thuê bao dùng webhook/ledger riêng, không
     # đi vào OrderPayment/doanh thu bán hàng của shop.
     ("GET", "/api/subscriptions/{shop_id}"),

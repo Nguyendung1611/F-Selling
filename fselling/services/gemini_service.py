@@ -26,6 +26,7 @@ from typing import Optional, Sequence, Tuple
 
 from ..core.config import (
     GEMINI_API_KEY,
+    GEMINI_ENABLED,
     GEMINI_MODEL,
     GEMINI_TIMEOUT_SECONDS,
     log_to_file,
@@ -42,7 +43,7 @@ _TOI_DA_TOKEN_RA = 40
 
 
 def dang_bat() -> bool:
-    return bool(GEMINI_API_KEY)
+    return bool(GEMINI_ENABLED and GEMINI_API_KEY)
 
 
 def _prompt(cau_hoi: str, y_dinh_hop_le: Sequence[str], khoang_hop_le: Sequence[str]) -> str:

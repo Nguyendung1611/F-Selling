@@ -2133,7 +2133,7 @@ function veDuBaoNhapHang(d) {
     const tbody = document.getElementById('forecastList');
     tbody.innerHTML = '';
     if (!danhSach.length) {
-        tbody.innerHTML = `<tr><td colspan="7" style="color: var(--text-muted);">`
+        tbody.innerHTML = `<tr><td colspan="8" style="color: var(--text-muted);">`
             + `${escapeHtml(t('seller.forecast.empty'))}</td></tr>`;
         return;
     }
@@ -2162,6 +2162,9 @@ function veDuBaoNhapHang(d) {
             ? `<br><small style="color:#B45309;">`
               + `${escapeHtml(t('seller.forecast.expired_note', { total: dinhDangSoSeller(r.ton_tong) }))}</small>`
             : '';
+        const ghiChuDangVe = Number(r.dang_ve) > 0
+            ? `<br><small style="color:#0369A1;">${escapeHtml(t('seller.forecast.incoming_note', { quantity: dinhDangSoSeller(r.dang_ve) }))}</small>`
+            : '';
 
         const canhBaoDuLieu = r.du_lieu_yeu
             ? ` <span title="${escapeHtml(t('seller.forecast.weak_data_title'))}" `
@@ -2175,15 +2178,58 @@ function veDuBaoNhapHang(d) {
                   : '')
             : `<small style="color:#64748B;">${escapeHtml(t('seller.forecast.no_supplier'))}</small>`;
 
+        // Chọn NCC bằng chính dòng Forecast. Nút chỉ điền đơn đặt hàng;
+        // người dùng vẫn phải tự lưu nháp rồi tự xác nhận đã đặt.
+        const coTheLapPhieu = MY_ROLE === 'SELLER'
+            && r.can_nhap > 0
+            && r.nha_cung_cap
+            && Number.isInteger(Number(r.nha_cung_cap.id));
+        const lapPhieu = coTheLapPhieu
+            ? `<button class="btn-outline" type="button" `
+              + `onclick="lapPhieuNhapTuDuBao(${Number(r.nha_cung_cap.id)})">`
+              + `<i class="ph ph-note-pencil"></i> `
+              + `${escapeHtml(t('seller.forecast.purchase_button'))}</button>`
+            : '—';
+
         tbody.innerHTML += `<tr>
             <td>${escapeHtml(r.ten || '')}</td>
             <td>${nhan}</td>
-            <td>${escapeHtml(dinhDangSoSeller(r.ton_kho))}${ghiChuTon}</td>
+            <td>${escapeHtml(dinhDangSoSeller(r.ton_kho))}${ghiChuTon}${ghiChuDangVe}</td>
             <td>${escapeHtml(String(r.ban_moi_ngay))}${canhBaoDuLieu}</td>
             <td style="white-space:nowrap;">${escapeHtml(conLai)}</td>
             <td>${nhapVe}</td>
             <td>${ncc}</td>
+            <td>${lapPhieu}</td>
         </tr>`;
+    });
+}
+
+async function lapPhieuNhapTuDuBao(supplierId) {
+    if (MY_ROLE !== 'SELLER') {
+        showToast(t('seller.purchasing.owner_only'));
+        return;
+    }
+    if (!duBaoCache || duBaoCache.shopId !== currentShopId) {
+        showToast(t('seller.purchasing.forecast_unavailable'));
+        return;
+    }
+    const idNcc = Number(supplierId);
+    const items = (duBaoCache.data?.danh_sach || [])
+        .filter(r => Number(r.nha_cung_cap?.id) === idNcc && Number(r.can_nhap) > 0)
+        .map(r => ({
+            product_id: Number(r.product_id),
+            quantity: Number(r.can_nhap)
+        }));
+    if (!Number.isInteger(idNcc) || idNcc <= 0 || !items.length) {
+        showToast(t('seller.purchasing.forecast_unavailable'));
+        return;
+    }
+    await window.FSellingPurchasing?.prefillPurchaseOrderFromForecast?.({
+        shopId: currentShopId,
+        generation: currentShopGeneration,
+        supplierId: idNcc,
+        leadDays: Number(duBaoCache.data?.thoi_gian_dat_hang) || 0,
+        items
     });
 }
 

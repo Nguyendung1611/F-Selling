@@ -63,6 +63,8 @@ os.environ["SMTP_PASSWORD"] = ""
 # Test nào cần tầng dự phòng thì tự monkeypatch `gemini_service` (xem
 # `tests/test_tro_ly_gemini.py`) - đó mới là cách kiểm nó.
 os.environ["GEMINI_API_KEY"] = ""
+os.environ["GEMINI_ENABLED"] = ""
+os.environ["TTS_SERVER_ENABLED"] = ""
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

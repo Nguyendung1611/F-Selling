@@ -39,6 +39,7 @@ from .routers import (
     orders,
     pages,
     products,
+    purchase_orders,
     purchase_receipts,
     qr_reconciliation,
     reports,
@@ -238,6 +239,7 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
     application.include_router(categories.router)
     application.include_router(products.router)
     application.include_router(suppliers.router)
+    application.include_router(purchase_orders.router)
     application.include_router(purchase_receipts.router)
     # webhooks PHẢI đứng trước orders: /api/orders/webhook vs /api/orders/{shop_id}
     application.include_router(webhooks.router)

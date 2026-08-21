@@ -52,6 +52,7 @@ class PurchaseReceiptItemInput(BaseModel):
 
 
 class PurchaseReceiptCreate(BaseModel):
+    purchase_order_id: Optional[StrictInt] = Field(default=None, gt=0)
     supplier_id: StrictInt = Field(gt=0)
     items: List[PurchaseReceiptItemInput] = Field(min_length=1)
     supplier_invoice_number: Optional[str] = Field(default=None, max_length=128)
@@ -62,6 +63,7 @@ class PurchaseReceiptCreate(BaseModel):
 
 
 class PurchaseReceiptUpdate(BaseModel):
+    purchase_order_id: Optional[StrictInt] = Field(default=None, gt=0)
     supplier_id: StrictInt = Field(gt=0)
     items: List[PurchaseReceiptItemInput] = Field(min_length=1)
     supplier_invoice_number: Optional[str] = Field(default=None, max_length=128)
@@ -95,6 +97,50 @@ class SupplierPaymentCreate(BaseModel):
     operation_id: str = Field(min_length=8, max_length=128)
 
 
+class PurchaseOrderItemInput(BaseModel):
+    product_id: StrictInt = Field(gt=0)
+    quantity: StrictInt = Field(gt=0, le=MAX_SAFE_QUANTITY)
+
+
+class _PurchaseOrderFields(BaseModel):
+    supplier_id: StrictInt = Field(gt=0)
+    items: List[PurchaseOrderItemInput] = Field(min_length=1)
+    expected_date: Optional[str] = Field(default=None, max_length=10)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("expected_date")
+    @classmethod
+    def validate_expected_date(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        try:
+            datetime.strptime(value.strip(), "%Y-%m-%d")
+        except ValueError as error:
+            raise ValueError("Ngày dự kiến phải theo định dạng YYYY-MM-DD") from error
+        return value.strip()
+
+
+class PurchaseOrderCreate(_PurchaseOrderFields):
+    operation_id: str = Field(min_length=8, max_length=128)
+
+
+class PurchaseOrderUpdate(_PurchaseOrderFields):
+    pass
+
+
+class PurchaseOrderPlace(BaseModel):
+    operation_id: str = Field(min_length=8, max_length=128)
+    draft_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class PurchaseOrderCancel(BaseModel):
+    operation_id: str = Field(min_length=8, max_length=128)
+
+
 __all__ = [
     "SupplierCreate",
     "SupplierUpdate",
@@ -104,4 +150,9 @@ __all__ = [
     "PurchaseReceiptCreate",
     "PurchaseReceiptUpdate",
     "PurchaseReceiptConfirm",
+    "PurchaseOrderItemInput",
+    "PurchaseOrderCreate",
+    "PurchaseOrderUpdate",
+    "PurchaseOrderPlace",
+    "PurchaseOrderCancel",
 ]

@@ -32,6 +32,29 @@ def test_chua_cau_hinh_thi_tra_503(client):
     assert "chưa cấu hình" in res.json()["detail"].lower()
 
 
+def test_co_credentials_nhung_kill_switch_tat_thi_khong_goi_provider(
+    client, monkeypatch, tmp_path
+):
+    dem = {"so_lan": 0}
+
+    def _khong_duoc_goi(text):
+        dem["so_lan"] += 1
+        raise AssertionError("Kill switch OFF mà vẫn gọi TTS provider")
+
+    monkeypatch.setattr(tts_service, "TTS_SERVER_ENABLED", False, raising=False)
+    monkeypatch.setattr(tts_service, "TTS_PROVIDER", "gia")
+    monkeypatch.setattr(tts_service, "TTS_API_KEY", "key-gia")
+    monkeypatch.setattr(tts_service, "TTS_CACHE_DIR", str(tmp_path / "tts_cache"))
+    monkeypatch.setitem(tts_service._BO_CHUYEN_DOI, "gia", _khong_duoc_goi)
+    tok = _token(client)
+
+    assert client.get("/api/tts/status", headers=auth(tok)).json() == {"enabled": False}
+    res = client.post("/api/tts", json={"text": "xin chào"}, headers=auth(tok))
+    assert res.status_code == 503
+    assert dem["so_lan"] == 0
+    assert not (tmp_path / "tts_cache").exists()
+
+
 # ---------- Phân quyền ----------
 
 
@@ -75,6 +98,7 @@ def nha_cung_cap_gia(monkeypatch, tmp_path):
         dem["so_lan"] += 1
         return b"ID3-mp3-gia-" + text.encode("utf-8")[:10]
 
+    monkeypatch.setattr(tts_service, "TTS_SERVER_ENABLED", True, raising=False)
     monkeypatch.setattr(tts_service, "TTS_PROVIDER", "gia")
     monkeypatch.setattr(tts_service, "TTS_API_KEY", "key-gia")
     monkeypatch.setattr(tts_service, "TTS_CACHE_DIR", str(tmp_path / "tts_cache"))
@@ -122,6 +146,7 @@ def test_status_bao_bat_khi_da_cau_hinh(client, nha_cung_cap_gia):
 
 
 def test_nha_cung_cap_la_thi_bao_503(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(tts_service, "TTS_SERVER_ENABLED", True, raising=False)
     monkeypatch.setattr(tts_service, "TTS_PROVIDER", "khong-ton-tai")
     monkeypatch.setattr(tts_service, "TTS_API_KEY", "key")
     monkeypatch.setattr(tts_service, "TTS_CACHE_DIR", str(tmp_path))
@@ -130,6 +155,7 @@ def test_nha_cung_cap_la_thi_bao_503(client, monkeypatch, tmp_path):
 
 
 def test_azure_thieu_region_bi_chan(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(tts_service, "TTS_SERVER_ENABLED", True, raising=False)
     monkeypatch.setattr(tts_service, "TTS_PROVIDER", "azure")
     monkeypatch.setattr(tts_service, "TTS_API_KEY", "key")
     monkeypatch.setattr(tts_service, "TTS_AZURE_REGION", "")
@@ -145,6 +171,7 @@ def test_nha_cung_cap_loi_thi_tra_502(client, monkeypatch, tmp_path):
     def _no(text):
         raise urllib.error.URLError("mat mang")
 
+    monkeypatch.setattr(tts_service, "TTS_SERVER_ENABLED", True, raising=False)
     monkeypatch.setattr(tts_service, "TTS_PROVIDER", "gia")
     monkeypatch.setattr(tts_service, "TTS_API_KEY", "key")
     monkeypatch.setattr(tts_service, "TTS_CACHE_DIR", str(tmp_path))

@@ -35,6 +35,11 @@
       "down_revision": "0006_i09e_offline_receipt_items",
       "path": "versions/0007_i10a_qr_payment_domain.py",
       "sha256": "ae580fab7796e1f724a699c7ff72a18360fe77b244f02d0d35143d029356fec1"
+    },
+    "0008_purchase_orders": {
+      "down_revision": "0007_i10a_qr_payment_domain",
+      "path": "versions/0008_purchase_orders.py",
+      "sha256": "2811f22c5f4deae23e01d6a96f5b9b3bc4cd2150698bbe22520f84994874ef1c"
     }
   }
 }

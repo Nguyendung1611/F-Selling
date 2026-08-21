@@ -21,6 +21,7 @@ I09 = "0004_i09_offline_receipts"
 I09C = "0005_i09c_offline_issue_lifecycle"
 I09E = "0006_i09e_offline_receipt_items"
 I10A = "0007_i10a_qr_payment_domain"
+PO = "0008_purchase_orders"
 
 RELEASED = {
     ROOT: "5bdcb5e297ba9eba83474c5415371129c9c3d1498280ee481e37c27fd37e7a5c",
@@ -116,7 +117,7 @@ def _seed_v1_receipt(connection: sqlite3.Connection) -> None:
 def _seed_valid_v1_after_0006(path: Path) -> MigrationCoordinator:
     coordinator = _coordinator(path)
     assert coordinator.init() == [ROOT]
-    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E, I10A]
+    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E, I10A, PO]
     with _connect(path) as connection:
         _seed_business_rows(connection)
         connection.execute("UPDATE orders SET offline_issue=NULL")
@@ -141,10 +142,10 @@ def test_fresh_0001_to_0006_restart_and_exact_shape(tmp_path):
     database = tmp_path / "fresh.db"
     coordinator = _coordinator(database)
     assert coordinator.init() == [ROOT]
-    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E, I10A]
+    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E, I10A, PO]
     report = coordinator.verify()
-    assert report.current_revision == report.head_revision == I10A
-    assert report.revision_count == 7
+    assert report.current_revision == report.head_revision == PO
+    assert report.revision_count == 8
     assert coordinator.upgrade("head") == []
     assert coordinator.verify().database_uuid == report.database_uuid
 
@@ -170,7 +171,7 @@ def test_0005_to_0006_empty_v1_is_forward_only_and_checksummed(tmp_path):
 
     graph = coordinator._graph()
     assert [x.revision for x in graph.revisions] == [
-        ROOT, I04, I05, I09, I09C, I09E, I10A
+        ROOT, I04, I05, I09, I09C, I09E, I10A, PO
     ]
     spec = next(x for x in graph.revisions if x.revision == I09E)
     assert spec.down_revision == I09C
@@ -288,7 +289,7 @@ def test_verifier_rejects_nullable_column_shape(tmp_path):
     database = tmp_path / "nullable-shape.db"
     coordinator = _coordinator(database)
     assert coordinator.init() == [ROOT]
-    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E, I10A]
+    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E, I10A, PO]
     module = _module(coordinator)
     with _connect(database) as connection:
         connection.execute("DROP TABLE offline_receipt_items")
@@ -337,7 +338,7 @@ def test_verifier_rejects_named_index_with_wrong_shape(tmp_path, name, replaceme
     database = tmp_path / f"index-{name}-{hashlib.sha256(replacement.encode()).hexdigest()[:8]}.db"
     coordinator = _coordinator(database)
     assert coordinator.init() == [ROOT]
-    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E, I10A]
+    assert coordinator.upgrade("head") == [I04, I05, I09, I09C, I09E, I10A, PO]
     module = _module(coordinator)
     with _connect(database) as connection:
         connection.execute(f'DROP INDEX "{name}"')
