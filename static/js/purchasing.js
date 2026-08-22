@@ -751,14 +751,14 @@
             const status = orderStatus(order);
             let actions = `<button class="btn-outline" type="button" onclick="copyPurchaseOrder(${id})" title="${escapeHtml(t('seller.purchasing.copy_order'))}" aria-label="${escapeHtml(t('seller.purchasing.copy_order'))}"><i class="ph ph-copy"></i></button>`;
             if (status === 'DRAFT') {
-                actions += `<button class="btn-outline" type="button" onclick="editPurchaseOrder(${id})" title="${escapeHtml(t('common.edit'))}"><i class="ph ph-pencil"></i></button>
-                    <button type="button" onclick="placePurchaseOrder(${id})" title="${escapeHtml(t('seller.purchasing.place_order'))}"><i class="ph ph-paper-plane-tilt"></i></button>
-                    <button class="btn-outline" type="button" onclick="deletePurchaseOrder(${id})" title="${escapeHtml(t('common.delete'))}" style="color:#B91C1C;"><i class="ph ph-trash"></i></button>`;
+                actions += `<button class="btn-outline" type="button" onclick="editPurchaseOrder(${id})" title="${escapeHtml(t('common.edit'))}" aria-label="${escapeHtml(t('common.edit'))}"><i class="ph ph-pencil"></i></button>
+                    <button type="button" onclick="placePurchaseOrder(${id})" title="${escapeHtml(t('seller.purchasing.place_order'))}" aria-label="${escapeHtml(t('seller.purchasing.place_order'))}"><i class="ph ph-paper-plane-tilt"></i></button>
+                    <button class="btn-outline" type="button" onclick="deletePurchaseOrder(${id})" title="${escapeHtml(t('common.delete'))}" aria-label="${escapeHtml(t('common.delete'))}" style="color:#B91C1C;"><i class="ph ph-trash"></i></button>`;
             } else if (status === 'ORDERED') {
-                actions += `<button type="button" onclick="receivePurchaseOrder(${id})" title="${escapeHtml(t('seller.purchasing.receive_order'))}"><i class="ph ph-package"></i></button>
-                    <button class="btn-outline" type="button" onclick="cancelPurchaseOrder(${id})" title="${escapeHtml(t('seller.purchasing.cancel_order'))}" style="color:#B91C1C;"><i class="ph ph-x-circle"></i></button>`;
+                actions += `<button type="button" onclick="receivePurchaseOrder(${id})" title="${escapeHtml(t('seller.purchasing.receive_order'))}" aria-label="${escapeHtml(t('seller.purchasing.receive_order'))}"><i class="ph ph-package"></i></button>
+                    <button class="btn-outline" type="button" onclick="cancelPurchaseOrder(${id})" title="${escapeHtml(t('seller.purchasing.cancel_order'))}" aria-label="${escapeHtml(t('seller.purchasing.cancel_order'))}" style="color:#B91C1C;"><i class="ph ph-x-circle"></i></button>`;
             } else if (status === 'RECEIVED' && Number(order.receipt_id) > 0) {
-                actions += `<button class="btn-outline" type="button" onclick="openPurchaseReceiptDetail(${Number(order.receipt_id)})" title="${escapeHtml(t('seller.actions.view_detail'))}"><i class="ph ph-receipt"></i></button>`;
+                actions += `<button class="btn-outline" type="button" onclick="openPurchaseReceiptDetail(${Number(order.receipt_id)})" title="${escapeHtml(t('seller.actions.view_detail'))}" aria-label="${escapeHtml(t('seller.actions.view_detail'))}"><i class="ph ph-receipt"></i></button>`;
             }
             body.insertAdjacentHTML('beforeend', `<tr>
                 <td><strong>${escapeHtml(orderCode(order))}</strong><br><small>${escapeHtml(dateOnly(order.created_at))}</small></td>
@@ -1329,7 +1329,7 @@
             body.insertAdjacentHTML('beforeend', `<tr>
                 <td><strong>${escapeHtml(line.product_name || '')}</strong><br><small>${escapeHtml(line.product_code || '—')}</small></td>
                 <td><input type="number" inputmode="numeric" min="1" max="${MAX_PURCHASE_QUANTITY}" step="1" value="${escapeHtml(line.quantity)}" oninput="updatePurchaseOrderLine(${key}, this.value)"></td>
-                <td><button class="btn-outline" type="button" onclick="removePurchaseOrderLine(${key})" style="color:#B91C1C;"><i class="ph ph-trash"></i></button></td>
+                <td><button class="btn-outline" type="button" onclick="removePurchaseOrderLine(${key})" title="${escapeHtml(t('common.delete'))}" aria-label="${escapeHtml(t('common.delete'))}" style="color:#B91C1C;"><i class="ph ph-trash"></i></button></td>
             </tr>`);
         });
         if (state.pendingOrderCreate) lockOrderEditor(true, true);

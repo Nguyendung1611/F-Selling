@@ -73,6 +73,27 @@ def test_tab_nhap_hang_co_du_ba_man_va_cac_hop_thoai_tien_quan_trong():
     assert "switchPurchasingSubTab('suppliers')" in html
 
 
+def test_cac_nut_icon_don_dat_hang_co_ten_cho_cong_cu_ho_tro():
+    source = _read("static/js/purchasing.js")
+    actions = (
+        "editPurchaseOrder",
+        "placePurchaseOrder",
+        "deletePurchaseOrder",
+        "receivePurchaseOrder",
+        "cancelPurchaseOrder",
+        "openPurchaseReceiptDetail",
+        "removePurchaseOrderLine",
+    )
+
+    for action in actions:
+        button = re.search(
+            rf'<button[^>]+onclick="{action}\([^>]+>',
+            source,
+        )
+        assert button, f"missing {action} button"
+        assert "aria-label=" in button.group(0), f"{action} has no accessible name"
+
+
 def test_du_bao_chi_prefill_don_dat_hang_va_khong_tu_tao_don():
     html = _read("static/seller.html")
     seller_js = _read("static/js/seller.js")
@@ -178,7 +199,7 @@ def test_module_nap_sau_seller_va_moi_file_dung_dung_phien_ban():
     cụm là bắt người dùng tải lại những file không hề đổi.
     """
     html = _read("static/seller.html")
-    purchasing_version = "20260821-purchase-orders-r1"
+    purchasing_version = "20260822-order-actions-a11y-r2"
     cashflow_version = "20260808-dong-tien-k1"
     locale_version = "20260822-daily-close-r1"
     seller_version = "20260822-daily-close-r1"
@@ -535,7 +556,7 @@ def test_giao_dien_chan_tran_so_luong_tien_va_tong_nhieu_dong():
     assert "currentStock > MAX_PURCHASE_QUANTITY - accumulated" in receipt
     assert "paid > MAX_PURCHASE_VND" in confirm
     assert "amount > MAX_PURCHASE_VND" in payment
-    assert "20260821-purchase-orders-r1" in html
+    assert "20260822-order-actions-a11y-r2" in html
     for key in (
         "seller.purchasing.quantity_limit",
         "seller.purchasing.stock_after_limit",

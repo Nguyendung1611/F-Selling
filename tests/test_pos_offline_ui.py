@@ -30,6 +30,18 @@ def _bo_chu_thich(ma: str) -> str:
     return "\n".join(dong.split("//")[0] for dong in ma.splitlines())
 
 
+def test_nut_tim_va_them_khach_pos_co_ten_truy_cap_duoc():
+    html = _doc("static/pos.html")
+
+    tim = html[html.index('onclick="timKhachPOS()"'):]
+    tim = tim[:tim.index("</button>")]
+    them = html[html.index('onclick="hienFormKhachMoi()"'):]
+    them = them[:them.index("</button>")]
+
+    assert 'data-i18n-aria-label="pos.customer.search_placeholder"' in tim
+    assert 'data-i18n-aria-label="pos.customer.add_title"' in them
+
+
 # ---------- Điều kiện an toàn ----------
 def test_chi_luu_offline_khi_mat_mang_han():
     """Ba điều kiện phải cùng có mặt trong nhánh cứu hộ của `thuTaoDonDangDo`.
