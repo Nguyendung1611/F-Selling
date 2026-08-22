@@ -62,6 +62,15 @@ _SAFE_QUESTION_WORDS = frozenset({
     "thuc", "tien", "tiem", "tinh", "tom", "ton", "tong", "truoc", "tuan",
     "ve", "vo", "vua", "vao", "xem",
 })
+# At least one retail/report anchor must survive. Two generic allowlisted words
+# alone (for example "moi roi") are not enough reason to cross the provider
+# boundary or reserve budget.
+_DOMAIN_QUESTION_WORDS = frozenset({
+    "ban", "ca", "can", "chay", "chi", "cong", "date", "doanh", "don",
+    "e", "gia", "hang", "han", "het", "khach", "ket", "kho", "lai",
+    "lay", "loi", "mon", "nhap", "no", "pham", "phi", "quan", "san",
+    "shop", "tien", "tiem", "ton", "thu",
+})
 _CIRCUIT_LOCK = threading.Lock()
 _circuit_failures = 0
 _circuit_open_until = 0.0
@@ -132,7 +141,14 @@ def _minimize_question(cau_hoi: str) -> Optional[str]:
         if token in _SAFE_QUESTION_WORDS
     ]
     minimized = " ".join(safe)[:200]
-    return minimized if len(safe) >= 2 else None
+    return minimized if len(safe) >= 2 and any(
+        token in _DOMAIN_QUESTION_WORDS for token in safe
+    ) else None
+
+
+def co_the_gui(cau_hoi: str) -> bool:
+    """True only when the privacy allowlist leaves a useful retail question."""
+    return _minimize_question(cau_hoi) is not None
 
 
 def phan_loai(

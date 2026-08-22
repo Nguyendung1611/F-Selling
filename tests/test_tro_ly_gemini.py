@@ -14,7 +14,9 @@ from fselling.core import thoi_gian
 from fselling.core.database import SessionLocal
 from fselling.services import assistant_service, gemini_service, subscription_service
 
-CAU_LA = "kể tui nghe chuyện buôn bán"
+# Unknown to the local matcher, but still contains enough generic retail
+# context to pass the privacy boundary and exercise the fake provider.
+CAU_LA = "bữa ni quán thu vô ổn áp hông"
 
 
 @pytest.fixture(autouse=True)

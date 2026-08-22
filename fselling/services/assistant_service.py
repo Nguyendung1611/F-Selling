@@ -188,7 +188,8 @@ _MAU_Y_DINH: List[Tuple[str, str]] = [
      r"|\bmo ca\b|\bdong ca\b|\bchot ca\b",
      Y_DINH_CA_TIEN),
     # Đứng trước LAI: "lãi ròng" là con số khác hẳn "lãi gộp".
-    (r"\bchi phi\b|\blai rong\b|\bloi nhuan rong\b|\btieu het\b|\bchi het\b"
+    (r"\bchi phi\b|\blai rong\b|\bloi nhuan rong\b|\btien loi thuc\b"
+     r"|\bsau moi khoan\b|\btieu het\b|\bchi het\b"
      r"|\btien dien\b|\btien nuoc\b|\bthue mat bang\b|\bdong tien\b|\bchi bao nhieu\b",
      Y_DINH_CHI_PHI),
     (r"\blai\b|\bloi nhuan\b|\blai gop\b|\blo hay lai\b", Y_DINH_LAI),
@@ -226,6 +227,7 @@ _MAU_Y_DINH: List[Tuple[str, str]] = [
 # a navigation answer must never sound like the action was performed.
 _MAU_KHONG_HO_TRO = (
     r"\btu dong\b|\bchuyen tien\b|\bgoi dien\b|\bxoa het\b|"
+    r"\bviet quang cao\b|\bbo qua.*\b(chi dan|huong dan)\b|"
     r"\bkhai thue\b|\bnop thue\b|"
     r"\bthue (phai nop|gia tri gia tang|gtgt|vat|thu nhap|tncn|tndn)\b"
 )
@@ -399,6 +401,8 @@ def _thu_hoi_gemini(
         return None                       # chưa cắm key -> tính năng không tồn tại
     if _dang_rac(cau_khong_dau):
         return None
+    if not gemini_service.co_the_gui(cau_khong_dau):
+        return None                       # allowlist không đủ ngữ cảnh: không giữ tiền
     try:
         subscription_service.require_pro(db, shop_id)
     except HTTPException:
@@ -436,6 +440,11 @@ def _doan_y_dinh(cau_khong_dau: str) -> Optional[str]:
         if re.search(mau, cau_khong_dau):
             return y_dinh
     return None
+
+
+def _khong_ho_tro(cau_khong_dau: str) -> bool:
+    """External/write/legal requests must never fall through to a provider."""
+    return bool(re.search(_MAU_KHONG_HO_TRO, cau_khong_dau))
 
 
 def _so_nguyen_hien_thi(so: Any) -> int:
@@ -886,7 +895,7 @@ def hoi_dap(
     y_dinh = _doan_y_dinh(khong_dau)
     nho_gemini = False
 
-    if y_dinh is None:
+    if y_dinh is None and not _khong_ho_tro(khong_dau):
         # Chỉ tới đây mới nghĩ tới Gemini. Mọi câu hỏi thường gặp đã được trả
         # lời ở trên rồi, miễn phí và tức thì.
         tu_ai = _thu_hoi_gemini(db, current_user, shop_id, khong_dau)
