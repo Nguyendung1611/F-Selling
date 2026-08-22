@@ -674,6 +674,11 @@
             </div>
 
             <div id="assistantBody" style="display:none;">
+                <section id="assistantFeedbackSummary" hidden aria-live="polite"
+                         style="margin-bottom:1rem; padding:0.8rem 1rem; border:1px solid var(--border-color); border-radius:12px; background:rgba(127,127,127,0.07);">
+                    <strong style="display:block; margin-bottom:0.25rem;" data-i18n="seller.assistant.quality_title">Chất lượng câu trả lời</strong>
+                    <div id="assistantFeedbackSummaryBody" style="color:var(--text-muted); font-size:0.82rem; line-height:1.5;"></div>
+                </section>
                 <div id="assistantChat" style="min-height:220px; max-height:420px; overflow-y:auto; padding:1rem; border:1px solid var(--border-color); border-radius:12px; margin-bottom:1rem;"></div>
 
                 <div id="assistantSuggestions" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.8rem;"></div>
@@ -2445,7 +2450,7 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260822-daily-close-r1"></script>
+    <script src="/js/locales/seller.js?v=20260823-assistant-feedback-r1"></script>
     <script src="/js/locales/subscriptions.js?v=20260807-goi-cuoc-f3"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
 <script src="/js/api.js?v=20260812-i09-f1-c1&g=20260813-i09-g2h2"></script>
@@ -2453,7 +2458,7 @@
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260822-daily-close-r1"></script>
+    <script src="/js/seller.js?v=20260823-assistant-feedback-r1"></script>
     <script src="/js/purchasing.js?v=20260822-order-actions-a11y-r2"></script>
     <!-- Nạp SAU seller.js: expenses.js dùng apiCall/showToast/showCustomConfirm
          và các helper định dạng tiền của trang. -->

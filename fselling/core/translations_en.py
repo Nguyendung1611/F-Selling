@@ -483,4 +483,12 @@ EN_MESSAGES = {
         "Total loss (write-offs with full cost data)",
     "Số phiếu chưa đủ giá vốn (không tính vào lỗ)":
         "Write-offs missing cost data (excluded from the loss)",
+    # Assistant Feedback R1
+    "Phiếu đánh giá không hợp lệ hoặc đã hết hạn":
+        "This feedback receipt is invalid or has expired",
+    "Đánh giá hữu ích không cần lý do sai":
+        "A helpful rating cannot include a wrong-answer reason",
+    "Hãy chọn một lý do cố định": "Choose one of the listed reasons",
+    "Chỉ chủ cửa hàng mới xem được chất lượng trợ lý":
+        "Only the store owner can view assistant quality",
 }

@@ -208,5 +208,5 @@ def test_tab_tich_diem_chan_so_le_truoc_khi_goi_api_va_da_bump_cache():
     assert 'id="loyaltyRedeemAmount" type="number" min="1" step="1"' in html
     # R1 Forecast prefill sửa cả hai file này nên chúng cùng sang mốc mới. Ghim
     # cứng là có chủ ý: đổi file thì phải sửa dòng này, tức là nghĩ lại về cache.
-    assert "/js/locales/seller.js?v=20260822-daily-close-r1" in html
-    assert "/js/seller.js?v=20260822-daily-close-r1" in html
+    assert "/js/locales/seller.js?v=20260823-assistant-feedback-r1" in html
+    assert "/js/seller.js?v=20260823-assistant-feedback-r1" in html

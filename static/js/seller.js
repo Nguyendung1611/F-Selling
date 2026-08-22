@@ -2037,6 +2037,7 @@ function moTroLy() {
     }
     veGoiY();
     khoiTaoGiongNoiTroLy();
+    taiTongHopDanhGiaTroLy();
 }
 
 function veGoiY(danhSach = null) {
@@ -2083,6 +2084,120 @@ function themBongChat(ben, chu, phuChu = '') {
     return bong;
 }
 
+const LY_DO_DANH_GIA_TRO_LY = Object.freeze({
+    NOT_UNDERSTOOD: 'seller.assistant.reason_not_understood',
+    WRONG_REPORT: 'seller.assistant.reason_wrong_report',
+    WRONG_TIME_RANGE: 'seller.assistant.reason_wrong_time_range',
+    WRONG_NUMBERS: 'seller.assistant.reason_wrong_numbers',
+    OTHER: 'seller.assistant.reason_other'
+});
+
+let lanTaiTongHopTroLy = 0;
+
+function taoNutDanhGiaTroLy(label, onClick) {
+    const nut = document.createElement('button');
+    nut.type = 'button';
+    nut.className = 'btn-outline';
+    nut.style.cssText = 'padding:0.22rem 0.55rem; font-size:0.74rem; box-shadow:none;';
+    nut.innerText = label;
+    nut.setAttribute('aria-label', label);
+    nut.onclick = onClick;
+    return nut;
+}
+
+function ganDanhGiaTroLy(bong, token, shopId) {
+    const noiDung = bong?.firstElementChild;
+    if (!noiDung || !token) return;
+
+    const khung = document.createElement('div');
+    khung.style.cssText = 'margin-top:0.55rem; padding-top:0.45rem; border-top:1px solid rgba(127,127,127,0.25);';
+    const cauHoi = document.createElement('div');
+    cauHoi.style.cssText = 'font-size:0.72rem; opacity:0.75; margin-bottom:0.35rem;';
+    cauHoi.innerText = t('seller.assistant.feedback_question');
+    const cacNut = document.createElement('div');
+    cacNut.style.cssText = 'display:flex; gap:0.35rem; flex-wrap:wrap;';
+
+    const huuIch = taoNutDanhGiaTroLy(t('seller.assistant.helpful'), () => {
+        guiDanhGiaTroLy(khung, token, shopId, 'HELPFUL');
+    });
+    const chuaDung = taoNutDanhGiaTroLy(t('seller.assistant.not_helpful'), () => {
+        cauHoi.innerText = t('seller.assistant.choose_reason');
+        cacNut.replaceChildren();
+        Object.entries(LY_DO_DANH_GIA_TRO_LY).forEach(([reason, key]) => {
+            cacNut.appendChild(taoNutDanhGiaTroLy(t(key), () => {
+                guiDanhGiaTroLy(khung, token, shopId, 'NOT_HELPFUL', reason);
+            }));
+        });
+    });
+    cacNut.append(huuIch, chuaDung);
+    khung.append(cauHoi, cacNut);
+    noiDung.appendChild(khung);
+}
+
+async function guiDanhGiaTroLy(khung, token, shopId, rating, reason = null) {
+    const cacNut = Array.from(khung.querySelectorAll('button'));
+    cacNut.forEach(nut => { nut.disabled = true; });
+    const payload = { feedback_token: token, rating };
+    if (reason) payload.reason = reason;
+    try {
+        await apiCall(`/assistant/${shopId}/feedback`, 'POST', payload);
+        khung.replaceChildren();
+        const camOn = document.createElement('small');
+        camOn.style.opacity = '0.75';
+        camOn.innerText = t('seller.assistant.feedback_thanks');
+        khung.appendChild(camOn);
+        if (currentShopId === shopId) taiTongHopDanhGiaTroLy();
+    } catch (error) {
+        cacNut.forEach(nut => { nut.disabled = false; });
+        showToast(error.message || t('seller.assistant.feedback_failed'));
+    }
+}
+
+async function taiTongHopDanhGiaTroLy() {
+    const khung = document.getElementById('assistantFeedbackSummary');
+    const noiDung = document.getElementById('assistantFeedbackSummaryBody');
+    if (!khung || !noiDung || !currentShopId || !['SELLER', 'ADMIN'].includes(MY_ROLE)) {
+        if (khung) khung.hidden = true;
+        return;
+    }
+    const shopId = currentShopId;
+    const lanNay = ++lanTaiTongHopTroLy;
+    try {
+        const summary = await apiCall(`/assistant/${shopId}/feedback/summary`);
+        if (lanNay !== lanTaiTongHopTroLy || currentShopId !== shopId) return;
+        khung.hidden = false;
+        if (!summary.total) {
+            noiDung.innerText = `${t('seller.assistant.quality_empty')} ${t('seller.assistant.quality_ai_stays_off')}`;
+            return;
+        }
+        const lines = [t('seller.assistant.quality_result', {
+            helpful: summary.helpful,
+            total: summary.total,
+            percent: summary.helpful_percent
+        })];
+        if (summary.total < summary.gate.minimum_samples) {
+            lines.push(t('seller.assistant.quality_need_more', {
+                count: summary.gate.minimum_samples - summary.total
+            }));
+        } else {
+            lines.push(t(summary.gate.ready_for_review
+                ? 'seller.assistant.quality_ready'
+                : 'seller.assistant.quality_below'));
+        }
+        const topReason = Object.entries(summary.reasons || {}).sort((a, b) => b[1] - a[1])[0];
+        if (topReason?.[1] > 0 && LY_DO_DANH_GIA_TRO_LY[topReason[0]]) {
+            lines.push(t('seller.assistant.quality_top_reason', {
+                reason: t(LY_DO_DANH_GIA_TRO_LY[topReason[0]]),
+                count: topReason[1]
+            }));
+        }
+        lines.push(t('seller.assistant.quality_ai_stays_off'));
+        noiDung.innerText = lines.join(' ');
+    } catch (error) {
+        if (lanNay === lanTaiTongHopTroLy) khung.hidden = true;
+    }
+}
+
 async function guiCauHoi(bienCo) {
     if (bienCo) bienCo.preventDefault();
     const o = document.getElementById('assistantInput');
@@ -2111,7 +2226,8 @@ async function guiCauHoi(bienCo) {
         if (d.dung_ai) {
             phuChu += (phuChu ? ' · ' : '') + t('seller.assistant.via_ai');
         }
-        themBongChat('may', d.tra_loi, phuChu);
+        const bongTraLoi = themBongChat('may', d.tra_loi, phuChu);
+        ganDanhGiaTroLy(bongTraLoi, d.feedback_token, shopId);
         if (docTraLoiDangBat()) {
             // Cắt bớt cho vừa giới hạn của server đọc hộ (TTS_MAX_CHARS = 300).
             window.DocTien?.noi?.(docDuocCauTraLoi(d.tra_loi).slice(0, 280));
