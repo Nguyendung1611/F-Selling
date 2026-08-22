@@ -1,4 +1,4 @@
-"""Offline golden eval: 45 Vietnamese routing/fallback cases, zero network."""
+"""Offline golden eval: original 45 cases plus canary-2 cases, zero network."""
 from __future__ import annotations
 
 import pytest
@@ -35,6 +35,9 @@ DETERMINISTIC_CASES = [
     ("lãi ròng tháng này", "CHI_PHI"),
     ("tiền điện và chi phí bao nhiêu", "CHI_PHI"),
     ("tiền lời thực sau mọi khoản", "CHI_PHI"),
+    ("sau các khoản chi tiệm còn lời sao ta", "CHI_PHI"),
+    ("ở mối nên lấy thêm món chi", "CAN_NHAP"),
+    ("có gì cần lấy thêm ở mối", "CAN_NHAP"),
     ("shop của tôi đang dùng gói nào", "SHOP"),
     ("trong két còn bao nhiêu", "CA_TIEN"),
 ]
@@ -57,8 +60,13 @@ UNKNOWN_CASES = [
 PROVIDER_CASES = [
     ("bữa ni quán thu vô ổn áp hông", "DOANH_THU"),
     ("món nào khách khoái nhất", "BAN_CHAY"),
-    ("có gì cần lấy thêm ở mối", "CAN_NHAP"),
     ("ai còn thiếu tiền tiệm", "CONG_NO"),
+]
+
+SECOND_CANARY_CASES = [
+    ("bữa ni tiền vô quán cỡ mô", "DOANH_THU"),
+    ("khách thường lấy món chi nhất", "BAN_CHAY"),
+    ("tiệm còn ai thiếu chưa trả", "CONG_NO"),
 ]
 
 
@@ -98,7 +106,9 @@ def test_unknown_or_unsafe_cases_never_reach_provider(client, monkeypatch):
     assert calls["count"] == 0
 
 
-@pytest.mark.parametrize(("question", "expected"), PROVIDER_CASES)
+@pytest.mark.parametrize(
+    ("question", "expected"), PROVIDER_CASES + SECOND_CANARY_CASES
+)
 def test_fake_provider_canary_only_selects_allowlisted_service(
     client, monkeypatch, question, expected
 ):

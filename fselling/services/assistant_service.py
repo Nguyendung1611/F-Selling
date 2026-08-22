@@ -189,6 +189,7 @@ _MAU_Y_DINH: List[Tuple[str, str]] = [
      Y_DINH_CA_TIEN),
     # Đứng trước LAI: "lãi ròng" là con số khác hẳn "lãi gộp".
     (r"\bchi phi\b|\blai rong\b|\bloi nhuan rong\b|\btien loi thuc\b"
+     r"|\bsau .*\bkhoan chi\b.*\b(loi|lai)\b"
      r"|\bsau moi khoan\b|\btieu het\b|\bchi het\b"
      r"|\btien dien\b|\btien nuoc\b|\bthue mat bang\b|\bdong tien\b|\bchi bao nhieu\b",
      Y_DINH_CHI_PHI),
@@ -204,7 +205,7 @@ _MAU_Y_DINH: List[Tuple[str, str]] = [
     # `\bsap het\b` đứng SAU mẫu hạn sử dụng nên "sắp hết hạn" đã được nhận ở
     # đó rồi; ở đây nó bắt cách nói khác thứ tự như "hàng nào sắp hết".
     (r"\bsap het hang\b|\bsap het\b|\bcan nhap\b|\bnhap hang\b|\bdat hang\b"
-     r"|\bhet hang\b|\bnhap gi\b|\bgoi hang\b|\blay hang\b",
+     r"|\bhet hang\b|\bnhap gi\b|\bgoi hang\b|\blay hang\b|\blay them\b",
      Y_DINH_CAN_NHAP),
     (r"\bban chay\b|\bban duoc nhieu nhat\b|\btop\b|\bhut hang\b|\bdat khach\b",
      Y_DINH_BAN_CHAY),
