@@ -16,7 +16,7 @@ from fselling.services import assistant_service, gemini_service, subscription_se
 
 # Unknown to the local matcher, but still contains enough generic retail
 # context to pass the privacy boundary and exercise the fake provider.
-CAU_LA = "bữa ni quán thu vô ổn áp hông"
+CAU_LA = "món nào khách khoái nhất"
 
 
 @pytest.fixture(autouse=True)

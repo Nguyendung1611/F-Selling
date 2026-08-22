@@ -1,9 +1,10 @@
-"""Offline golden eval: original 45 cases plus canary-2 cases, zero network."""
+"""Offline golden eval: 100 Vietnamese routing/fallback cases, zero network."""
 from __future__ import annotations
 
 import pytest
 
 from conftest import auth, seller_with_shop
+from fselling.core.database import SessionLocal
 from fselling.services import assistant_service, gemini_service, subscription_service
 
 
@@ -69,11 +70,111 @@ SECOND_CANARY_CASES = [
     ("tiệm còn ai thiếu chưa trả", "CONG_NO"),
 ]
 
+LOCAL_R2_CASES = [
+    ("bữa ni thu được chừng nào", "DOANH_THU", "HOM_NAY"),
+    ("hôm qua tiền bán vô được mấy", "DOANH_THU", "HOM_QUA"),
+    ("tuần ni tổng thu là mấy đồng", "DOANH_THU", "TUAN_NAY"),
+    ("tháng ni bán buôn được mấy tiền", "DOANH_THU", "THANG_NAY"),
+    ("quán vô được chừng bao nhiêu", "DOANH_THU", None),
+    ("bữa ni chốt được mấy đơn", "SO_DON", "HOM_NAY"),
+    ("tuần ni có chừng nào đơn", "SO_DON", "TUAN_NAY"),
+    ("tháng trước khách mua bao nhiêu lượt", "SO_DON", "THANG_TRUOC"),
+    ("đối chiếu doanh số hai tuần", "SO_SANH_TUAN", None),
+    ("tuần rồi hơn hay kém tuần ni", "SO_SANH_TUAN", None),
+    ("coi tuần này tăng giảm so với tuần trước", "SO_SANH_TUAN", None),
+    ("món chi khách mua nhiều nhất", "BAN_CHAY", None),
+    ("hàng nào chạy nhất tiệm", "BAN_CHAY", None),
+    ("thứ chi đang hút khách", "BAN_CHAY", None),
+    ("món bán đắt khách nhất", "BAN_CHAY", None),
+    ("lô nào gần tới hạn", "SAP_HET_HAN", None),
+    ("hàng chi sắp quá hạn", "SAP_HET_HAN", None),
+    ("món nào gần hết date", "SAP_HET_HAN", None),
+    ("coi giúp đồ cận hạn", "SAP_HET_HAN", None),
+    ("món chi cần bổ sung kho", "CAN_NHAP", None),
+    ("hàng nào còn ít phải lấy thêm", "CAN_NHAP", None),
+    ("kho thiếu thứ gì", "CAN_NHAP", None),
+    ("nên gọi thêm mặt hàng nào", "CAN_NHAP", None),
+    ("món nào lâu rồi chưa bán", "HANG_E", None),
+    ("hàng chi nằm kho hoài", "HANG_E", None),
+    ("thứ nào quay vòng chậm", "HANG_E", None),
+    ("mặt hàng nào bị đọng vốn", "HANG_E", None),
+    ("ai đang thiếu tiền hàng", "CONG_NO", None),
+    ("còn khoản nào khách chưa trả", "CONG_NO", None),
+    ("tiền phải thu khách là mấy", "CONG_NO", None),
+    ("khách nào còn ghi sổ", "CONG_NO", None),
+    ("bữa ni lời được chừng nào", "LAI", "HOM_NAY"),
+    ("tuần ni lời lỗ ra sao", "LAI", "TUAN_NAY"),
+    ("tháng trước kiếm lời mấy đồng", "LAI", "THANG_TRUOC"),
+    ("lợi nhuận trước chi phí bao nhiêu", "LAI", None),
+    ("dạo ni tiệm làm ăn thế nào", "TONG_QUAN", None),
+    ("cho coi sức khỏe cửa hàng", "TONG_QUAN", None),
+    ("tiệm đang ổn hay có vấn đề", "TONG_QUAN", None),
+    ("món này bán giá mấy", "GIA_TON", None),
+    ("hàng này còn lại mấy chai", "GIA_TON", None),
+    ("coi giá với số tồn của món", "GIA_TON", None),
+    ("mặt hàng đắt rẻ ra sao", "GIA_TON", None),
+    ("tháng ni hao hết bao nhiêu", "CHI_PHI", "THANG_NAY"),
+    ("sau tiền điện nước còn lời mấy", "CHI_PHI", None),
+    ("tổng khoản chi vận hành là mấy", "CHI_PHI", None),
+    ("lời thực còn lại sau khi trừ hết phí", "CHI_PHI", None),
+    ("gói hiện tại của tiệm là chi", "SHOP", None),
+    ("bao giờ gói pro hết hạn", "SHOP", None),
+    ("két bữa ni có mấy tiền", "CA_TIEN", "HOM_NAY"),
+    ("ca hiện tại lệch tiền không", "CA_TIEN", None),
+]
+
 
 @pytest.mark.parametrize(("question", "expected"), DETERMINISTIC_CASES)
 def test_deterministic_golden_routes(question, expected):
     normalized = assistant_service._bo_dau(question)
     assert assistant_service._doan_y_dinh(normalized) == expected
+
+
+@pytest.mark.parametrize(("question", "expected", "period"), LOCAL_R2_CASES)
+def test_local_r2_routes_and_regional_periods(question, expected, period):
+    normalized = assistant_service._bo_dau(question)
+    assert assistant_service._doan_y_dinh(normalized) == expected
+    if period is not None:
+        assert assistant_service._khoang_ngay(normalized)[0] == period
+
+
+def test_local_r2_locks_exactly_one_hundred_offline_cases():
+    assert (
+        len(DETERMINISTIC_CASES)
+        + len(UNKNOWN_CASES)
+        + len(PROVIDER_CASES)
+        + len(SECOND_CANARY_CASES)
+        + len(LOCAL_R2_CASES)
+    ) == 100
+
+
+def test_local_r2_never_reaches_provider(client, monkeypatch):
+    ctx = seller_with_shop(client)
+    with SessionLocal() as session:
+        usage_before = assistant_service._monthly_call_count(session, ctx["shop_id"])
+
+    def unexpected_provider_call(*args, **kwargs):
+        raise AssertionError("Local R2 must not call a provider")
+
+    monkeypatch.setattr(subscription_service, "require_pro", lambda *args, **kwargs: {})
+    monkeypatch.setattr(gemini_service, "san_sang", lambda: True)
+    monkeypatch.setattr(gemini_service, "phan_loai", unexpected_provider_call)
+
+    for question, expected, _period in LOCAL_R2_CASES:
+        response = client.post(
+            f"/api/assistant/{ctx['shop_id']}",
+            json={"cau_hoi": question},
+            headers=auth(ctx["token"]),
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["y_dinh"] == expected
+        assert body["dung_ai"] is False
+
+    with SessionLocal() as session:
+        assert assistant_service._monthly_call_count(
+            session, ctx["shop_id"]
+        ) == usage_before
 
 
 @pytest.mark.parametrize("question", UNKNOWN_CASES)

@@ -122,11 +122,11 @@ def _bo_dau(chuoi: str) -> str:
 # không "tuần trước" sẽ khớp nhầm thành "tuần này".
 _MAU_THOI_GIAN: List[Tuple[str, str]] = [
     (r"\bhom qua\b", "HOM_QUA"),
-    (r"\bhom nay\b|\bbua nay\b|\bngay hom nay\b", "HOM_NAY"),
+    (r"\bhom nay\b|\bbua nay\b|\bbua ni\b|\bngay hom nay\b", "HOM_NAY"),
     (r"\btuan truoc\b|\btuan roi\b|\btuan vua roi\b", "TUAN_TRUOC"),
-    (r"\btuan nay\b|\btrong tuan\b", "TUAN_NAY"),
+    (r"\btuan nay\b|\btuan ni\b|\btrong tuan\b", "TUAN_NAY"),
     (r"\bthang truoc\b", "THANG_TRUOC"),
-    (r"\bthang nay\b|\btrong thang\b", "THANG_NAY"),
+    (r"\bthang nay\b|\bthang ni\b|\btrong thang\b", "THANG_NAY"),
     (r"\b(\d+)\s*ngay (qua|nay|vua roi|gan day)\b", "N_NGAY"),
 ]
 
@@ -176,50 +176,68 @@ _MAU_Y_DINH: List[Tuple[str, str]] = [
     #   "chi phí gói cước"      -> phải là GÓI CƯỚC, không phải chi phí vận hành
     #   "trong két còn bao nhiêu" -> phải là TIỀN MẶT, không phải tồn kho
     #   "lãi ròng"              -> phải là CHI PHÍ/lãi ròng, không phải lãi gộp
-    (r"\bso sanh\b.*\btuan\b|\btuan nay.*tuan truoc\b|\btuan truoc.*tuan nay\b",
+    (r"\bso sanh\b.*\btuan\b|\bdoi chieu\b.*\b(hai|2) tuan\b"
+     r"|\btuan (nay|ni).*tuan (truoc|roi)\b"
+     r"|\btuan (truoc|roi).*(tuan nay|tuan ni)\b",
      Y_DINH_SO_SANH_TUAN),
     # Đứng trước CHI_PHI: "chi phí gói cước" là hỏi giá gói, không phải tiền điện.
     (r"\bchu shop\b|\bchu tiem\b|\bchu cua hang\b|\bten cua hang\b|\bten shop\b"
      r"|\bgoi cuoc\b|\bgoi pro\b|\bgoi free\b|\bthue bao\b|\bhet han goi\b"
-     r"|\bshop cua toi\b",
+     r"|\bshop cua toi\b|\bgoi hien tai\b",
      Y_DINH_SHOP),
     # Đứng trước GIA_TON: "trong két còn bao nhiêu" không phải hỏi tồn kho.
-    (r"\btrong ket\b|\bket con\b|\btien mat\b|\bca ban hang\b|\bca hom nay\b"
+    (r"\btrong ket\b|\bket con\b|\bket\b.*\bmay tien\b|\btien mat\b"
+     r"|\bca ban hang\b|\bca hom nay\b|\bca hien tai\b"
      r"|\bmo ca\b|\bdong ca\b|\bchot ca\b",
      Y_DINH_CA_TIEN),
+    # Normalization removes accents, so specific stock/price phrases must run
+    # before bare `lai` (profit), and price questions before broad `ra sao`.
+    (r"\bban gia may\b|\bcon lai may\b|\bso ton\b|\bdat re\b", Y_DINH_GIA_TON),
+    (r"\bloi nhuan truoc chi phi\b", Y_DINH_LAI),
     # Đứng trước LAI: "lãi ròng" là con số khác hẳn "lãi gộp".
     (r"\bchi phi\b|\blai rong\b|\bloi nhuan rong\b|\btien loi thuc\b"
      r"|\bsau .*\bkhoan chi\b.*\b(loi|lai)\b"
-     r"|\bsau moi khoan\b|\btieu het\b|\bchi het\b"
+     r"|\bsau moi khoan\b|\bhao het\b|\bkhoan chi\b|\bloi thuc\b"
+     r"|\btieu het\b|\bchi het\b"
      r"|\btien dien\b|\btien nuoc\b|\bthue mat bang\b|\bdong tien\b|\bchi bao nhieu\b",
      Y_DINH_CHI_PHI),
-    (r"\blai\b|\bloi nhuan\b|\blai gop\b|\blo hay lai\b", Y_DINH_LAI),
+    (r"(?<!\bcon )\blai\b|\bloi nhuan\b|\blai gop\b|\blo hay lai\b"
+     r"|\bloi duoc\b|\bloi lo\b|\bkiem loi\b", Y_DINH_LAI),
     # Đứng trước nhóm doanh thu: "làm ăn ra sao" muốn một bức tranh, không phải
     # một con số.
     (r"\blam an\b|\btinh hinh\b|\bra sao\b|\bon khong\b"
-     r"|\bkha khong\b|\btong quan\b|\btom tat\b|\bdao nay\b",
+     r"|\bkha khong\b|\btong quan\b|\btom tat\b|\bdao nay\b"
+     r"|\bsuc khoe cua hang\b|\bon hay.*van de\b",
      Y_DINH_TONG_QUAN),
     (r"\bsap het han\b|\bhet han\b|\bhan su dung\b|\bcan date\b|\bhet date\b"
-     r"|\bqua date\b|\bsap hong\b|\bqua han\b",
+     r"|\bqua date\b|\bsap hong\b|\bqua han\b|\bgan toi han\b|\bcan han\b",
      Y_DINH_SAP_HET_HAN),
     # `\bsap het\b` đứng SAU mẫu hạn sử dụng nên "sắp hết hạn" đã được nhận ở
     # đó rồi; ở đây nó bắt cách nói khác thứ tự như "hàng nào sắp hết".
     (r"\bsap het hang\b|\bsap het\b|\bcan nhap\b|\bnhap hang\b|\bdat hang\b"
-     r"|\bhet hang\b|\bnhap gi\b|\bgoi hang\b|\blay hang\b|\blay them\b",
+     r"|\bhet hang\b|\bnhap gi\b|\bgoi hang\b|\blay hang\b|\blay them\b"
+     r"|\bbo sung kho\b|\bkho thieu\b|\bgoi them.*hang\b",
      Y_DINH_CAN_NHAP),
-    (r"\bban chay\b|\bban duoc nhieu nhat\b|\btop\b|\bhut hang\b|\bdat khach\b",
+    (r"\bban chay\b|\bban duoc nhieu nhat\b|\btop\b|\bhut hang\b|\bdat khach\b"
+     r"|\bkhach mua nhieu nhat\b|\bchay nhat\b|\bhut khach\b",
      Y_DINH_BAN_CHAY),
     (r"\be\b|\bnam e\b|\bton kho lau\b|\bkhong ai mua\b|\bkhong ban duoc\b"
-     r"|\bchon von\b|\bdong von\b|\bxa hang\b|\bban cham\b|\bde lau\b|\bton dong\b",
+     r"|\bchon von\b|\bdong von\b|\bxa hang\b|\bban cham\b|\bde lau\b|\bton dong\b"
+     r"|\blau roi chua ban\b|\bnam kho hoai\b|\bquay vong cham\b",
      Y_DINH_HANG_E),
-    (r"\bno\b|\bcong no\b|\bkhach no\b|\bphai thu\b|\bthu no\b", Y_DINH_CONG_NO),
+    (r"\bno\b|\bcong no\b|\bkhach no\b|\bphai thu\b|\bthu no\b"
+     r"|\bthieu tien hang\b|\bkhach chua tra\b|\bghi so\b", Y_DINH_CONG_NO),
     (r"\bdat nhat\b|\bre nhat\b|\bmac nhat\b|\bgia bao nhieu\b|\bgia cua\b"
      r"|\bcon bao nhieu\b|\bton kho con\b|\bcon may cai\b|\bbao nhieu cai\b",
      Y_DINH_GIA_TON),
-    (r"\bbao nhieu don\b|\bmay don\b|\bso don\b|\bso luong don\b|\bdon hang\b",
+    (r"\bbao nhieu don\b|\bmay don\b|\bso don\b|\bso luong don\b|\bdon hang\b"
+     r"|\bchung nao don\b|\bkhach mua bao nhieu luot\b",
      Y_DINH_SO_DON),
-    (r"\bdoanh thu\b|\bban duoc bao nhieu\b|\bthu ve\b|\bthu (duoc )?bao nhieu\b"
-     r"|\bban duoc\b|\bbao nhieu tien\b|\bduoc bao nhieu\b|\bkiem duoc\b|\bthu nhap\b",
+    (r"\bdoanh thu\b|\bban duoc bao nhieu\b|\bthu ve\b"
+     r"|\bthu (duoc )?(bao nhieu|chung nao)\b"
+     r"|\bban duoc\b|\bbao nhieu tien\b|\bduoc bao nhieu\b|\bkiem duoc\b|\bthu nhap\b"
+     r"|\btien ban.*duoc may\b|\btong thu.*may\b|\bban buon.*may tien\b"
+     r"|\bduoc chung (bao nhieu|nao)\b",
      Y_DINH_DOANH_THU),
 ]
 
