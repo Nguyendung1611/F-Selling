@@ -110,6 +110,15 @@ const ACTION_CENTER_TARGETS = Object.freeze({
     CUSTOMER_DEBT: Object.freeze({ tab: 'customers', icon: 'ph-users' })
 });
 
+const DAILY_CLOSE_TARGETS = Object.freeze({
+    OPEN_SHIFTS: Object.freeze({ tab: 'dashboard', icon: 'ph-cash-register' }),
+    CASH_VARIANCE: Object.freeze({ tab: 'dashboard', icon: 'ph-scales' }),
+    ORDER_RECONCILIATION: ACTION_CENTER_TARGETS.ORDER_RECONCILIATION,
+    UNAPPLIED_BANK_EVENTS: ACTION_CENTER_TARGETS.UNAPPLIED_BANK_EVENTS,
+    OFFLINE_ISSUES: ACTION_CENTER_TARGETS.OFFLINE_ISSUES,
+    EXPENSE_REMINDERS: ACTION_CENTER_TARGETS.EXPENSE_REMINDERS
+});
+
 function dinhDangSoSeller(value, options = {}) {
     return window.FSellingI18n?.formatNumber(value, options)
         ?? Number(value || 0).toLocaleString('vi-VN', options);
@@ -198,6 +207,10 @@ function xoaDuLieuShopCuKhoiGiaoDien() {
     if (voucherList) voucherList.innerHTML = '';
     const actionList = document.getElementById('actionCenterList');
     if (actionList) actionList.innerHTML = '';
+    const dailyClosePanel = document.getElementById('dailyClosePanel');
+    if (dailyClosePanel) dailyClosePanel.style.display = 'none';
+    const dailyCloseList = document.getElementById('dailyCloseList');
+    if (dailyCloseList) dailyCloseList.innerHTML = '';
     const actionBadge = document.getElementById('actionCenterBadge');
     if (actionBadge) actionBadge.style.display = 'none';
     ['actionCenterCritical', 'actionCenterAttention', 'actionCenterPlan'].forEach(id => {
@@ -288,6 +301,52 @@ function actionCenterDescription(item) {
     });
 }
 
+function renderDailyClose(dailyClose) {
+    const panel = document.getElementById('dailyClosePanel');
+    const list = document.getElementById('dailyCloseList');
+    if (!panel || !list || !dailyClose) return;
+    const summary = dailyClose.summary || {};
+    document.getElementById('dailyCloseRevenue').textContent = dinhDangTienDoiSoat(
+        actionCenterMetric(summary.revenue_vnd)
+    );
+    document.getElementById('dailyCloseOrders').textContent = dinhDangSoSeller(
+        actionCenterMetric(summary.order_count)
+    );
+    document.getElementById('dailyCloseDate').textContent = dailyClose.business_date || '';
+    const status = document.getElementById('dailyCloseStatus');
+    status.className = `daily-close-status ${dailyClose.ready ? 'clear' : 'attention'}`;
+    status.textContent = t(dailyClose.ready
+        ? 'seller.daily_close.ready'
+        : 'seller.daily_close.not_ready');
+
+    const checks = (Array.isArray(dailyClose.checks) ? dailyClose.checks : [])
+        .filter(item => item && Object.prototype.hasOwnProperty.call(DAILY_CLOSE_TARGETS, item.kind));
+    list.innerHTML = '';
+    for (const item of checks) {
+        const target = DAILY_CLOSE_TARGETS[item.kind];
+        const state = ['BLOCKING', 'ATTENTION', 'CLEAR'].includes(item.status)
+            ? item.status
+            : 'ATTENTION';
+        const stateKey = state.toLowerCase();
+        const description = t(`seller.daily_close.kind.${item.kind}.description`, {
+            count: dinhDangSoSeller(actionCenterMetric(item.count)),
+            amount: dinhDangTienDoiSoat(actionCenterMetric(item.amount_vnd))
+        });
+        list.insertAdjacentHTML('beforeend', `<div class="daily-close-row">
+            <div class="daily-close-row-main">
+                <strong><i class="ph ${target.icon}"></i> ${escapeHtml(t(`seller.daily_close.kind.${item.kind}.title`))}</strong>
+                <small>${escapeHtml(description)}</small>
+            </div>
+            <span class="daily-close-status ${stateKey}">${escapeHtml(t(`seller.daily_close.${stateKey}`))}</span>
+            ${state === 'CLEAR' ? '' : `<button class="btn-outline" type="button" data-daily-close-kind="${item.kind}">${escapeHtml(t('seller.daily_close.view'))}</button>`}
+        </div>`);
+    }
+    list.querySelectorAll('[data-daily-close-kind]').forEach(button => {
+        button.addEventListener('click', () => openDailyCloseItem(button.dataset.dailyCloseKind));
+    });
+    panel.style.display = 'block';
+}
+
 function renderActionCenter(data) {
     const list = document.getElementById('actionCenterList');
     const empty = document.getElementById('actionCenterEmpty');
@@ -305,6 +364,7 @@ function renderActionCenter(data) {
         plan: actionCenterMetric(summary.plan),
         total: actionCenterMetric(summary.total)
     };
+    renderDailyClose(data?.daily_close);
     document.getElementById('actionCenterCritical').textContent = dinhDangSoSeller(values.critical);
     document.getElementById('actionCenterAttention').textContent = dinhDangSoSeller(values.attention);
     document.getElementById('actionCenterPlan').textContent = dinhDangSoSeller(values.plan);
@@ -380,6 +440,13 @@ function openActionCenterItem(kind) {
     if (target.tab === 'warehouse' && target.subTab) switchWarehouseSubTab(target.subTab);
     if (target.tab === 'purchasing' && target.subTab) switchPurchasingSubTab(target.subTab);
     if (target.tab === 'customers') loadCustomers();
+}
+
+function openDailyCloseItem(kind) {
+    const target = DAILY_CLOSE_TARGETS[kind];
+    if (!target) return;
+    switchTab(target.tab, document.querySelector(`.tab-btn[data-main-tab="${target.tab}"]`));
+    if (target.tab === 'cashflow') window.FSellingExpenses?.load?.();
 }
 
 // Live Preview Logic

@@ -35,6 +35,31 @@ def load_dotenv() -> None:
 
 load_dotenv()
 
+
+def _int_env(name: str, default: int) -> int:
+    """Read an integer env value without making a typo crash startup."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        print(f"[WARN] {name}='{raw}' is not an integer. Using default {default}.")
+        return default
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    value = _int_env(name, default)
+    if value <= 0:
+        print(f"[WARN] {name} must be positive. Using default {default}.")
+        return default
+    return value
+
+
+def _bool_env_fail_closed(name: str) -> bool:
+    """Only explicit enable values may open a sensitive capability."""
+    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
 # --- Đường dẫn ---
 # Thư mục lưu ảnh upload - cấu hình qua env UPLOAD_DIR (trỏ vào volume khi deploy).
 UPLOAD_DIR: str = os.getenv("UPLOAD_DIR") or os.path.join(BASE_DIR, "static", "uploads")
@@ -71,20 +96,10 @@ TTS_CACHE_DIR: str = os.getenv("TTS_CACHE_DIR") or os.path.join(
 # cáo, rồi trả về một tên. Mọi con số vẫn do service trong app tính.
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY") or ""
 
-# Mặc định là BÍ DANH `-latest`, không phải một số phiên bản cụ thể. Ghim số là
-# tự hẹn ngày hỏng: kiểm ngày 2026-08-09 bằng key thật cho thấy
-# `gemini-2.0-flash` đã bị hạ suất miễn phí xuống 0 (HTTP 429, "limit: 0") và
-# `gemini-2.5-flash` bị gỡ hẳn (404) - trong khi tính năng vẫn "chạy", chỉ là
-# câu nào cũng trượt. Bí danh tự đi theo bản Flash hiện hành của Google.
-#
-# Đổi model KHÔNG thể làm sai một con số: câu trả lời của model bị ép nằm trong
-# danh sách báo cáo có sẵn (`gemini_service.phan_loai`), giá trị lạ bị loại.
-# Đó là lý do bí danh trôi theo thời gian ở đây an toàn, khác hẳn chỗ khác.
-#
-# Bản `lite` là đủ: việc của nó chỉ là đọc một câu tiếng Việt rồi chọn một
-# trong chín tên báo cáo. Đo ngày 2026-08-09 trên bảy câu hỏi đời thường
-# (kể cả câu vô nghĩa phải trả "không hiểu"): đúng 7/7.
-GEMINI_MODEL: str = os.getenv("GEMINI_MODEL") or "gemini-flash-lite-latest"
+# P0B pins one GA model reviewed against official docs on 2026-08-22. An env
+# typo, alias or preview name must fail closed rather than silently drift.
+GEMINI_MODEL_PINNED: str = "gemini-3.5-flash-lite"
+GEMINI_MODEL: str = (os.getenv("GEMINI_MODEL") or GEMINI_MODEL_PINNED).strip()
 
 # Trần lượt gọi mỗi shop mỗi ngày. Đây là trần cho các câu bộ so khớp nội bộ
 # KHÔNG hiểu, không phải trần số câu hỏi - hỏi bình thường không tiêu lượt nào.
@@ -97,7 +112,33 @@ GEMINI_TRAN_MOI_PHUT: int = 5
 # request treo giữ một luồng threadpool, hết luồng là cả app đứng kể cả POS.
 # KHÔNG tự thử lại khi hết giờ - retry là nhân đôi lượt gọi cho một người vốn
 # đã đang chờ.
-GEMINI_TIMEOUT_SECONDS: int = 6
+GEMINI_TIMEOUT_SECONDS: int = min(
+    _positive_int_env("GEMINI_TIMEOUT_SECONDS", 6), 8
+)
+
+# Conservative reservation per call: the prompt is capped at 200 user chars
+# plus a fixed allowlist and output is capped at 40 tokens. At the paid-tier
+# prices reviewed on 2026-08-22 this deliberately over-reserves for FX/token
+# variance. Failed calls are never refunded.
+GEMINI_RESERVED_VND_PER_CALL: int = _positive_int_env(
+    "GEMINI_RESERVED_VND_PER_CALL", 25
+)
+GEMINI_MONTHLY_CAP_VND: int = min(
+    _positive_int_env("GEMINI_MONTHLY_CAP_VND", 350_000), 350_000
+)
+GEMINI_SHOP_MONTHLY_CAP_VND: int = min(
+    _positive_int_env("GEMINI_SHOP_MONTHLY_CAP_VND", 15_000),
+    GEMINI_MONTHLY_CAP_VND,
+)
+GEMINI_DEGRADE_PERCENT: int = max(
+    1, min(_positive_int_env("GEMINI_DEGRADE_PERCENT", 80), 100)
+)
+GEMINI_CIRCUIT_FAILURE_THRESHOLD: int = _positive_int_env(
+    "GEMINI_CIRCUIT_FAILURE_THRESHOLD", 3
+)
+GEMINI_CIRCUIT_COOLDOWN_SECONDS: int = _positive_int_env(
+    "GEMINI_CIRCUIT_COOLDOWN_SECONDS", 60
+)
 
 # --- JWT ---
 # JWT secret: lấy từ biến môi trường. Nếu chưa cấu hình, sinh key ngẫu nhiên an toàn
@@ -119,32 +160,6 @@ OTP_EXPIRE_MINUTES: int = 5
 
 # --- Giới hạn nghiệp vụ ---
 MAX_SHOPS_PER_USER: int = 3
-
-
-def _int_env(name: str, default: int) -> int:
-    """Đọc số nguyên từ env; giá trị rác -> dùng mặc định thay vì crash lúc khởi động."""
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        return default
-    try:
-        return int(raw.strip())
-    except ValueError:
-        print(f"[WARN] {name}='{raw}' is not an integer. Using default {default}.")
-        return default
-
-
-def _positive_int_env(name: str, default: int) -> int:
-    """Đọc env nguyên dương; fallback mà không cần reload module khi test."""
-    value = _int_env(name, default)
-    if value <= 0:
-        print(f"[WARN] {name} must be positive. Using default {default}.")
-        return default
-    return value
-
-
-def _bool_env_fail_closed(name: str) -> bool:
-    """Chỉ giá trị bật tường minh mới mở capability nhạy cảm."""
-    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 # Hai capability ngoài mạng luôn OFF trừ khi operator bật tường minh. Credentials

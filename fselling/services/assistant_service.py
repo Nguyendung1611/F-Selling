@@ -39,11 +39,21 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..core import thoi_gian
-from ..core.config import GEMINI_TRAN_MOI_NGAY, GEMINI_TRAN_MOI_PHUT, log_to_file
+from ..core.config import (
+    GEMINI_DEGRADE_PERCENT,
+    GEMINI_MODEL_PINNED,
+    GEMINI_MONTHLY_CAP_VND,
+    GEMINI_RESERVED_VND_PER_CALL,
+    GEMINI_SHOP_MONTHLY_CAP_VND,
+    GEMINI_TRAN_MOI_NGAY,
+    GEMINI_TRAN_MOI_PHUT,
+    log_to_file,
+)
 from ..core.i18n import tr
 from ..dependencies import require_shop_access
 from . import (
@@ -184,7 +194,7 @@ _MAU_Y_DINH: List[Tuple[str, str]] = [
     (r"\blai\b|\bloi nhuan\b|\blai gop\b|\blo hay lai\b", Y_DINH_LAI),
     # Đứng trước nhóm doanh thu: "làm ăn ra sao" muốn một bức tranh, không phải
     # một con số.
-    (r"\blam an\b|\btinh hinh\b|\bra sao\b|\bthe nao\b|\bon khong\b"
+    (r"\blam an\b|\btinh hinh\b|\bra sao\b|\bon khong\b"
      r"|\bkha khong\b|\btong quan\b|\btom tat\b|\bdao nay\b",
      Y_DINH_TONG_QUAN),
     (r"\bsap het han\b|\bhet han\b|\bhan su dung\b|\bcan date\b|\bhet date\b"
@@ -210,6 +220,15 @@ _MAU_Y_DINH: List[Tuple[str, str]] = [
      r"|\bban duoc\b|\bbao nhieu tien\b|\bduoc bao nhieu\b|\bkiem duoc\b|\bthu nhap\b",
      Y_DINH_DOANH_THU),
 ]
+
+# Requests that sound adjacent to a report but actually ask for unsupported
+# legal advice or a write/external action. Block before broad report patterns;
+# a navigation answer must never sound like the action was performed.
+_MAU_KHONG_HO_TRO = (
+    r"\btu dong\b|\bchuyen tien\b|\bgoi dien\b|\bxoa het\b|"
+    r"\bkhai thue\b|\bnop thue\b|"
+    r"\bthue (phai nop|gia tri gia tang|gtgt|vat|thu nhap|tncn|tndn)\b"
+)
 
 
 # --- Tầng dự phòng Gemini: bảy lớp chặn, xếp từ rẻ tới đắt ---
@@ -247,14 +266,38 @@ def _con_han_muc(db: Session, shop_id: int) -> Tuple[int, int]:
     return int(da_dung or 0), GEMINI_TRAN_MOI_NGAY
 
 
-def _tru_mot_luot(db: Session, shop_id: int) -> bool:
-    """Trừ một lượt, trả False khi đã hết trần.
+def _monthly_call_count(db: Session, shop_id: Optional[int] = None) -> int:
+    month = thoi_gian.hom_nay_vn_str()[:7]
+    sql = (
+        "SELECT COALESCE(SUM(so_luot), 0) FROM assistant_ai_usage "
+        "WHERE substr(ngay, 1, 7) = :month"
+    )
+    params: Dict[str, Any] = {"month": month}
+    if shop_id is not None:
+        sql += " AND shop_id = :shop_id"
+        params["shop_id"] = shop_id
+    return int(db.execute(text(sql), params).scalar() or 0)
 
-    Kiểm-rồi-ghi bằng hai câu lệnh riêng thì hai request cùng lúc đều thấy
-    "còn 1 lượt" rồi cùng gọi. Ở đây điều kiện `so_luot < :tran` nằm NGAY TRONG
-    câu UPDATE nên SQLite chỉ cho đúng một bên thắng.
+
+def _monthly_budget_vnd(db: Session) -> Tuple[int, int]:
+    """Privacy-safe durable usage derived from existing daily reservations."""
+    return (
+        _monthly_call_count(db) * GEMINI_RESERVED_VND_PER_CALL,
+        GEMINI_MONTHLY_CAP_VND,
+    )
+
+
+def _reserve_provider_call(db: Session, shop_id: int) -> bool:
+    """Atomically reserve daily, shop-month and global-month budget.
+
+    One conditional UPDATE is the concurrency boundary. SQLite serializes this
+    write and every cap subquery therefore sees the last committed winner.
+    Failed/timeout calls stay reserved; conservative accounting cannot
+    accidentally refund a billable request.
     """
     ngay = thoi_gian.hom_nay_vn_str()
+    month = ngay[:7]
+    degraded_cap = GEMINI_MONTHLY_CAP_VND * GEMINI_DEGRADE_PERCENT // 100
     db.execute(
         text(
             "INSERT OR IGNORE INTO assistant_ai_usage (shop_id, ngay, so_luot) "
@@ -265,12 +308,70 @@ def _tru_mot_luot(db: Session, shop_id: int) -> bool:
     ket = db.execute(
         text(
             "UPDATE assistant_ai_usage SET so_luot = so_luot + 1 "
-            "WHERE shop_id = :s AND ngay = :n AND so_luot < :tran"
+            "WHERE shop_id = :s AND ngay = :n AND so_luot < :daily "
+            "AND ((SELECT COALESCE(SUM(so_luot), 0) "
+            "      FROM assistant_ai_usage WHERE substr(ngay, 1, 7) = :month) "
+            "     * :reserve + :reserve) <= :global_cap "
+            "AND ((SELECT COALESCE(SUM(so_luot), 0) "
+            "      FROM assistant_ai_usage "
+            "      WHERE shop_id = :s AND substr(ngay, 1, 7) = :month) "
+            "     * :reserve + :reserve) <= :shop_cap"
         ),
-        {"s": shop_id, "n": ngay, "tran": GEMINI_TRAN_MOI_NGAY},
+        {
+            "s": shop_id,
+            "n": ngay,
+            "month": month,
+            "daily": GEMINI_TRAN_MOI_NGAY,
+            "reserve": GEMINI_RESERVED_VND_PER_CALL,
+            "global_cap": degraded_cap,
+            "shop_cap": GEMINI_SHOP_MONTHLY_CAP_VND,
+        },
     )
+    if ket.rowcount <= 0:
+        db.rollback()
+        return False
     db.commit()
-    return ket.rowcount > 0
+    return True
+
+
+def _latency_bucket(elapsed_ms: int) -> str:
+    if elapsed_ms < 250:
+        return "LT250"
+    if elapsed_ms < 1_000:
+        return "LT1000"
+    if elapsed_ms < 3_000:
+        return "LT3000"
+    if elapsed_ms < 6_000:
+        return "LT6000"
+    return "GE6000"
+
+
+def _record_provider_telemetry(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    *,
+    success: bool,
+    elapsed_ms: int,
+) -> None:
+    """Persist fixed operational metadata, never question/prompt/response."""
+    details = (
+        f"model={GEMINI_MODEL_PINNED};"
+        f"outcome={'SUCCESS' if success else 'FALLBACK'};"
+        f"latency_bucket={_latency_bucket(elapsed_ms)};"
+        f"reserved_vnd={GEMINI_RESERVED_VND_PER_CALL}"
+    )
+    try:
+        db.add(models.SystemLog(
+            user_id=current_user.id,
+            shop_id=shop_id,
+            action="ASSISTANT_AI_CALL",
+            details=details,
+        ))
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        log_to_file("[TRO LY] Khong ghi duoc AI telemetry")
 
 
 def _qua_nhanh(user_id: int, shop_id: int) -> bool:
@@ -294,7 +395,7 @@ def _thu_hoi_gemini(
     db: Session, current_user: models.User, shop_id: int, cau_khong_dau: str
 ) -> Optional[Tuple[str, str]]:
     """Sáu lớp chặn trước khi thực sự gọi ra Google. Trả None là bỏ qua."""
-    if not gemini_service.dang_bat():
+    if not gemini_service.san_sang():
         return None                       # chưa cắm key -> tính năng không tồn tại
     if _dang_rac(cau_khong_dau):
         return None
@@ -304,11 +405,19 @@ def _thu_hoi_gemini(
         return None                       # shop Free: im lặng lùi về "chưa hiểu"
     if _qua_nhanh(current_user.id, shop_id):
         return None
-    if not _tru_mot_luot(db, shop_id):
-        return None                       # hết trần ngày
+    if not _reserve_provider_call(db, shop_id):
+        return None                       # hết trần ngày/tháng hoặc đã degrade
 
+    started = time.monotonic()
     ket = gemini_service.phan_loai(
         cau_khong_dau, list(_BANG_XU_LY.keys()), list(_MA_SANG_CHU.keys())
+    )
+    _record_provider_telemetry(
+        db,
+        current_user,
+        shop_id,
+        success=ket is not None,
+        elapsed_ms=max(0, int((time.monotonic() - started) * 1_000)),
     )
     if ket is None:
         return None
@@ -321,6 +430,8 @@ def _doan_y_dinh(cau_khong_dau: str) -> Optional[str]:
     KHÔNG có nhánh "đoán đại cái gần nhất". Trả lời sai một con số tiền còn tệ
     hơn nói "tôi chưa hiểu": người hỏi không có cách nào biết là nó sai.
     """
+    if re.search(_MAU_KHONG_HO_TRO, cau_khong_dau):
+        return None
     for mau, y_dinh in _MAU_Y_DINH:
         if re.search(mau, cau_khong_dau):
             return y_dinh

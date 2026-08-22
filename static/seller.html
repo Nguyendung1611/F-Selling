@@ -300,11 +300,65 @@
             text-align: center;
             color: var(--text-muted);
         }
+        .daily-close-panel {
+            display: none;
+            margin: 0 0 1.1rem;
+            padding: 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            background: #F8FAFC;
+        }
+        .daily-close-head,
+        .daily-close-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .daily-close-head h4 { margin: 0 0 0.25rem; }
+        .daily-close-head p { margin: 0; color: var(--text-muted); }
+        .daily-close-metrics {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.75rem;
+            margin: 0.9rem 0;
+        }
+        .daily-close-metric {
+            padding: 0.75rem;
+            border-radius: 10px;
+            background: #fff;
+            border: 1px solid var(--border-color);
+        }
+        .daily-close-metric small { display:block; color:var(--text-muted); }
+        .daily-close-metric strong { font-size:1.2rem; }
+        .daily-close-list { display: grid; gap: 0.55rem; }
+        .daily-close-row {
+            padding: 0.7rem 0.8rem;
+            border-radius: 10px;
+            background: #fff;
+            border: 1px solid var(--border-color);
+        }
+        .daily-close-row-main { min-width: 0; }
+        .daily-close-row-main strong { display:block; }
+        .daily-close-row-main small { color:var(--text-muted); }
+        .daily-close-status {
+            flex: 0 0 auto;
+            padding: 0.22rem 0.55rem;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            background: #E2E8F0;
+        }
+        .daily-close-status.blocking { color:#991B1B; background:#FEE2E2; }
+        .daily-close-status.attention { color:#92400E; background:#FEF3C7; }
+        .daily-close-status.clear { color:#166534; background:#DCFCE7; }
 
         @media (max-width: 760px) {
             .doi-soat-list,
             .action-center-summary,
-            .action-center-list { grid-template-columns: 1fr; }
+            .action-center-list,
+            .daily-close-metrics { grid-template-columns: 1fr; }
+            .daily-close-row { align-items:flex-start; flex-direction:column; }
         }
 
         @media (max-width: 480px) {
@@ -523,6 +577,21 @@
                 <div class="action-center-summary-card"><small data-i18n="seller.action_center.attention">Cần chú ý</small><strong id="actionCenterAttention">0</strong></div>
                 <div class="action-center-summary-card"><small data-i18n="seller.action_center.plan">Kế hoạch</small><strong id="actionCenterPlan">0</strong></div>
             </div>
+
+            <section id="dailyClosePanel" class="daily-close-panel" aria-live="polite">
+                <div class="daily-close-head">
+                    <div>
+                        <h4><i class="ph ph-calendar-check"></i> <span data-i18n="seller.daily_close.title">Kiểm tra cuối ngày</span></h4>
+                        <p><span data-i18n="seller.daily_close.description">Checklist chỉ đọc từ dữ liệu hiện tại; xử lý vẫn thực hiện ở màn nghiệp vụ gốc.</span> <span id="dailyCloseDate"></span></p>
+                    </div>
+                    <span id="dailyCloseStatus" class="daily-close-status"></span>
+                </div>
+                <div class="daily-close-metrics">
+                    <div class="daily-close-metric"><small data-i18n="seller.daily_close.revenue">Doanh thu hôm nay</small><strong id="dailyCloseRevenue">0 ₫</strong></div>
+                    <div class="daily-close-metric"><small data-i18n="seller.daily_close.orders">Đơn hôm nay</small><strong id="dailyCloseOrders">0</strong></div>
+                </div>
+                <div id="dailyCloseList" class="daily-close-list"></div>
+            </section>
 
             <div id="actionCenterLoading" class="action-center-state"><i class="ph ph-spinner-gap"></i> <span data-i18n="seller.action_center.loading">Đang tổng hợp việc cần xử lý...</span></div>
             <div id="actionCenterError" class="action-center-state">
@@ -2375,7 +2444,7 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260821-action-center-r1"></script>
+    <script src="/js/locales/seller.js?v=20260822-daily-close-r1"></script>
     <script src="/js/locales/subscriptions.js?v=20260807-goi-cuoc-f3"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
 <script src="/js/api.js?v=20260812-i09-f1-c1&g=20260813-i09-g2h2"></script>
@@ -2383,7 +2452,7 @@
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260821-action-center-r1"></script>
+    <script src="/js/seller.js?v=20260822-daily-close-r1"></script>
     <script src="/js/purchasing.js?v=20260821-purchase-orders-r1"></script>
     <!-- Nạp SAU seller.js: expenses.js dùng apiCall/showToast/showCustomConfirm
          và các helper định dạng tiền của trang. -->

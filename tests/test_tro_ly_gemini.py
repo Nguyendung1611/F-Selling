@@ -21,8 +21,10 @@ CAU_LA = "kể tui nghe chuyện buôn bán"
 def _don_bo_nho():
     """Bộ đếm phút nằm trong RAM nên phải dọn giữa các test."""
     assistant_service._DAU_VET_PHUT.clear()
+    gemini_service._reset_circuit_for_tests()
     yield
     assistant_service._DAU_VET_PHUT.clear()
+    gemini_service._reset_circuit_for_tests()
 
 
 @pytest.fixture
@@ -295,7 +297,7 @@ def test_gemini_service_loai_gia_tri_ngoai_danh_sach(monkeypatch):
             lambda req, timeout=None: _GiaResponse(chu),
         )
         return gemini_service.phan_loai(
-            "abc", ["DOANH_THU", "SO_DON"], ["HOM_NAY", "THANG_TRUOC"]
+            "bua ni quan thu vao", ["DOANH_THU", "SO_DON"], ["HOM_NAY", "THANG_TRUOC"]
         )
 
     assert _tra('{"y_dinh":"DOANH_THU","khoang":"HOM_NAY"}') == ("DOANH_THU", "HOM_NAY")
@@ -315,7 +317,9 @@ def test_gemini_treo_thi_tra_loi_chua_hieu_chu_khong_vo(monkeypatch):
         raise TimeoutError("qua gio")
 
     monkeypatch.setattr(gemini_service.urllib.request, "urlopen", _treo)
-    assert gemini_service.phan_loai("abc", ["DOANH_THU"], ["HOM_NAY"]) is None
+    assert gemini_service.phan_loai(
+        "bua ni quan thu vao", ["DOANH_THU"], ["HOM_NAY"]
+    ) is None
 
 
 def test_prompt_khong_chua_du_lieu_cua_hang():

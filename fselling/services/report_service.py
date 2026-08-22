@@ -104,6 +104,111 @@ def _action_center_item(
     }
 
 
+def _daily_close_shift_metrics(
+    db: Session, shop_id: int, today: date
+) -> Dict[str, int]:
+    """Aggregate shift exceptions without exposing cashier identity."""
+    start = thoi_gian.dau_ngay_vn_sang_utc(today)
+    end = thoi_gian.dau_ngay_vn_sang_utc(today + timedelta(days=1))
+    open_count = int(
+        db.query(models.CashShift)
+        .filter(
+            models.CashShift.shop_id == shop_id,
+            models.CashShift.status == shift_service.STATUS_OPEN,
+        )
+        .count()
+    )
+    closed_today = (
+        db.query(models.CashShift.variance_amount)
+        .filter(
+            models.CashShift.shop_id == shop_id,
+            models.CashShift.status == shift_service.STATUS_CLOSED,
+            models.CashShift.closed_at >= start,
+            models.CashShift.closed_at < end,
+        )
+        .all()
+    )
+    variances = [int(value or 0) for (value,) in closed_today if int(value or 0)]
+    return {
+        "open_shift_count": open_count,
+        "variance_count": len(variances),
+        "variance_amount_vnd": sum(abs(value) for value in variances),
+    }
+
+
+def _daily_close_check(
+    kind: str, status: str, count: int, **metrics: int
+) -> Dict[str, Any]:
+    return {
+        "kind": kind,
+        "status": status,
+        "count": int(count),
+        **{key: int(value) for key, value in metrics.items()},
+    }
+
+
+def _daily_close(
+    *,
+    today: date,
+    generated_at: str,
+    dashboard: Dict[str, Any],
+    shift_metrics: Dict[str, int],
+    reconciliation_count: int,
+    unapplied_count: int,
+    offline_count: int,
+    reminder_count: int,
+    reminder_amount_vnd: int,
+) -> Dict[str, Any]:
+    open_shifts = int(shift_metrics.get("open_shift_count") or 0)
+    variance_count = int(shift_metrics.get("variance_count") or 0)
+    checks = [
+        _daily_close_check(
+            "OPEN_SHIFTS", "BLOCKING" if open_shifts else "CLEAR", open_shifts
+        ),
+        _daily_close_check(
+            "CASH_VARIANCE",
+            "ATTENTION" if variance_count else "CLEAR",
+            variance_count,
+            amount_vnd=int(shift_metrics.get("variance_amount_vnd") or 0),
+        ),
+        _daily_close_check(
+            "ORDER_RECONCILIATION",
+            "ATTENTION" if reconciliation_count else "CLEAR",
+            reconciliation_count,
+        ),
+        _daily_close_check(
+            "UNAPPLIED_BANK_EVENTS",
+            "ATTENTION" if unapplied_count else "CLEAR",
+            unapplied_count,
+        ),
+        _daily_close_check(
+            "OFFLINE_ISSUES",
+            "ATTENTION" if offline_count else "CLEAR",
+            offline_count,
+        ),
+        _daily_close_check(
+            "EXPENSE_REMINDERS",
+            "ATTENTION" if reminder_count else "CLEAR",
+            reminder_count,
+            amount_vnd=reminder_amount_vnd,
+        ),
+    ]
+    summary = {
+        "revenue_vnd": int(dashboard.get("total_revenue") or 0),
+        "order_count": int(dashboard.get("total_orders") or 0),
+        "blocking": sum(item["status"] == "BLOCKING" for item in checks),
+        "attention": sum(item["status"] == "ATTENTION" for item in checks),
+        "clear": sum(item["status"] == "CLEAR" for item in checks),
+    }
+    return {
+        "business_date": today.isoformat(),
+        "generated_at": generated_at,
+        "ready": summary["blocking"] == 0 and summary["attention"] == 0,
+        "summary": summary,
+        "checks": checks,
+    }
+
+
 def action_center(
     db: Session, current_user: models.User, shop_id: int
 ) -> Dict[str, Any]:
@@ -112,16 +217,18 @@ def action_center(
     require_cost_visibility(shop, current_user)
     today = _today_vietnam()
     items: List[Dict[str, Any]] = []
+    generated_at = datetime.now(_VIETNAM_TZ).isoformat(timespec="seconds")
 
-    reconciliation = seller_dashboard(
+    dashboard = seller_dashboard(
         db,
         current_user,
         shop_id,
         page=1,
         per_page=1,
-        reconciliation_only=True,
+        tu_ngay=today.isoformat(),
+        den_ngay=today.isoformat(),
     )
-    reconciliation_count = int(reconciliation.get("reconciliation_count") or 0)
+    reconciliation_count = int(dashboard.get("reconciliation_count") or 0)
     if reconciliation_count:
         items.append(_action_center_item(
             "ORDER_RECONCILIATION", "CRITICAL", reconciliation_count
@@ -236,9 +343,20 @@ def action_center(
         summary[item["severity"].lower()] += count
     return {
         "shop_id": int(shop_id),
-        "generated_at": datetime.now(_VIETNAM_TZ).isoformat(timespec="seconds"),
+        "generated_at": generated_at,
         "summary": summary,
         "items": items,
+        "daily_close": _daily_close(
+            today=today,
+            generated_at=generated_at,
+            dashboard=dashboard,
+            shift_metrics=_daily_close_shift_metrics(db, shop_id, today),
+            reconciliation_count=reconciliation_count,
+            unapplied_count=unapplied_count,
+            offline_count=len(offline),
+            reminder_count=len(reminder_items),
+            reminder_amount_vnd=int(reminders.get("total_missing") or 0),
+        ),
     }
 
 
