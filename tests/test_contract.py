@@ -220,6 +220,9 @@ ROUTES_BO_SUNG = {
     # GET chỉ trả aggregate cho chủ shop/ADMIN, không có raw question/answer.
     ("POST", "/api/assistant/{shop_id}/feedback"),
     ("GET", "/api/assistant/{shop_id}/feedback/summary"),
+    # Onboarding R1: owner-only read model over durable shop/product/shift/order
+    # facts. It never records clicks or performs business mutations.
+    ("GET", "/api/onboarding/{shop_id}"),
     # Action Center R1: một GET read-only tổng hợp các nguồn sự thật hiện có;
     # không notification table, background job hay mutation tự động.
     ("GET", "/api/action-center/{shop_id}"),

@@ -97,6 +97,15 @@ let loyaltyProgramShopId = null;
 let loyaltyRequestId = 0;
 let loyaltySaveBusy = false;
 let actionCenterRequestId = 0;
+let onboardingRequestId = 0;
+
+const ONBOARDING_STEPS = Object.freeze({
+    SHOP_CREATED: Object.freeze({ field: 'shop_created', key: 'shop', icon: 'ph-storefront' }),
+    PRODUCT_CREATED: Object.freeze({ field: 'product_created', key: 'product', icon: 'ph-package' }),
+    SHIFT_OPENED: Object.freeze({ field: 'shift_opened', key: 'shift_open', icon: 'ph-cash-register' }),
+    SALE_COMPLETED: Object.freeze({ field: 'sale_completed', key: 'sale', icon: 'ph-receipt' }),
+    SHIFT_CLOSED: Object.freeze({ field: 'shift_closed', key: 'shift_close', icon: 'ph-check-square' })
+});
 
 const ACTION_CENTER_TARGETS = Object.freeze({
     ORDER_RECONCILIATION: Object.freeze({ tab: 'reconciliation', icon: 'ph-warning-diamond' }),
@@ -180,6 +189,7 @@ function xoaDuLieuShopCuKhoiGiaoDien() {
     vouchersRequestId += 1;
     loyaltyRequestId += 1;
     actionCenterRequestId += 1;
+    onboardingRequestId += 1;
     loyaltyProgramCache = null;
     loyaltyProgramShopId = null;
     window.FSellingSubscriptions?.resetSellerForShopChange?.();
@@ -284,6 +294,90 @@ function switchTab(tabId, buttonEl = null) {
         window.FSellingSubscriptions?.loadSeller?.(currentShopId, currentShopGeneration);
     }
     window.FSellingSubscriptions?.onSellerTabChange?.(tabId);
+}
+
+function renderOnboarding(state) {
+    const panel = document.getElementById('onboardingPanel');
+    const list = document.getElementById('onboardingSteps');
+    const text = document.getElementById('onboardingProgressText');
+    const bar = document.getElementById('onboardingProgressBar');
+    if (!panel || !list || !text || !bar || MY_ROLE !== 'SELLER') return;
+
+    panel.hidden = state.complete;
+    if (state.complete) return;
+    const done = Number(state.completed_steps) || 0;
+    const total = Number(state.total_steps) || 5;
+    text.textContent = t('seller.onboarding.progress', { done, total });
+    bar.setAttribute('aria-valuenow', String(done));
+    bar.querySelector('span').style.width = `${Math.min(100, done * 100 / total)}%`;
+
+    const firstPending = Object.keys(ONBOARDING_STEPS).find(
+        key => state[ONBOARDING_STEPS[key].field] !== true
+    );
+    list.innerHTML = '';
+    Object.entries(ONBOARDING_STEPS).forEach(([key, step]) => {
+        const complete = state[step.field] === true;
+        const row = document.createElement('article');
+        row.style.cssText = 'display:flex; align-items:center; gap:0.75rem; padding:0.65rem 0.75rem; border:1px solid var(--border-color); border-radius:10px;';
+        row.innerHTML = `<i class="ph ${complete ? 'ph-check-circle' : step.icon}" style="font-size:1.25rem; color:${complete ? 'var(--success)' : 'var(--primary)'};"></i>`
+            + `<div style="flex:1;"><strong>${escapeHtml(t(`seller.onboarding.step_${step.key}`))}</strong>`
+            + `<small style="display:block; color:var(--text-muted); margin-top:0.12rem;">${escapeHtml(t(`seller.onboarding.step_${step.key}_hint`))}</small></div>`;
+        if (!complete && key === firstPending) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn-outline';
+            button.style.cssText = 'padding:0.35rem 0.7rem; white-space:nowrap;';
+            button.textContent = t('seller.onboarding.open');
+            button.onclick = () => openOnboardingStep(key);
+            row.appendChild(button);
+        }
+        list.appendChild(row);
+    });
+}
+
+function openOnboardingStep(key) {
+    if (key === 'SHOP_CREATED') {
+        switchTab('settings');
+        openCreateShopForm();
+    } else if (key === 'PRODUCT_CREATED') {
+        switchTab('warehouse');
+        switchWarehouseSubTab('products');
+        document.getElementById('prodName')?.focus();
+    } else if (['SHIFT_OPENED', 'SALE_COMPLETED', 'SHIFT_CLOSED'].includes(key)) {
+        if (currentShopId) goToPOS(currentShopId);
+    }
+}
+
+async function loadOnboarding() {
+    const panel = document.getElementById('onboardingPanel');
+    if (!panel || MY_ROLE !== 'SELLER') return;
+    if (!allShops.length || !currentShopId) {
+        renderOnboarding({
+            shop_created: false,
+            product_created: false,
+            shift_opened: false,
+            sale_completed: false,
+            shift_closed: false,
+            completed_steps: 0,
+            total_steps: 5,
+            complete: false
+        });
+        return;
+    }
+    const shopId = Number(currentShopId);
+    const generation = currentShopGeneration;
+    const requestId = ++onboardingRequestId;
+    try {
+        const state = await apiCall(`/onboarding/${shopId}`);
+        if (
+            requestId !== onboardingRequestId
+            || generation !== currentShopGeneration
+            || shopId !== Number(currentShopId)
+        ) return;
+        renderOnboarding(state);
+    } catch (error) {
+        if (requestId === onboardingRequestId) panel.hidden = true;
+    }
 }
 
 function actionCenterMetric(value) {
@@ -475,6 +569,7 @@ async function init() {
             document.getElementById('dashboardContent').style.display = 'none';
             document.getElementById('noShopMsg').style.display = 'block';
             if (MY_ROLE === 'SELLER') openCreateShopForm();
+            loadOnboarding();
         } else {
             // Mặc định nạp dữ liệu cho shop đầu tiên nếu có currentShopId
             let savedId = localStorage.getItem('currentShopId');
@@ -1627,6 +1722,7 @@ function changeShop(id) {
 
 function loadDataForCurrentShop() {
     if(allShops.length === 0 || !batDauDungShopHienTai()) return;
+    if (MY_ROLE === 'SELLER') loadOnboarding();
     // ADMIN vào seller.html chỉ để làm nghiệp vụ Nhập Hàng. Không tải dashboard,
     // voucher, khách hay nhân viên của từng shop; chỉ cần danh mục sản phẩm để
     // lập phiếu và module công nợ.
@@ -3943,6 +4039,7 @@ async function createProduct() {
         showToast(t(isEditing ? 'seller.products.updated' : 'seller.products.created'));
         cancelEditProduct();
         loadProducts();
+        if (!isEditing) loadOnboarding();
     } catch(e) {
         if (generation === currentShopGeneration && currentShopId === shopId) {
             showToast(e instanceof TypeError ? t('common.network_error') : e.message);

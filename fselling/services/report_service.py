@@ -869,6 +869,43 @@ def admin_dashboard(db: Session) -> List[Dict[str, Any]]:
     ]
 
 
+def onboarding_state(
+    db: Session, current_user: models.User, shop_id: int
+) -> Dict[str, Any]:
+    """First-value checklist computed only from durable business records."""
+    shop = require_shop_access(db, shop_id, current_user)
+    if current_user.role != "SELLER" or shop.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail=tr("Chỉ chủ cửa hàng mới xem được hướng dẫn bắt đầu"),
+        )
+
+    state = {
+        "shop_created": True,
+        "product_created": db.query(models.Product.id).filter(
+            models.Product.shop_id == shop_id
+        ).first() is not None,
+        "shift_opened": db.query(models.CashShift.id).filter(
+            models.CashShift.shop_id == shop_id
+        ).first() is not None,
+        "sale_completed": db.query(models.Order.id).filter(
+            models.Order.shop_id == shop_id,
+            models.Order.status.in_(("PAID", "DEBT")),
+        ).first() is not None,
+        "shift_closed": db.query(models.CashShift.id).filter(
+            models.CashShift.shop_id == shop_id,
+            models.CashShift.status == "CLOSED",
+        ).first() is not None,
+    }
+    completed = sum(state.values())
+    return {
+        **state,
+        "completed_steps": completed,
+        "total_steps": len(state),
+        "complete": completed == len(state),
+    }
+
+
 def shop_stats(
     db: Session,
     current_user: models.User,

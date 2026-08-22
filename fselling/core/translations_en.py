@@ -491,4 +491,6 @@ EN_MESSAGES = {
     "Hãy chọn một lý do cố định": "Choose one of the listed reasons",
     "Chỉ chủ cửa hàng mới xem được chất lượng trợ lý":
         "Only the store owner can view assistant quality",
+    "Chỉ chủ cửa hàng mới xem được hướng dẫn bắt đầu":
+        "Only the store owner can view the getting-started guide",
 }
