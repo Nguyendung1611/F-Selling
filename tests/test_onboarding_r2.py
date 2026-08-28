@@ -15,6 +15,18 @@ from conftest import (
 )
 
 
+DEFAULT_CATEGORY_NAME = "Chưa phân loại"
+
+
+def _post_product_without_category(client, ctx, name, stock=7):
+    return client.post(
+        "/api/products",
+        params={"shop_id": ctx["shop_id"]},
+        data={"name": name, "price": 15000, "stock": stock},
+        headers=auth(ctx["token"]),
+    )
+
+
 @pytest.fixture
 def minimum_shop(client):
     username, token = new_seller(client)
@@ -198,3 +210,44 @@ def test_idempotent_v0_transfer_with_cleared_bank_returns_no_qr_without_duplicat
     assert retry.json()["qr_url"] is None
     with SessionLocal() as db:
         assert db.query(models.Order).filter_by(operation_id=operation_id).count() == 1
+
+
+def test_first_product_without_category_creates_and_reuses_default(client, minimum_shop):
+    first = _post_product_without_category(client, minimum_shop, "Mì gói", stock=7)
+    second = _post_product_without_category(client, minimum_shop, "Nước suối", stock=3)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["category_id"] == second.json()["category_id"]
+    with SessionLocal() as db:
+        categories = db.query(models.Category).filter_by(
+            shop_id=minimum_shop["shop_id"], name=DEFAULT_CATEGORY_NAME
+        ).all()
+        assert len(categories) == 1
+
+
+def test_failed_first_product_rolls_back_lazy_default_category(client, minimum_shop):
+    explicit_id = create_category(
+        client, minimum_shop["token"], minimum_shop["shop_id"], "Đồ uống"
+    )
+    create_product(
+        client,
+        minimum_shop["token"],
+        minimum_shop["shop_id"],
+        "Trùng tên",
+        10000,
+        2,
+        explicit_id,
+    )
+
+    failed = _post_product_without_category(client, minimum_shop, "Trùng tên")
+
+    assert failed.status_code == 400
+    with SessionLocal() as db:
+        assert (
+            db.query(models.Category)
+            .filter_by(
+                shop_id=minimum_shop["shop_id"], name=DEFAULT_CATEGORY_NAME
+            )
+            .count()
+            == 0
+        )

@@ -41,6 +41,7 @@ from .log_service import log_system_action
 from .offline_fingerprint import canonical_time_text
 
 DEFAULT_PRODUCT_IMAGE = "https://placehold.co/150x150/1E293B/FFF?text=SP"
+DEFAULT_CATEGORY_NAME = "Chưa phân loại"
 
 # Chữ, số và dấu gạch ngang. CỐ Ý không kiểm checksum EAN-13/UPC: rất nhiều shop
 # tự in mã nội bộ dạng Code128 không theo chuẩn EAN, ép checksum sẽ chặn oan.
@@ -523,6 +524,32 @@ def _kiem_danh_muc_thuoc_shop(db: Session, shop_id: int, category_id: int) -> No
         )
 
 
+def _resolve_create_category_id(
+    db: Session, shop_id: int, category_id: Optional[int]
+) -> int:
+    if category_id is not None:
+        _kiem_danh_muc_thuoc_shop(db, shop_id, category_id)
+        return category_id
+
+    category = (
+        db.query(models.Category)
+        .filter(
+            models.Category.shop_id == shop_id,
+            models.Category.name == DEFAULT_CATEGORY_NAME,
+        )
+        .first()
+    )
+    if category is None:
+        category = models.Category(
+            shop_id=shop_id,
+            name=DEFAULT_CATEGORY_NAME,
+            is_active=True,
+        )
+        db.add(category)
+        db.flush()
+    return category.id
+
+
 def create_product(
     db: Session,
     current_user: models.User,
@@ -530,7 +557,7 @@ def create_product(
     name: str,
     price: int,
     stock: int,
-    category_id: int,
+    category_id: Optional[int],
     code: Optional[str] = None,
     barcode: Optional[str] = None,
     image: Optional[UploadFile] = None,
@@ -547,11 +574,7 @@ def create_product(
         require_cost_visibility(shop, current_user)
         cost_price = _kiem_gia_von(cost_price)
 
-    # Danh mục phải thuộc CHÍNH shop này. `update_product` kiểm từ lâu còn ở đây
-    # thì không - đoán `category_id` là gắn được sản phẩm của mình vào danh mục
-    # của cửa hàng khác, và từ đó lưới POS lọc theo danh mục hiện ra một món
-    # không thuộc danh mục nào người dùng nhìn thấy được.
-    _kiem_danh_muc_thuoc_shop(db, shop_id, category_id)
+    resolved_category_id = _resolve_create_category_id(db, shop_id, category_id)
 
     # Khai biến thể thì `name` trở thành tên NHÓM và tên lưu vào DB là tên ghép.
     # Phải làm trước phép kiểm trùng bên dưới, nếu không "Áo thun" nhóm sẽ đụng
@@ -613,7 +636,7 @@ def create_product(
         cost_deficit_qty=0,
         cost_state_version=1 if stock else 0,
         image_url=image_url,
-        category_id=category_id,
+        category_id=resolved_category_id,
         shop_id=shop_id,
     )
     db.add(p)

@@ -78,7 +78,7 @@ def create_product(
     name: str = Form(...),
     price: SignedExactVND = Form(...),
     stock: int = Form(...),
-    category_id: int = Form(...),
+    category_id: Optional[int] = Form(None),
     image: UploadFile = File(None),
     cost_price: Optional[SignedExactVND] = Form(None),
     track_batches: bool = Form(False),
