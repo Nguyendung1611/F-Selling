@@ -1,0 +1,44 @@
+.first-run-shell[hidden], .first-run-resume[hidden] { display: none !important; }
+
+.first-run-shell {
+    min-height: calc(100dvh - 4rem);
+    padding: clamp(1rem, 4vw, 3rem);
+    background: #f8fafc;
+}
+
+.first-run-card {
+    max-width: 44rem;
+    margin-inline: auto;
+    padding: clamp(1.25rem, 4vw, 2.5rem);
+    border: 1px solid #dbe4ee;
+    border-radius: 1rem;
+    background: #fff;
+    box-shadow: 0 18px 50px rgba(15, 23, 42, .08);
+}
+
+.first-run-progress {
+    margin: 0 0 .75rem;
+    color: #475569;
+    font-size: .875rem;
+    font-weight: 700;
+}
+
+.first-run-card h1 { margin: 0 0 .75rem; color: #0f172a; }
+.first-run-card p { color: #475569; line-height: 1.6; }
+.first-run-form { display: grid; gap: 1rem; margin-top: 1.5rem; }
+.first-run-field { display: grid; gap: .4rem; color: #1e293b; font-weight: 600; }
+.first-run-field input { min-height: 44px; padding: .65rem .75rem; font: inherit; font-size: 1rem; }
+.first-run-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1.5rem; }
+.first-run-actions button { min-height: 44px; }
+.first-run-local-help { margin-top: 1.5rem; padding: 1rem; border-left: 4px solid #0f766e; background: #f0fdfa; }
+.first-run-resume { margin: 0 0 1rem; padding: 1rem; border: 1px solid #99f6e4; border-radius: .75rem; background: #f0fdfa; }
+.first-run-resume h3 { margin: 0 0 .4rem; }
+.first-run-resume p { margin: 0 0 1rem; }
+
+@media (max-width: 640px) {
+    .first-run-actions > * { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .first-run-shell * { scroll-behavior: auto; transition: none !important; }
+}

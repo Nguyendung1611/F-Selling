@@ -18,6 +18,33 @@ from conftest import (
 DEFAULT_CATEGORY_NAME = "Chưa phân loại"
 
 
+def test_seller_hosts_r2_assets_and_accessible_shell():
+    html = open("static/seller.html", encoding="utf-8").read()
+    assert 'id="firstRunShell"' in html
+    assert 'id="firstRunResumeCard"' in html
+    assert 'id="firstRunShopForm"' in html
+    assert 'id="firstRunProductForm"' in html
+    assert "/css/onboarding-r2.css?v=20260828-r2" in html
+    assert "/js/onboarding-r2.js?v=20260828-r2" in html
+    assert html.index("/js/onboarding-r2.js") < html.index("/js/seller.js")
+
+
+def test_seller_r2_shell_keeps_each_task_and_resume_action_focused():
+    html = open("static/seller.html", encoding="utf-8").read()
+    assert 'aria-live="polite"' in html
+    assert 'data-i18n="seller.first_run.step_product.title"' in html
+    assert 'id="firstRunProductStock"' in html
+    assert 'id="firstRunProductStock" name="stock" type="number"' in html
+    assert 'id="firstRunProductStock" name="stock" type="number" value=' not in html
+    assert html.count('id="firstRunResumeAction"') == 1
+
+
+def test_r2_uses_new_keys_without_restoring_r1_checklist():
+    locale = open("static/js/locales/seller.js", encoding="utf-8").read()
+    assert "seller.first_run.step_shop.title" in locale
+    assert "seller.onboarding." not in locale
+
+
 def _post_product_without_category(client, ctx, name, stock=7):
     return client.post(
         "/api/products",
