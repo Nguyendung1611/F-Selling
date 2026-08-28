@@ -1,7 +1,7 @@
 # Onboarding Chủ shop R2 — Đặc tả thiết kế
 
 Ngày: 2026-08-28
-Trạng thái: Đã duyệt thiết kế trong hội thoại; chờ duyệt tài liệu trước khi lập kế hoạch triển khai.
+Trạng thái: Đã được khách hàng duyệt ngày 2026-08-28; sẵn sàng lập kế hoạch triển khai.
 
 ## 1. Bối cảnh
 
