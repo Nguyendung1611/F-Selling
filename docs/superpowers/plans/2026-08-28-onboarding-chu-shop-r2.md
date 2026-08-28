@@ -538,6 +538,7 @@ assert.strictEqual(
   'fselling.onboarding.r2.dismissed:chu%20shop%20a'
 );
 assert.strictEqual(context.next([], null), 'shop');
+assert.strictEqual(context.next([{ id: 9 }], null), null);
 assert.strictEqual(context.next([{ id: 9 }], { product_created: false }), 'product');
 assert.strictEqual(context.next([{ id: 9 }], { product_created: true, sale_completed: false }), 'sale');
 assert.strictEqual(context.next([{ id: 9 }], { product_created: true, sale_completed: true }), null);
@@ -561,7 +562,8 @@ function firstRunDismissKey(username) {
 
 function firstRunNextAction(shops, progress) {
     if (!Array.isArray(shops) || shops.length === 0) return 'shop';
-    if (!progress || progress.product_created !== true) return 'product';
+    if (!progress) return null;
+    if (progress.product_created !== true) return 'product';
     if (progress.sale_completed !== true) return 'sale';
     return null;
 }
@@ -570,6 +572,7 @@ function firstRunNextAction(shops, progress) {
 window.FSellingOnboardingR2 = (() => {
     let context = null;
     let progress = null;
+    let loadError = null;
     let submitting = false;
 
     async function initialize(nextContext) {
@@ -579,9 +582,15 @@ window.FSellingOnboardingR2 = (() => {
     }
 
     async function refresh() {
-        progress = context.shopId
-            ? await apiCall(`/onboarding/${context.shopId}`)
-            : null;
+        try {
+            progress = context.shopId
+                ? await apiCall(`/onboarding/${context.shopId}`)
+                : null;
+            loadError = null;
+        } catch (error) {
+            progress = null;
+            loadError = error;
+        }
         render();
     }
 
@@ -591,7 +600,7 @@ window.FSellingOnboardingR2 = (() => {
 }());
 ```
 
-The implementation may add private helpers inside the IIFE, but the public API remains exactly `initialize`, `refresh`, `rerender`.
+The implementation may add private helpers inside the IIFE, but the public API remains exactly `initialize`, `refresh`, `rerender`. When an existing shop's progress request fails, render a compact localized error with a retry button. Never infer `product` or `sale` from missing progress, and never reopen the dedicated welcome shell for that failure.
 
 - [ ] **Step 4: Add semantic HTML for one visible task at a time**
 
@@ -769,7 +778,7 @@ try {
     clearInlineError(form);
     advanceWith(created);
 } catch (error) {
-    showInlineError(form, error.message || dich('seller.first_run.retry_error'));
+    showInlineError(form, error.message || t('seller.first_run.retry_error'));
 } finally {
     submitting = false;
     setBusy(form, false);
@@ -810,6 +819,12 @@ function goToPOS(id, onboardingR2 = false) {
         : '/pos';
 }
 ```
+
+In `static/seller.html`, keep `required` and the `*` label only for shop name
+and phone. Address, tax code, email and all three bank fields remain visible
+but must lose both the `required` attribute and required wording. The bank
+group is optional as a whole and is rejected by `saveShop()`/backend only when
+partially filled.
 
 On `?setup=bank`, after a valid current shop loads: open Settings, open the existing edit-shop form, focus `bankCode`, then remove only `setup` from the URL with `history.replaceState` so refresh does not reopen it.
 
