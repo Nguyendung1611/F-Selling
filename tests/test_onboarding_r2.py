@@ -1,9 +1,18 @@
+import uuid
+
 import pytest
 
 from fselling import models
 from fselling.core.database import SessionLocal
 
-from conftest import SHOP_PAYLOAD, auth, create_category, create_product, new_seller
+from conftest import (
+    SHOP_PAYLOAD,
+    auth,
+    create_category,
+    create_product,
+    new_seller,
+    seller_with_shop,
+)
 
 
 @pytest.fixture
@@ -139,3 +148,53 @@ def test_debt_without_bank_still_creates_order_without_qr(client, minimum_shop_w
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "DEBT"
     assert response.json()["qr_url"] is None
+
+
+def test_idempotent_v0_transfer_with_cleared_bank_returns_no_qr_without_duplicate(
+    client,
+):
+    ctx = seller_with_shop(client)
+    operation_id = uuid.uuid4().hex
+    payload = {
+        "items": [
+            {
+                "product_name": ctx["product"]["name"],
+                "price": 1,
+                "quantity": 1,
+            }
+        ],
+        "payment_method": "transfer",
+        "operation_id": operation_id,
+    }
+    first = client.post(
+        f"/api/orders/{ctx['shop_id']}", json=payload, headers=auth(ctx["token"])
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["qr_url"] is not None
+    assert "qr_intent" not in first.json()
+
+    cleared = client.put(
+        f"/api/shops/{ctx['shop_id']}",
+        json={
+            **SHOP_PAYLOAD,
+            "bank_code": "",
+            "bank_account_no": "",
+            "bank_account_name": "",
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert (
+        cleared.json()["bank_code"],
+        cleared.json()["bank_account_no"],
+        cleared.json()["bank_account_name"],
+    ) == ("", "", "")
+
+    retry = client.post(
+        f"/api/orders/{ctx['shop_id']}", json=payload, headers=auth(ctx["token"])
+    )
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["order_id"] == first.json()["order_id"]
+    assert retry.json()["qr_url"] is None
+    with SessionLocal() as db:
+        assert db.query(models.Order).filter_by(operation_id=operation_id).count() == 1
