@@ -9,6 +9,6 @@ class ShopCreate(BaseModel):
     tax_code: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
-    bank_account_no: str
+    bank_account_no: Optional[str] = None
     bank_account_name: Optional[str] = None
-    bank_code: str
+    bank_code: Optional[str] = None

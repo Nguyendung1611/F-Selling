@@ -19,13 +19,7 @@ from .log_service import log_system_action
 # (thuộc tính trên model, giá trị từ request, thông báo lỗi khi rỗng)
 _REQUIRED_FIELDS = [
     ("name", "Tên cửa hàng không được để trống"),
-    ("business_address", "Địa chỉ kinh doanh không được để trống"),
-    ("tax_code", "Mã số thuế không được để trống"),
     ("phone", "Số điện thoại không được để trống"),
-    ("email", "Email không được để trống"),
-    ("bank_code", "Vui lòng chọn ngân hàng"),
-    ("bank_account_no", "Số tài khoản không được để trống"),
-    ("bank_account_name", "Tên chủ tài khoản không được để trống"),
 ]
 
 _BANK_FIELDS = frozenset({"bank_code", "bank_account_no", "bank_account_name"})
@@ -142,6 +136,12 @@ def _clean_and_validate(shop: ShopCreate) -> Dict[str, str]:
     for field, message in _REQUIRED_FIELDS:
         if not data[field]:
             raise HTTPException(status_code=400, detail=tr(message))
+    bank_values = [data[field] for field in _BANK_FIELDS]
+    if any(bank_values) and not all(bank_values):
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Vui lòng nhập đủ ngân hàng, số tài khoản và tên chủ tài khoản"),
+        )
     return data
 
 
