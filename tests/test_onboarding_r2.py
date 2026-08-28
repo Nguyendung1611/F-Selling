@@ -102,8 +102,8 @@ def test_pos_exposes_bank_setup_hint_and_first_sale_success():
 
 def test_pos_r2_asset_versions_are_cache_busted():
     html = open("static/pos.html", encoding="utf-8").read()
-    assert "/css/onboarding-r2.css?v=20260828-r2" in html
-    assert html.count("onboarding=20260828-r2") >= 2
+    assert "/css/onboarding-r2.css?v=20260828-r2-1" in html
+    assert html.count("onboarding=20260828-r2-1") >= 2
 
 
 def test_pos_bank_error_preserves_retry_and_success_requires_server_status():
@@ -133,7 +133,8 @@ def test_pos_bank_error_preserves_retry_and_success_requires_server_status():
     assert "showFirstRunSaleSuccess(d)" in source[
         source.index("async function hienHoaDon") : success_start
     ]
-    assert "/seller?setup=bank&amp;onboarding=r2" in html
+    assert 'href="/seller?setup=bank"' in html
+    assert "'/seller?setup=bank&onboarding=r2'" in source
     assert "get('onboarding') === 'r2'" in seller_source
 
 
@@ -143,8 +144,9 @@ def test_seller_hosts_r2_assets_and_accessible_shell():
     assert 'id="firstRunResumeCard"' in html
     assert 'id="firstRunShopForm"' in html
     assert 'id="firstRunProductForm"' in html
-    assert "/css/onboarding-r2.css?v=20260828-r2" in html
-    assert "/js/onboarding-r2.js?v=20260828-r2" in html
+    assert "/css/onboarding-r2.css?v=20260828-r2-1" in html
+    assert "/js/onboarding-r2.js?v=20260828-r2-1" in html
+    assert "onboarding=20260828-r2-1" in html
     assert html.index("/js/onboarding-r2.js") < html.index("/js/seller.js")
 
 
@@ -178,6 +180,63 @@ def test_r2_uses_new_keys_without_restoring_r1_checklist():
     locale = open("static/js/locales/seller.js", encoding="utf-8").read()
     assert "seller.first_run.step_shop.title" in locale
     assert "seller.onboarding." not in locale
+
+
+def test_r2_resume_shop_switch_and_edit_paths_stay_scoped_to_current_shop():
+    controller = open("static/js/onboarding-r2.js", encoding="utf-8").read()
+    seller = open("static/js/seller.js", encoding="utf-8").read()
+    html = open("static/seller.html", encoding="utf-8").read()
+
+    assert "async function selectShop(shopId)" in controller
+    assert "context.shopId = shopId;" in controller
+    assert "let refreshRequestId = 0;" in controller
+    select_shop = controller[controller.index("async function selectShop(shopId)") :]
+    assert "progress = null;" in select_shop
+    assert "render();" in select_shop
+    refresh = controller[controller.index("async function refresh()") : controller.index("async function selectShop(shopId)")]
+    assert "const requestId = ++refreshRequestId;" in refresh
+    assert "requestId !== refreshRequestId" in refresh
+    assert "context?.shopId !== shopId" in refresh
+    assert "selectShop" in controller[controller.index("return Object.freeze(") :]
+    assert "FSellingOnboardingR2?.selectShop?.(currentShopId)" in seller
+    assert 'id="firstRunEditProduct"' in html
+    assert "context.onEditProduct?.(createdProduct.id);" in controller
+    assert "async onEditProduct(productId)" in seller
+    assert "await loadProducts();" in seller[seller.index("async onEditProduct(productId)") :]
+    assert "editProduct(productId);" in seller[seller.index("async onEditProduct(productId)") :]
+
+
+def test_r2_shell_keeps_identity_language_logout_and_complete_locale_parity():
+    html = open("static/seller.html", encoding="utf-8").read()
+    locale = open("static/js/locales/seller.js", encoding="utf-8").read()
+
+    assert 'class="first-run-header"' in html
+    assert 'class="first-run-logo"' in html
+    assert html.count("data-language-selector") >= 2
+    assert 'id="firstRunLogout"' in html
+    for key in (
+        "open_assistant",
+        "shop_required",
+        "product_required",
+        "retry_error",
+        "edit_product",
+    ):
+        assert locale.count(f"'seller.first_run.{key}':") == 2
+
+
+def test_pos_r2_marker_and_completion_actions_are_contextual_and_cache_safe():
+    html = open("static/pos.html", encoding="utf-8").read()
+    source = open("static/js/pos.js", encoding="utf-8").read()
+    seller_html = open("static/seller.html", encoding="utf-8").read()
+
+    assert 'href="/seller?setup=bank"' in html
+    assert 'href="/seller?setup=bank&amp;onboarding=r2"' not in html
+    assert "query.get('onboarding') === 'r2'" in source
+    assert "'/seller?setup=bank&onboarding=r2'" in source
+    assert 'onclick="dongHoaDon()" data-i18n="pos.first_run.sell_more"' in html
+    assert "/css/onboarding-r2.css?v=20260828-r2-1" in html
+    assert "onboarding=20260828-r2-1" in html
+    assert "/css/onboarding-r2.css?v=20260828-r2-1" in seller_html
 
 
 def _post_product_without_category(client, ctx, name, stock=7):

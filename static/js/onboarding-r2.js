@@ -21,6 +21,7 @@ window.FSellingOnboardingR2 = (() => {
     let firstRunActive = false;
     let firstRunStep = 'shop';
     let createdProduct = null;
+    let refreshRequestId = 0;
 
     function text(key, fallback) {
         const translated = window.t ? window.t(key) : null;
@@ -122,13 +123,6 @@ window.FSellingOnboardingR2 = (() => {
         renderLocalHelp();
     }
 
-    function openProductManagement() {
-        const tabButton = document.querySelector('.tab-btn[data-main-tab="warehouse"]');
-        window.switchTab?.('warehouse', tabButton);
-        window.switchWarehouseSubTab?.('products');
-        document.getElementById('prodName')?.focus();
-    }
-
     function resume(action) {
         if (action === 'shop') {
             localStorage.removeItem(firstRunDismissKey(context.username));
@@ -136,7 +130,9 @@ window.FSellingOnboardingR2 = (() => {
             firstRunActive = true;
             render();
         } else if (action === 'product') {
-            openProductManagement();
+            firstRunStep = 'product';
+            firstRunActive = true;
+            render();
         } else if (action === 'sale') {
             context.onOpenPos?.(context.shopId);
         }
@@ -277,6 +273,12 @@ window.FSellingOnboardingR2 = (() => {
         document.getElementById('firstRunOpenPos').addEventListener('click', () => {
             context.onOpenPos?.(context.shopId);
         });
+        document.getElementById('firstRunEditProduct').addEventListener('click', () => {
+            if (!createdProduct?.id) return;
+            firstRunActive = false;
+            render();
+            context.onEditProduct?.(createdProduct.id);
+        });
         document.getElementById('firstRunSkip').addEventListener('click', () => {
             localStorage.setItem(firstRunDismissKey(context.username), '1');
             firstRunActive = false;
@@ -302,11 +304,15 @@ window.FSellingOnboardingR2 = (() => {
     }
 
     async function refresh() {
+        const requestId = ++refreshRequestId;
+        const shopId = context?.shopId;
         try {
-            progress = context?.role === 'SELLER' && context.shopId
-                ? await apiCall(`/onboarding/${context.shopId}`)
+            const nextProgress = context?.role === 'SELLER' && shopId
+                ? await apiCall(`/onboarding/${shopId}`)
                 : null;
-            if (context?.role === 'SELLER' && context.shopId && !progress) {
+            if (requestId !== refreshRequestId || context?.shopId !== shopId) return;
+            progress = nextProgress;
+            if (context?.role === 'SELLER' && shopId && !progress) {
                 throw new Error(text(
                     'seller.first_run.load_error',
                     'Không tải được tiến độ thiết lập. Bạn có thể thử lại.'
@@ -314,15 +320,26 @@ window.FSellingOnboardingR2 = (() => {
             }
             loadError = null;
         } catch (error) {
+            if (requestId !== refreshRequestId || context?.shopId !== shopId) return;
             progress = null;
             loadError = error;
         }
         render();
     }
 
+    async function selectShop(shopId) {
+        if (!context) return;
+        context.shopId = shopId;
+        createdProduct = null;
+        progress = null;
+        loadError = null;
+        render();
+        await refresh();
+    }
+
     function rerender() {
         render();
     }
 
-    return Object.freeze({ initialize, refresh, rerender });
+    return Object.freeze({ initialize, refresh, selectShop, rerender });
 })();

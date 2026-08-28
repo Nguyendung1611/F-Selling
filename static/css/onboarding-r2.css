@@ -8,6 +8,20 @@
     background: #f8fafc;
 }
 
+.first-run-header {
+    max-width: 44rem;
+    margin: 0 auto 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.first-run-logo { width: auto; height: 40px; }
+.first-run-header-actions { display: flex; align-items: end; gap: .75rem; }
+.first-run-header-actions select,
+.first-run-header-actions button { min-height: 44px; }
+
 .first-run-card {
     max-width: 44rem;
     margin-inline: auto;
@@ -76,6 +90,8 @@
 }
 
 @media (max-width: 640px) {
+    .first-run-header { align-items: flex-start; }
+    .first-run-header-actions { align-items: stretch; flex-direction: column; }
     .first-run-actions > * { width: 100%; }
 }
 

@@ -33,3 +33,13 @@ const shopSuccessChunk = controllerSource.slice(
 assert(shopSuccessChunk.includes(
     'progress = { product_created: false, sale_completed: false };'
 ));
+
+const resumeChunk = controllerSource.slice(
+    controllerSource.indexOf('function resume(action)'),
+    controllerSource.indexOf('function renderResume(action)')
+);
+assert(resumeChunk.includes("if (action === 'product')"));
+assert(resumeChunk.includes("firstRunStep = 'product';"));
+assert(resumeChunk.includes('firstRunActive = true;'));
+assert(resumeChunk.includes('render();'));
+assert(!resumeChunk.includes('openProductManagement();'));
