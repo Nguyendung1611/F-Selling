@@ -7,10 +7,15 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from fastapi import HTTPException
+
 from .. import models
+from ..core.i18n import tr
 from ..core.money import ExactMoneyError, exact_vnd
 
 ORDER_CODE_RE = re.compile(r"ORDER(\d+)", re.IGNORECASE)
+ERROR_QR_BANK_ACCOUNT_NOT_CONFIGURED = "QR_BANK_ACCOUNT_NOT_CONFIGURED"
+_TRANSFER_FIELDS = ("bank_code", "bank_account_no", "bank_account_name")
 # Mã thanh toán gói là một namespace riêng, không bao giờ suy từ ORDER hay từ
 # `payOS.data.orderCode` (trường đó chỉ là số, không mang namespace). Backend
 # sinh đúng 12 ký tự chữ/số sau tiền tố SUB; hai biên chữ/số ngăn một mã
@@ -18,6 +23,22 @@ ORDER_CODE_RE = re.compile(r"ORDER(\d+)", re.IGNORECASE)
 SUBSCRIPTION_CODE_RE = re.compile(
     r"(?<![A-Z0-9])SUB([A-Z0-9]{12})(?![A-Z0-9])", re.IGNORECASE
 )
+
+
+def has_transfer_account(shop: models.Shop) -> bool:
+    return all((getattr(shop, field, None) or "").strip() for field in _TRANSFER_FIELDS)
+
+
+def require_transfer_account(shop: models.Shop) -> None:
+    if has_transfer_account(shop):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": ERROR_QR_BANK_ACCOUNT_NOT_CONFIGURED,
+            "message": tr("Chưa thiết lập tài khoản nhận chuyển khoản"),
+        },
+    )
 
 
 @dataclass

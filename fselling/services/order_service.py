@@ -351,7 +351,11 @@ def _create_order_response(
         # same-origin render endpoint as a blob.
         "qr_url": (
             None
-            if qr_intent is not None
+            if (
+                qr_intent is not None
+                or existing.payment_method != PAYMENT_METHOD_TRANSFER
+                or not payment_service.has_transfer_account(shop)
+            )
             else payment_service.build_qr_url(shop, total, existing.id)
         ),
     }
@@ -559,6 +563,9 @@ def create_order(
             # đóng Session sau khi FastAPI dựng xong response.
             db.rollback()
             return existing_response
+
+    if order.payment_method == PAYMENT_METHOD_TRANSFER:
+        payment_service.require_transfer_account(shop)
 
     # Tính tiền TỪ DB, không tin giá client gửi.
     wanted = inventory_service.collect_quantities(order.items)

@@ -1,6 +1,9 @@
 import pytest
 
-from conftest import SHOP_PAYLOAD, auth, new_seller
+from fselling import models
+from fselling.core.database import SessionLocal
+
+from conftest import SHOP_PAYLOAD, auth, create_category, create_product, new_seller
 
 
 @pytest.fixture
@@ -16,6 +19,31 @@ def minimum_shop(client):
         "username": username,
         "token": token,
         "shop_id": response.json()["id"],
+    }
+
+
+@pytest.fixture
+def minimum_shop_with_product(client, minimum_shop):
+    category_id = create_category(
+        client,
+        minimum_shop["token"],
+        minimum_shop["shop_id"],
+        "Đồ ăn nhanh",
+    )
+    product = create_product(
+        client,
+        minimum_shop["token"],
+        minimum_shop["shop_id"],
+        "Mì gói",
+        15000,
+        7,
+        category_id,
+    )
+    return {
+        **minimum_shop,
+        "product_id": product["id"],
+        "product_name": product["name"],
+        "opening_stock": 7,
     }
 
 
@@ -55,3 +83,59 @@ def test_partial_bank_group_is_rejected(client):
     )
     assert response.status_code == 400
     assert "ngân hàng" in str(response.json()["detail"]).lower()
+
+
+def test_transfer_without_bank_fails_before_order_or_stock_mutation(
+    client, minimum_shop_with_product
+):
+    ctx = minimum_shop_with_product
+    response = client.post(
+        f"/api/orders/{ctx['shop_id']}",
+        json={
+            "items": [{"product_name": ctx["product_name"], "price": 1, "quantity": 1}],
+            "payment_method": "transfer",
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "QR_BANK_ACCOUNT_NOT_CONFIGURED"
+    with SessionLocal() as db:
+        product = db.query(models.Product).filter_by(id=ctx["product_id"]).one()
+        assert product.stock == ctx["opening_stock"]
+        assert db.query(models.Order).filter_by(shop_id=ctx["shop_id"]).count() == 0
+
+
+def test_cash_without_bank_still_creates_order_without_qr(client, minimum_shop_with_product):
+    ctx = minimum_shop_with_product
+    response = client.post(
+        f"/api/orders/{ctx['shop_id']}",
+        json={
+            "items": [{"product_name": ctx["product_name"], "price": 1, "quantity": 1}],
+            "payment_method": "cash",
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["qr_url"] is None
+
+
+def test_debt_without_bank_still_creates_order_without_qr(client, minimum_shop_with_product):
+    ctx = minimum_shop_with_product
+    customer = client.post(
+        f"/api/customers/{ctx['shop_id']}",
+        json={"name": "Cô Lan", "phone": "0900000001"},
+        headers=auth(ctx["token"]),
+    )
+    assert customer.status_code == 200, customer.text
+    response = client.post(
+        f"/api/orders/{ctx['shop_id']}",
+        json={
+            "items": [{"product_name": ctx["product_name"], "price": 1, "quantity": 1}],
+            "payment_method": "debt",
+            "customer_id": customer.json()["id"],
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "DEBT"
+    assert response.json()["qr_url"] is None
