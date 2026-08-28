@@ -1,5 +1,6 @@
 .first-run-shell[hidden], .first-run-resume[hidden] { display: none !important; }
 #sellerAppShell[hidden] { display: none !important; }
+#qrSetupHint[hidden], #firstRunSaleSuccess[hidden] { display: none !important; }
 
 .first-run-shell {
     min-height: calc(100dvh - 4rem);
@@ -36,6 +37,43 @@
 .first-run-resume h3 { margin: 0 0 .4rem; }
 .first-run-resume p { margin: 0 0 1rem; }
 .first-run-resume #firstRunResumeAction { min-height: 44px; }
+
+.pos-qr-setup-hint,
+.pos-first-run-success {
+    margin-top: .75rem;
+    padding: 1rem;
+    border-radius: .75rem;
+}
+
+.pos-qr-setup-hint {
+    border: 1px solid #fdba74;
+    background: #fff7ed;
+    color: #7c2d12;
+    line-height: 1.5;
+}
+
+.pos-qr-setup-hint a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    margin-top: .35rem;
+    color: #9a3412;
+    font-weight: 700;
+}
+
+.pos-first-run-success {
+    border: 1px solid #86efac;
+    background: #f0fdf4;
+    color: #14532d;
+}
+
+.pos-first-run-success h3 { margin: 0; line-height: 1.4; }
+.pos-first-run-success button { min-height: 44px; }
+.pos-qr-setup-hint a:focus-visible,
+.pos-first-run-success button:focus-visible {
+    outline: 3px solid #0f766e;
+    outline-offset: 3px;
+}
 
 @media (max-width: 640px) {
     .first-run-actions > * { width: 100%; }

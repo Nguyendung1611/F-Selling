@@ -80,6 +80,63 @@ def test_default_category_is_localized_only_at_render_time():
     assert "displayCategoryName(c.name)" in source
 
 
+def test_pos_exposes_bank_setup_hint_and_first_sale_success():
+    html = open("static/pos.html", encoding="utf-8").read()
+    source = open("static/js/pos.js", encoding="utf-8").read()
+    locales = open("static/js/locales/pos.js", encoding="utf-8").read()
+    assert 'id="qrSetupHint"' in html
+    assert 'id="firstRunSaleSuccess"' in html
+    assert "QR_BANK_ACCOUNT_NOT_CONFIGURED" in source
+    assert "onboarding" in source and "sale_completed" not in source
+    assert "PAID" in source and "DEBT" in source
+    assert "/seller?setup=bank" in html
+    for key in (
+        "pos.payment.bank_setup_required",
+        "pos.category.uncategorized",
+        "pos.first_run.sale_success_title",
+        "pos.first_run.overview",
+        "pos.first_run.sell_more",
+    ):
+        assert locales.count(f"'{key}':") == 2
+
+
+def test_pos_r2_asset_versions_are_cache_busted():
+    html = open("static/pos.html", encoding="utf-8").read()
+    assert "/css/onboarding-r2.css?v=20260828-r2" in html
+    assert html.count("onboarding=20260828-r2") >= 2
+
+
+def test_pos_bank_error_preserves_retry_and_success_requires_server_status():
+    source = open("static/js/pos.js", encoding="utf-8").read()
+    seller_source = open("static/js/seller.js", encoding="utf-8").read()
+    html = open("static/pos.html", encoding="utf-8").read()
+    capability = source[
+        source.index("function currentShopHasTransferAccount") : source.index(
+            "async function loadShop"
+        )
+    ]
+    for field in ("bank_code", "bank_account_no", "bank_account_name"):
+        assert field in capability
+
+    error_start = source.index("e.code === 'QR_BANK_ACCOUNT_NOT_CONFIGURED'")
+    error_end = source.index("const coVoucher", error_start)
+    error_path = source[error_start:error_end]
+    assert "luuCheckoutDangDo(state)" in error_path
+    assert "checkoutOperationId = null" not in error_path
+    assert "return;" in error_path
+
+    success_start = source.index("function showFirstRunSaleSuccess")
+    success_end = source.index("function dismissFirstRunSaleSuccess", success_start)
+    success_path = source[success_start:success_end]
+    assert "query.get('onboarding') !== 'r2'" in success_path
+    assert "['PAID', 'DEBT'].includes(orderDetail?.status)" in success_path
+    assert "showFirstRunSaleSuccess(d)" in source[
+        source.index("async function hienHoaDon") : success_start
+    ]
+    assert "/seller?setup=bank&amp;onboarding=r2" in html
+    assert "get('onboarding') === 'r2'" in seller_source
+
+
 def test_seller_hosts_r2_assets_and_accessible_shell():
     html = open("static/seller.html", encoding="utf-8").read()
     assert 'id="firstRunShell"' in html
