@@ -547,6 +547,8 @@ def _resolve_create_category_id(
         )
         db.add(category)
         db.flush()
+    elif not category.is_active:
+        category.is_active = True
     return category.id
 
 

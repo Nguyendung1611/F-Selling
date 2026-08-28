@@ -251,3 +251,29 @@ def test_failed_first_product_rolls_back_lazy_default_category(client, minimum_s
             .count()
             == 0
         )
+
+
+def test_first_product_reactivates_existing_inactive_default_category(
+    client, minimum_shop
+):
+    category_id = create_category(
+        client,
+        minimum_shop["token"],
+        minimum_shop["shop_id"],
+        DEFAULT_CATEGORY_NAME,
+    )
+    deactivated = client.put(
+        f"/api/categories/{category_id}",
+        json={"name": DEFAULT_CATEGORY_NAME, "is_active": False},
+        headers=auth(minimum_shop["token"]),
+    )
+    assert deactivated.status_code == 200, deactivated.text
+    assert deactivated.json()["is_active"] is False
+
+    created = _post_product_without_category(client, minimum_shop, "Gạo", stock=5)
+
+    assert created.status_code == 200, created.text
+    assert created.json()["category_id"] == category_id
+    with SessionLocal() as db:
+        category = db.query(models.Category).filter_by(id=category_id).one()
+        assert category.is_active is True
