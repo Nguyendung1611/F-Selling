@@ -39,6 +39,22 @@ def test_seller_r2_shell_keeps_each_task_and_resume_action_focused():
     assert html.count('id="firstRunResumeAction"') == 1
 
 
+def test_r2_shell_hides_management_app_when_its_hidden_attribute_is_set():
+    css = open("static/css/onboarding-r2.css", encoding="utf-8").read()
+    assert "#sellerAppShell[hidden] { display: none !important; }" in css
+
+
+def test_r2_local_help_uses_the_approved_support_number():
+    html = open("static/seller.html", encoding="utf-8").read()
+    assert "0774867057" in html
+    assert "1900 0000" not in html
+
+
+def test_r2_resume_action_has_a_44px_target():
+    css = open("static/css/onboarding-r2.css", encoding="utf-8").read()
+    assert ".first-run-resume #firstRunResumeAction { min-height: 44px; }" in css
+
+
 def test_r2_uses_new_keys_without_restoring_r1_checklist():
     locale = open("static/js/locales/seller.js", encoding="utf-8").read()
     assert "seller.first_run.step_shop.title" in locale
