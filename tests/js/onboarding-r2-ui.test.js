@@ -18,3 +18,18 @@ assert.strictEqual(context.next([{ id: 9 }], null), null);
 assert.strictEqual(context.next([{ id: 9 }], { product_created: false }), 'product');
 assert.strictEqual(context.next([{ id: 9 }], { product_created: true, sale_completed: false }), 'sale');
 assert.strictEqual(context.next([{ id: 9 }], { product_created: true, sale_completed: true }), null);
+
+const controllerSource = fs.readFileSync('static/js/onboarding-r2.js', 'utf8');
+assert(controllerSource.includes('if (submitting) return;'));
+assert(controllerSource.includes('submitting = true;'));
+assert(controllerSource.includes('finally {'));
+assert(controllerSource.includes('submitting = false;'));
+assert(controllerSource.includes('showInlineError(form'));
+assert(!controllerSource.includes('form.reset()'));
+const shopSuccessChunk = controllerSource.slice(
+    controllerSource.indexOf("const shop = await apiCall('/shops'"),
+    controllerSource.indexOf('async function submitProduct')
+);
+assert(shopSuccessChunk.includes(
+    'progress = { product_created: false, sale_completed: false };'
+));

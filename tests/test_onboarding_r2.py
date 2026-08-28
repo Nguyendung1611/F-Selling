@@ -1,3 +1,4 @@
+import re
 import uuid
 
 import pytest
@@ -16,6 +17,67 @@ from conftest import (
 
 
 DEFAULT_CATEGORY_NAME = "Chưa phân loại"
+
+
+def test_seller_initializes_r2_after_shop_discovery():
+    source = open("static/js/seller.js", encoding="utf-8").read()
+    assert "FSellingOnboardingR2.initialize" in source
+    assert "onboarding=r2" in source
+    assert "setup=bank" in source
+
+
+def test_seller_minimum_shop_validation_replaces_full_required_list():
+    source = open("static/js/seller.js", encoding="utf-8").read()
+    save_chunk = source[
+        source.index("async function saveShop") : source.index(
+            "// --- DASHBOARD / DATA LOGIC ---"
+        )
+    ]
+    assert "shopName" in save_chunk and "shopPhone" in save_chunk
+    assert "Vui lòng nhập đầy đủ thông tin" not in save_chunk
+    assert "address_required_error" not in save_chunk
+    assert "tax_required_error" not in save_chunk
+    assert "email_required_error" not in save_chunk
+
+
+def test_seller_settings_only_require_shop_name_and_phone():
+    html = open("static/seller.html", encoding="utf-8").read()
+
+    def field_tag(field_id):
+        match = re.search(
+            rf'<(?:input|select)[^>]*id="{field_id}"[^>]*>',
+            html,
+        )
+        assert match, field_id
+        return match.group(0)
+
+    assert "required" in field_tag("shopName")
+    assert "required" in field_tag("shopPhone")
+    for field_id in (
+        "shopAddress",
+        "shopTaxCode",
+        "shopEmail",
+        "bankCode",
+        "bankAcc",
+        "bankAccName",
+    ):
+        assert "required" not in field_tag(field_id)
+
+    settings = html[html.index('id="shopFormContainer"') : html.index('id="posModal"')]
+    assert "business_address_required" not in settings
+    assert "tax_code_required" not in settings
+    assert "email_required" not in settings
+    assert "bank_required" not in settings
+    assert "bank_account_required" not in settings
+    assert "account_name_required" not in settings
+
+
+def test_default_category_is_localized_only_at_render_time():
+    source = open("static/js/seller.js", encoding="utf-8").read()
+    assert "function displayCategoryName" in source
+    assert "Chưa phân loại" in source
+    assert "seller.first_run.default_category" in source
+    assert "displayCategoryName(c.name)" in source
 
 
 def test_seller_hosts_r2_assets_and_accessible_shell():
