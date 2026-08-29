@@ -31,5 +31,8 @@ def test_local_launcher_exposes_start_status_and_safe_stop_actions():
 
     assert 'ValidateSet("start", "status", "stop")' in source
     assert "Get-NetTCPConnection" in source
+    assert "netstat -ano -p tcp" in source
+    assert ".fselling-local.pid" in source
+    assert "savedProcessId -ne $ProcessId" in source
     assert "ExecutablePath" in source
     assert "Stop-Process" in source

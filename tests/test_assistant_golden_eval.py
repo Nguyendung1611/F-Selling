@@ -70,6 +70,18 @@ SECOND_CANARY_CASES = [
     ("tiệm còn ai thiếu chưa trả", "CONG_NO"),
 ]
 
+# Activation R1: fresh synthetic phrases, never copied from a shop or prior
+# provider run. Replenishment and net cost are included because those were the
+# two failure categories in canary 2. Billing must be paid-tier before these
+# are allowed to reach a live provider.
+THIRD_CANARY_CASES = [
+    ("tiền bán vào tiệm bữa nay", "DOANH_THU"),
+    ("khách hay lấy món chi nhất", "BAN_CHAY"),
+    ("trong kho thứ chi phải gọi thêm", "CAN_NHAP"),
+    ("khách nào còn thiếu của tiệm", "CONG_NO"),
+    ("tiền chi ra của tiệm chừng nào", "CHI_PHI"),
+]
+
 LOCAL_R2_CASES = [
     ("bữa ni thu được chừng nào", "DOANH_THU", "HOM_NAY"),
     ("hôm qua tiền bán vô được mấy", "DOANH_THU", "HOM_QUA"),
@@ -207,8 +219,18 @@ def test_unknown_or_unsafe_cases_never_reach_provider(client, monkeypatch):
     assert calls["count"] == 0
 
 
+def test_third_canary_is_fresh_local_unknown_and_privacy_allowlisted():
+    assert len(THIRD_CANARY_CASES) == 5
+    for question, _expected in THIRD_CANARY_CASES:
+        normalized = assistant_service._bo_dau(question)
+        assert assistant_service._doan_y_dinh(normalized) is None
+        assert assistant_service._khong_ho_tro(normalized) is False
+        assert gemini_service.co_the_gui(question) is True
+
+
 @pytest.mark.parametrize(
-    ("question", "expected"), PROVIDER_CASES + SECOND_CANARY_CASES
+    ("question", "expected"),
+    PROVIDER_CASES + SECOND_CANARY_CASES + THIRD_CANARY_CASES,
 )
 def test_fake_provider_canary_only_selects_allowlisted_service(
     client, monkeypatch, question, expected

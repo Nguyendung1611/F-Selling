@@ -43,7 +43,19 @@ window.FSellingOnboardingR2 = (() => {
     function setBusy(form, busy) {
         form.setAttribute('aria-busy', busy ? 'true' : 'false');
         const submit = form.querySelector('[type="submit"]');
-        if (submit) submit.disabled = busy;
+        if (!submit) return;
+        submit.disabled = busy;
+        if (busy) {
+            submit.dataset.normalHtml = submit.innerHTML;
+            submit.innerHTML = `<i class="ph ph-spinner-gap ph-spin" aria-hidden="true"></i> <span>${text(
+                'seller.first_run.saving',
+                'Đang lưu...'
+            )}</span>`;
+        } else if (submit.dataset.normalHtml) {
+            submit.innerHTML = submit.dataset.normalHtml;
+            delete submit.dataset.normalHtml;
+            window.FSellingI18n?.apply?.(submit);
+        }
     }
 
     function showInlineError(form, message) {

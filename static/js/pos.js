@@ -47,6 +47,7 @@ let voucherMessageRaw = '';
 let shiftBarState = 'loading';
 let shiftBarMessage = '';
 let lastPaymentStatus = null;
+let firstRunSaleSuccessShown = false;
 
 const POS_CHECKOUT_STORAGE_PREFIX = 'fselling.pos.checkout.v2';
 const POS_MOVEMENT_STORAGE_PREFIX = 'fselling.pos.movement.v1';
@@ -457,6 +458,45 @@ function laLoi4xx(error) {
     return Number(error?.status) >= 400 && Number(error?.status) < 500;
 }
 
+function currentShopHasTransferAccount() {
+    const shop = allShops.find(item => Number(item.id) === Number(currentShopId));
+    return ['bank_code', 'bank_account_no', 'bank_account_name']
+        .every(field => String(shop?.[field] || '').trim());
+}
+
+function setTransferCapability(available, fallbackToCash = true) {
+    const button = document.getElementById('btnMethodQR');
+    const label = document.getElementById('btnMethodQRLabel');
+    const hint = document.getElementById('qrSetupHint');
+    const setupLink = hint?.querySelector('a');
+    if (setupLink) {
+        const query = new URLSearchParams(window.location.search);
+        setupLink.href = query.get('onboarding') === 'r2'
+            ? '/seller?setup=bank&onboarding=r2'
+            : '/seller?setup=bank';
+    }
+    if (button) {
+        button.disabled = !available;
+        button.setAttribute('aria-disabled', String(!available));
+        button.title = available ? '' : dich('pos.payment.bank_setup_hint');
+    }
+    if (label) {
+        const key = available
+            ? 'pos.payment.transfer'
+            : 'pos.payment.transfer_setup_required';
+        label.dataset.i18n = key;
+        label.innerText = dich(key);
+    }
+    if (hint) hint.hidden = available;
+    if (!available && fallbackToCash && paymentMethod === 'transfer') {
+        apDungPhuongThucThanhToan('cash');
+    }
+}
+
+function updateTransferCapability() {
+    setTransferCapability(currentShopHasTransferAccount());
+}
+
 async function loadShop() {
     try {
         const res = await apiCall('/shops');
@@ -486,6 +526,7 @@ async function loadShop() {
             localStorage.setItem('currentShopId', currentShopId);
             sel.value = currentShopId;
         }
+        updateTransferCapability();
         // Capability is independent from catalog success: a warm POS shell must
         // know whether a legacy receipt may be persisted before it can go offline.
         await taiChinhSachOfflinePOS();
@@ -516,6 +557,7 @@ async function changeShopPOS() {
     currentShopId = shopMoi;
     localStorage.setItem('currentShopId', currentShopId);
     resetPOS();
+    updateTransferCapability();
     loyaltyProgram = null;
     await taiChinhSachOfflinePOS();
     await Promise.all([
@@ -1014,12 +1056,32 @@ function applyLoyaltyPoints() {
     updateUI();
 }
 
+function displayPosCategoryName(name) {
+    return name === 'Chưa phân loại'
+        ? dich('pos.category.uncategorized')
+        : name;
+}
+
 function renderCategories() {
     const container = document.getElementById('categoryFilter');
     if(!container) return;
+    if (categories.length > 7) {
+        container.classList.add('category-filter--select');
+        container.innerHTML = `
+            <select aria-label="${escapeHtml(dich('pos.products.all_categories'))}"
+                    onchange="filterByCategory(this.value ? Number(this.value) : null)">
+                <option value="">${dichHtml('pos.products.all_categories')}</option>
+                ${categories.map(c => `
+                    <option value="${c.id}" ${currentCategoryId === c.id ? 'selected' : ''}>
+                        ${escapeHtml(displayPosCategoryName(c.name))}
+                    </option>`).join('')}
+            </select>`;
+        return;
+    }
+    container.classList.remove('category-filter--select');
     container.innerHTML = `<button class="category-btn ${!currentCategoryId ? 'active' : ''}" onclick="filterByCategory(null)">${dichHtml('pos.products.all_categories')}</button>`;
     categories.forEach(c => {
-        container.innerHTML += `<button class="category-btn ${currentCategoryId === c.id ? 'active' : ''}" onclick="filterByCategory(${c.id})">${escapeHtml(c.name)}</button>`;
+        container.innerHTML += `<button class="category-btn ${currentCategoryId === c.id ? 'active' : ''}" onclick="filterByCategory(${c.id})">${escapeHtml(displayPosCategoryName(c.name))}</button>`;
     });
 }
 
@@ -1040,8 +1102,6 @@ function filterAndRenderProducts() {
     }
     renderProducts(filtered);
 }
-
-const ANH_SP_MAC_DINH = 'https://placehold.co/150x150/1E293B/FFF?text=SP';
 
 /**
  * Gom danh sách đã lọc thành các ô sẽ hiện trên lưới.
@@ -1091,25 +1151,29 @@ function khoangGia(sanPham) {
 function renderProducts(list) {
     const grid = document.getElementById('productGrid');
     grid.innerHTML = '';
+    if (!list.length) {
+        grid.innerHTML = `<div class="empty-products"><i class="ph ph-magnifying-glass"></i></div>`;
+        return;
+    }
     gomONhom(list).forEach(o => {
         const dai = o.nhom !== null && o.sanPham.length > 1;
         const dau = o.sanPham[0];
         const tongTon = o.sanPham.reduce((s, p) => s + (Number(p.stock) || 0), 0);
         const ten = dai ? o.nhom : dau.name;
-        const imgUrl = dau.image_url ? dau.image_url : ANH_SP_MAC_DINH;
-        const div = document.createElement('div');
-        div.className = 'product-card';
-        div.innerHTML = `
-            <div class="product-stock" style="color: white;">${dichHtml('pos.products.stock', { count: tongTon })}</div>
-            <img src="${imgUrl}" onerror="this.src='https://via.placeholder.com/150x150?text=Error'" class="product-img">
-            <div class="product-info">
-                <div class="product-name" title="${escapeHtml(ten)}">${escapeHtml(ten)}</div>
-                <div class="product-price">${escapeHtml(khoangGia(o.sanPham))}</div>
-                ${dai ? `<div style="font-size:0.72rem; color:#94A3B8;">${dichHtml('pos.variants.count', { count: o.sanPham.length })}</div>` : ''}
-            </div>
+        const tenDanhMuc = categories.find(c => c.id === dau.category_id)?.name || '';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'product-card';
+        button.innerHTML = `
+            <span class="product-category">
+                ${escapeHtml(tenDanhMuc)}${dai ? ` · ${dichHtml('pos.variants.count', { count: o.sanPham.length })}` : ''}
+            </span>
+            <span class="product-name" title="${escapeHtml(ten)}">${escapeHtml(ten)}</span>
+            <span class="product-price">${escapeHtml(khoangGia(o.sanPham))}</span>
+            <span class="product-stock ${tongTon <= 10 ? 'low' : ''}">${dichHtml('pos.products.stock', { count: tongTon })}</span>
         `;
-        div.onclick = () => (dai ? moChonBienThe(o) : addToCart(dau));
-        grid.appendChild(div);
+        button.onclick = () => (dai ? moChonBienThe(o) : addToCart(dau));
+        grid.appendChild(button);
     });
 }
 
@@ -1373,6 +1437,13 @@ async function applyVoucher() {
 function updateUI() {
     const container = document.getElementById('cartContainer');
     container.innerHTML = '';
+    if (!cart.length) {
+        container.innerHTML = `
+            <div class="cart-empty">
+                <i class="ph ph-shopping-cart-simple"></i>
+                <span>${dichHtml('pos.cart.empty')}</span>
+            </div>`;
+    }
     cart.forEach((item, index) => {
         // Hiện cả phép nhân lẫn thành tiền: quét nhanh nhiều món thì không ai
         // nhớ đã quét mấy lần món nào, nhìn thành tiền là thấy ngay bất thường.
@@ -1409,6 +1480,11 @@ function setMethod(m) {
     }
     if (checkoutOperationId && !currentOrderId) {
         return showToast(dich('pos.checkout.method_retry_first'));
+    }
+    if (m === 'transfer' && !currentShopHasTransferAccount()) {
+        setTransferCapability(false, false);
+        showToast(dich('pos.payment.bank_setup_required'));
+        return;
     }
     apDungPhuongThucThanhToan(m, true);
 }
@@ -1672,18 +1748,16 @@ function renderCashQuickAmounts() {
     const box = document.getElementById('cashQuickAmounts');
     if (!box) return;
     const canThu = Math.max(0, Math.round(Number(total) || 0));
-    const moc = [
-        canThu,
-        Math.ceil(canThu / 50000) * 50000,
-        Math.ceil(canThu / 100000) * 100000,
-        Math.ceil(canThu / 500000) * 500000
+    const choices = [
+        { amount: canThu, label: `${dichHtml('pos.cash.enough')}${escapeHtml(dinhDangTien(canThu))}` },
+        ...[10000, 20000, 50000, 100000, 200000].map(amount => ({
+            amount,
+            label: escapeHtml(dinhDangTien(amount))
+        }))
     ];
-    const amounts = [...new Set(moc)].filter(n => n >= canThu).slice(0, 4);
-    if (!amounts.length) amounts.push(0);
-    box.innerHTML = amounts.map((amount, index) => `
-        <button type="button" onclick="datTienKhachDua(${amount})">
-            ${index === 0 ? dichHtml('pos.cash.enough') : ''}${escapeHtml(dinhDangTien(amount))}
-        </button>`).join('');
+    box.innerHTML = choices.map(({ amount, label }) => `
+        <button type="button" onclick="datTienKhachDua(${amount})">${label}</button>
+    `).join('');
 }
 
 function datTienKhachDua(amount) {
@@ -1725,12 +1799,15 @@ function capNhatNutCheckout() {
     const thieuTien = paymentMethod === 'cash' && cashTenderedAmount < total;
     const donQRDangCho = currentOrderId !== null && !pendingCashOrderId;
     button.disabled = checkoutBusy || voucherBusy || !activeShift || cart.length === 0 || thieuTien || donQRDangCho;
-    button.innerHTML = pendingCashOrderId
-        ? htmlNut('ph-arrow-clockwise', 'pos.checkout.retry_cash')
-        : (checkoutOperationId
-            ? htmlNut('ph-arrow-clockwise', 'pos.checkout.retry_create')
-            : htmlNut('ph-check-circle', 'pos.checkout.complete'));
-    if (!activeShift) button.title = dich('pos.checkout.open_shift_title');
+    button.innerHTML = checkoutBusy
+        ? htmlNut('ph-spinner-gap ph-spin', 'pos.processing')
+        : (pendingCashOrderId
+            ? htmlNut('ph-arrow-clockwise', 'pos.checkout.retry_cash')
+            : (checkoutOperationId
+                ? htmlNut('ph-arrow-clockwise', 'pos.checkout.retry_create')
+                : htmlNut('ph-check-circle', 'pos.checkout.complete')));
+    if (checkoutBusy) button.title = dich('pos.processing');
+    else if (!activeShift) button.title = dich('pos.checkout.open_shift_title');
     else if (cart.length === 0) button.title = dich('pos.cart.empty');
     else if (thieuTien) button.title = dich('pos.checkout.cash_short_title');
     else if (donQRDangCho) button.title = dich('pos.checkout.waiting_title');
@@ -2811,11 +2888,6 @@ async function taiPhucHoiOffline(offset = 0, importedUuid = null) {
     }
 }
 
-async function moPhucHoiOffline() {
-    await moModalTrangThaiOffline();
-    await taiPhucHoiOffline();
-}
-
 async function moModalTrangThaiOffline() {
     const modal = document.getElementById('offlineStatusModal');
     if (!modal) return;
@@ -2830,7 +2902,6 @@ function dongModalTrangThaiOffline() {
 /** Cập nhật badge/panel sau mọi callback, nhưng render không bao giờ resume queue. */
 async function capNhatHuyHieuOffline() {
     const o = document.getElementById('offlineBadge');
-    const recoveryButton = document.getElementById('offlineRecoveryButton');
     if (!o || !window.OfflineBan) return;
     try {
         const model = await taiTrangThaiOfflinePOS();
@@ -2846,8 +2917,6 @@ async function capNhatHuyHieuOffline() {
             });
         }
         capNhatNoiDungTrangThaiOffline(model);
-        if (recoveryButton) recoveryButton.style.display = localStorage.getItem('role') === 'STAFF'
-            ? 'none' : 'inline-flex';
     } catch (e) {
         console.warn('[OFFLINE] Không đọc được hàng chờ:', e);
     }
@@ -2915,6 +2984,12 @@ async function thuTaoDonDangDo(state) {
     try {
         await guiYeuCauTaoDonDangDo(state);
     } catch (e) {
+        if (e.code === 'QR_BANK_ACCOUNT_NOT_CONFIGURED') {
+            setTransferCapability(false, false);
+            luuCheckoutDangDo(state);
+            showToast(dich('pos.payment.bank_setup_required'));
+            return;
+        }
         const coVoucher = Boolean(state.create_payload?.voucher_code);
         const coDungDiem = Number(
             state.create_payload?.loyalty_points_to_use || 0
@@ -3387,6 +3462,19 @@ async function hienHoaDon(orderId, ketQuaDiemMoiNhat = null) {
     resetPOS();
     veHoaDon(d);
     document.getElementById('hoaDonSection').style.display = 'block';
+    showFirstRunSaleSuccess(d);
+}
+
+function showFirstRunSaleSuccess(orderDetail) {
+    const query = new URLSearchParams(window.location.search);
+    if (firstRunSaleSuccessShown || query.get('onboarding') !== 'r2') return;
+    if (!['PAID', 'DEBT'].includes(orderDetail?.status)) return;
+    firstRunSaleSuccessShown = true;
+    document.getElementById('firstRunSaleSuccess').hidden = false;
+}
+
+function dismissFirstRunSaleSuccess() {
+    document.getElementById('firstRunSaleSuccess').hidden = true;
 }
 
 // Hóa đơn là tài liệu giao cho khách tại Việt Nam nên luôn giữ tiếng Việt,
@@ -3511,6 +3599,7 @@ function veHoaDon(d) {
 
 function dongHoaDon() {
     document.getElementById('hoaDonSection').style.display = 'none';
+    dismissFirstRunSaleSuccess();
 }
 
 function resetPOS() {
@@ -4201,7 +4290,7 @@ function capNhatNgonNguPOS() {
 document.addEventListener('fselling:localechange', capNhatNgonNguPOS);
 
 capNhatThanhCa('loading');
-setMethod(paymentMethod);
+apDungPhuongThucThanhToan(paymentMethod);
 // Đồng bộ cả các giá trị tiền tĩnh ban đầu (0 ₫, nút tiền nhanh...) với
 // ngôn ngữ đã lưu ngay lần mở trang, không cần chờ người dùng đổi locale.
 capNhatNgonNguPOS();

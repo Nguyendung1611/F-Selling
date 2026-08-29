@@ -38,6 +38,7 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const username = document.getElementById('username').value;
     const password = document.getElementById('password').value;
+    const openDemoSale = e.currentTarget.dataset.demoSale === '1' && username === 'demo';
     const errorMsg = document.getElementById('errorMsg');
     const submitBtn = e.currentTarget.querySelector('button[type="submit"]');
 
@@ -61,6 +62,8 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
         localStorage.setItem('username', username);
         if (data.role === 'ADMIN') {
             navigateToPage('/admin');
+        } else if (openDemoSale && data.role === 'SELLER') {
+            navigateToPage('/pos?tour=sale');
         } else if (data.role === 'STAFF' && data.staff_role === 'CASHIER') {
             navigateToPage('/pos');
         } else {

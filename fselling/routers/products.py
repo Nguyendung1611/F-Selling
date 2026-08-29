@@ -7,7 +7,12 @@ from .. import models
 from ..dependencies import get_current_user, get_db, require_shop_access
 from ..schemas.catalog import StockAdjust, StocktakeApply, WriteOffCreate
 from ..schemas.money import SignedExactVND
-from ..services import catalog_service, subscription_service, write_off_service
+from ..services import (
+    catalog_service,
+    product_import_service,
+    subscription_service,
+    write_off_service,
+)
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 
@@ -203,6 +208,61 @@ def adjust_stock(
     return catalog_service.adjust_stock(
         db, current_user, product_id, payload.delta, payload.unit_cost,
         payload.expiry_date, payload.reason,
+    )
+
+
+async def _read_import_file(file: UploadFile) -> bytes:
+    content = await file.read(product_import_service.MAX_IMPORT_BYTES + 1)
+    if len(content) > product_import_service.MAX_IMPORT_BYTES:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=413, detail="File quá lớn; tối đa 2 MB")
+    return content
+
+
+@router.post("/{shop_id}/imports/preview")
+async def preview_product_import(
+    shop_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return product_import_service.preview_product_import(
+        db,
+        current_user,
+        shop_id,
+        file.filename or "",
+        await _read_import_file(file),
+    )
+
+
+@router.post("/{shop_id}/imports/commit")
+async def commit_product_import(
+    shop_id: int,
+    operation_id: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return product_import_service.commit_product_import(
+        db,
+        current_user,
+        shop_id,
+        file.filename or "",
+        await _read_import_file(file),
+        operation_id,
+    )
+
+
+@router.post("/{shop_id}/imports/{operation_id}/undo")
+def undo_product_import(
+    shop_id: int,
+    operation_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return product_import_service.undo_product_import(
+        db, current_user, shop_id, operation_id
     )
 
 

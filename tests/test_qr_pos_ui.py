@@ -497,7 +497,7 @@ def test_all_v1_i18n_keys_present_en():
 
 def test_pos_js_version_bumped():
     html = _read('static/pos.html')
-    assert 'pos.js?v=20260815-i12b-doisoat2' in html
+    assert 'pos.js?v=20260824-r14-production2' in html
 
 
 def test_locale_pos_version_bumped():
@@ -505,6 +505,17 @@ def test_locale_pos_version_bumped():
     locale_script = html[html.index("locales/pos.js"):html.index("locales/pos.js") + 100]
     assert '20260815-i11-doisoat' in locale_script
     assert '20260815-i11-doisoat' in locale_script
+
+
+def test_transfer_method_checks_current_shop_capability_before_assignment():
+    js = _read('static/js/pos.js')
+    start = js.index('function setMethod(')
+    end = js.index('function apDungPhuongThucThanhToan(', start)
+    method_chunk = js[start:end]
+    guard = method_chunk.index("m === 'transfer'")
+    apply_method = method_chunk.index('apDungPhuongThucThanhToan')
+    assert 'currentShopHasTransferAccount()' in method_chunk
+    assert guard < apply_method
 
 
 # ── Render endpoint trust boundary ────────────────────────────────────────────

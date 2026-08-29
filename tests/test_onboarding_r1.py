@@ -183,40 +183,17 @@ def test_onboarding_get_is_read_only(client):
     assert after == before
 
 
-def test_onboarding_ui_has_fixed_safe_navigation_and_no_business_mutation():
+def test_onboarding_board_and_its_hidden_frontend_fetch_are_removed():
     html = (ROOT / "static/seller.html").read_text(encoding="utf-8")
     js = (ROOT / "static/js/seller.js").read_text(encoding="utf-8")
-
-    assert 'id="onboardingPanel"' in html
-    assert 'id="onboardingSteps"' in html
-    assert "const ONBOARDING_STEPS = Object.freeze" in js
-    assert "async function loadOnboarding()" in js
-    assert "function openOnboardingStep(key)" in js
-    assert "panel.hidden = state.complete" in js
-    block = js[js.index("async function loadOnboarding()"):]
-    block = block[:block.index("\n}")]
-    assert "`/onboarding/${shopId}`" in block
-    assert "'POST'" not in block
-    assert "'PUT'" not in block
-    assert "'DELETE'" not in block
-    assert "localStorage.setItem" not in block
-
-
-def test_onboarding_ui_is_bilingual_and_cache_busted():
-    html = (ROOT / "static/seller.html").read_text(encoding="utf-8")
     locale = (ROOT / "static/js/locales/seller.js").read_text(encoding="utf-8")
-    for key in (
-        "title",
-        "description",
-        "progress",
-        "step_shop",
-        "step_product",
-        "step_shift_open",
-        "step_sale",
-        "step_shift_close",
-        "open",
-    ):
-        assert locale.count(f"'seller.onboarding.{key}'") == 2
-    version = "20260823-onboarding-r1"
+
+    assert 'id="onboardingPanel"' not in html
+    assert 'id="onboardingSteps"' not in html
+    assert "ONBOARDING_STEPS" not in js
+    assert "loadOnboarding" not in js
+    assert "openOnboardingStep" not in js
+    assert "seller.onboarding." not in locale
+    version = "20260825-assistant-guided-tasks-r1-1"
     assert f"/js/locales/seller.js?v={version}" in html
     assert f"/js/seller.js?v={version}" in html

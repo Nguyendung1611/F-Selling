@@ -107,9 +107,9 @@ def test_all_touched_static_files_have_i09_g2h_cache_buster():
 
     index = _read("static/index.html")
     pos = _read("static/pos.html")
-    assert '/js/auth.js?v=20260812-i09-f1-c1' in index
+    assert '/js/auth.js?v=20260828-landing-r11-demo1' in index
     assert '/js/offline-ban.js?v=20260813-i09-f3&g=20260813-i09-g2h6' 
-    assert '/js/pos.js?v=20260815-i12b-doisoat2' in pos
+    assert '/js/pos.js?v=20260824-r14-production2' in pos
 
 
 def test_capability_refresh_is_independent_of_catalog_success_and_reconnects():

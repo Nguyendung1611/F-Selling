@@ -140,7 +140,8 @@ def test_tao_shop_tao_trial_cung_luc(db):
     after = datetime.datetime.utcnow()
     row = db.query(models.ShopSubscription).filter_by(shop_id=shop.id).one()
     assert before <= row.trial_started_at <= after
-    assert row.trial_ends_at - row.trial_started_at == datetime.timedelta(days=30)
+    assert subscription_service.TRIAL_DAYS == 14
+    assert row.trial_ends_at - row.trial_started_at == datetime.timedelta(days=14)
 
 
 def test_backfill_shop_cu_chi_cap_trial_mot_lan(db):
@@ -253,7 +254,10 @@ def test_thieu_aggregate_khong_cap_trial_luc_mo_tab_hay_thanh_toan(
 
 def test_trial_gift_khong_grace_nhung_paid_co_grace(db):
     now = datetime.datetime(2026, 8, 7, 5, 0, 0)
-    _owner, shop = _user_and_shop(db, now=now - datetime.timedelta(days=30))
+    _owner, shop = _user_and_shop(
+        db,
+        now=now - datetime.timedelta(days=subscription_service.TRIAL_DAYS),
+    )
     subscription = db.query(models.ShopSubscription).filter_by(shop_id=shop.id).one()
 
     assert subscription_service.get_subscription_state(
@@ -505,8 +509,11 @@ def test_mua_som_noi_tu_cuoi_trial_dang_con(db, monkeypatch):
         now=now,
     )
     subscription = db.query(models.ShopSubscription).filter_by(shop_id=shop.id).one()
-    assert subscription.trial_ends_at == now + datetime.timedelta(days=30)
-    assert subscription.paid_until == now + datetime.timedelta(days=60)
+    expected_trial_end = now + datetime.timedelta(days=subscription_service.TRIAL_DAYS)
+    assert subscription.trial_ends_at == expected_trial_end
+    assert subscription.paid_until == expected_trial_end + datetime.timedelta(
+        days=subscription_service.DURATION_DAYS[subscription_service.CYCLE_MONTHLY]
+    )
 
 
 def test_review_tien_du_gom_mot_issue_checkout_va_tra_dung_so_can_hoan(

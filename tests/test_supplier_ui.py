@@ -200,12 +200,13 @@ def test_module_nap_sau_seller_va_moi_file_dung_dung_phien_ban():
     """
     html = _read("static/seller.html")
     purchasing_version = "20260822-order-actions-a11y-r2"
+    seller_css_version = "20260825-assistant-guided-tasks-r1-1"
     cashflow_version = "20260808-dong-tien-k1"
-    locale_version = "20260823-onboarding-r1"
-    seller_version = "20260823-onboarding-r1"
+    locale_version = "20260825-assistant-guided-tasks-r1-1"
+    seller_version = "20260825-assistant-guided-tasks-r1-1"
 
     expected = (
-        f"/css/seller.css?v={cashflow_version}",
+        f"/css/seller.css?v={seller_css_version}",
         f"/js/locales/seller.js?v={locale_version}",
         f"/js/seller.js?v={seller_version}",
         f"/js/purchasing.js?v={purchasing_version}",

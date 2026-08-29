@@ -1,166 +1,395 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="vi">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#0F172A">
-    <link rel="manifest" href="/manifest.json">
-    <link rel="apple-touch-icon" href="/img/icon-192.png">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-title" content="F-Selling">
-    <meta name="description" content="F-Selling giúp cửa hàng nhỏ bán hàng, quản lý tồn kho, nhập hàng và công nợ trong một nơi.">
-    <meta property="og:title" content="F-Selling — Vận hành cửa hàng gọn hơn">
-    <meta property="og:description" content="Bán hàng, tồn kho, nhập hàng và việc cần xử lý trong một ứng dụng.">
-    <title data-i18n="login.page_title">F-Selling | Đăng nhập</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
-    <link rel="stylesheet" href="/css/auth.css?v=20260823-login-landing-r1">
-
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#132a4f">
+  <meta name="description" content="F-Selling là phần mềm bán hàng cho tiệm tạp hóa, có Trợ lý tiếng Việt hướng dẫn khi cần.">
+  <meta property="og:title" content="F-Selling — Bán hàng dễ bắt đầu">
+  <meta property="og:description" content="Tính tiền tại quầy, theo dõi hàng hóa và hỏi Trợ lý khi quên bước.">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/img/icon-192.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="F-Selling">
+  <title data-i18n="landing.page_title">F-Selling — Bán hàng dễ bắt đầu</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/landing-r11.css?v=20260828-r11-production">
 </head>
-<body class="auth-landing-page">
-    <div class="language-switcher language-switcher--floating language-switcher--auth">
+<body class="production-landing">
+  <a class="skip-link" id="skip-main" href="#main" data-i18n="landing.skip">Bỏ qua phần đầu trang</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" id="brand-home" href="#top" aria-label="F-Selling — về đầu trang"><img src="/img/logo.png" width="114" height="58" alt="F-Selling"></a>
+      <nav class="nav" aria-label="Điều hướng chính">
+        <a href="#pos" data-i18n="landing.nav.questions">Bán hàng</a>
+        <a href="#proof" data-i18n="landing.nav.sources">Công việc sau bán</a>
+        <a href="#assistant" data-i18n="landing.nav.product">Trợ lý</a>
+        <a href="#demo" data-i18n="landing.nav.safety">Dùng thử</a>
+      </nav>
+      <div class="header-language">
         <label for="languageSelector" data-i18n="common.language">Ngôn ngữ</label>
-        <select id="languageSelector"
-                data-language-selector
-                data-i18n-aria-label="auth.language_selector_aria"
-                data-i18n-title="auth.language_selector_aria">
-            <option value="vi" data-i18n="common.language.vi">Tiếng Việt</option>
-            <option value="en" data-i18n="common.language.en">English</option>
+        <select id="languageSelector" data-language-selector data-i18n-aria-label="auth.language_selector_aria">
+          <option value="vi" data-i18n="common.language.vi">Tiếng Việt</option>
+          <option value="en" data-i18n="common.language.en">English</option>
         </select>
+      </div>
+      <details class="mobile-menu">
+        <summary data-i18n="landing.nav.menu">Menu</summary>
+        <div class="mobile-menu-panel">
+          <nav aria-label="Điều hướng trên điện thoại">
+            <a href="#pos" data-i18n="landing.nav.questions">Bán hàng</a>
+            <a href="#proof" data-i18n="landing.nav.sources">Công việc sau bán</a>
+            <a href="#assistant" data-i18n="landing.nav.product">Trợ lý</a>
+            <a href="#demo" data-i18n="landing.nav.safety">Dùng thử</a>
+            <a href="#support" data-i18n="landing.r11.support_short">Hỗ trợ</a>
+            <a href="#login" data-i18n="landing.nav.login">Đăng nhập</a>
+            <a href="/register" data-i18n="login.register_seller">Đăng ký Người bán</a>
+          </nav>
+          <div class="mobile-language">
+            <label for="mobileLanguageSelector" data-i18n="common.language">Ngôn ngữ</label>
+            <select id="mobileLanguageSelector" data-language-selector data-i18n-aria-label="auth.language_selector_aria">
+              <option value="vi" data-i18n="common.language.vi">Tiếng Việt</option>
+              <option value="en" data-i18n="common.language.en">English</option>
+            </select>
+          </div>
+        </div>
+      </details>
+      <div class="header-actions">
+        <a class="register-link" href="/register" data-i18n="login.register_seller">Đăng ký</a>
+        <a class="button button-primary button-small" id="header-demo" href="#login" data-i18n="landing.nav.login">Đăng nhập</a>
+      </div>
     </div>
+  </header>
+<main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow" data-i18n="landing.r11.hero_eyebrow">Phần mềm bán hàng cho tiệm tạp hóa</p>
+          <h1 id="hero-title"><span class="hero-title-main" data-i18n="landing.r11.hero_title">Bán hàng dễ bắt đầu.</span> <span data-i18n="landing.r11.hero_accent">Có Trợ lý khi cần.</span></h1>
+          <p class="hero-lead" data-i18n="landing.r11.hero_body">Tính tiền tại quầy, biết hàng nào sắp hết và xem lại việc cần làm. Quên bước nào, hỏi Trợ lý bước đó.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" id="hero-demo" href="#login" data-demo-login><span data-i18n="landing.r11.cta_demo">Mở bản demo</span> <span class="arrow" aria-hidden="true">→</span></a>
+            <a class="button button-secondary" id="hero-support" href="tel:+84774867057"><span data-i18n="landing.r11.cta_call">Gọi</span> <span class="support-number">0774 867 057</span></a>
+          </div>
+          <p class="hero-note" data-i18n="landing.r11.demo_note">Demo dùng dữ liệu mẫu chung. Không nhập dữ liệu kinh doanh thật.</p>
+        </div>
 
-    <main class="auth-landing">
-        <section class="landing-copy" aria-labelledby="landingTitle">
-            <p class="landing-eyebrow" data-i18n="login.hero_eyebrow">Dành cho cửa hàng bán lẻ nhỏ</p>
-            <h1 id="landingTitle" data-i18n="login.hero_title">Bán hàng gọn hơn. Biết việc cần làm tiếp theo.</h1>
-            <p class="landing-body" data-i18n="login.hero_body">POS, tồn kho, nhập hàng, công nợ và việc cần xử lý nằm trong một luồng rõ ràng.</p>
-            <ol class="landing-steps">
-                <li class="landing-step">
-                    <span aria-hidden="true">1</span>
-                    <div><strong data-i18n="login.step_shop">Tạo cửa hàng</strong><small data-i18n="login.step_shop_body">Khai báo thông tin cơ bản sau khi đăng nhập lần đầu.</small></div>
-                </li>
-                <li class="landing-step">
-                    <span aria-hidden="true">2</span>
-                    <div><strong data-i18n="login.step_catalog">Thêm hàng hóa</strong><small data-i18n="login.step_catalog_body">Nhập sản phẩm, giá bán và số lượng đang có.</small></div>
-                </li>
-                <li class="landing-step">
-                    <span aria-hidden="true">3</span>
-                    <div><strong data-i18n="login.step_sell">Mở POS và bán hàng</strong><small data-i18n="login.step_sell_body">Theo dõi doanh thu và việc cần xử lý ngay trên dashboard.</small></div>
-                </li>
-            </ol>
-            <p class="landing-trust" data-i18n="login.hero_trust">Trợ lý trả lời từ báo cáo của cửa hàng; không tự thay đổi dữ liệu.</p>
-        </section>
-
-        <div class="login-container">
-        <div class="glass-card login-box">
-            <!-- <h1 class="text-gradient" style="text-align: center;">F-Selling</h1> -->
-            <img class="logo" src="img/logo.png" alt="F-Selling">
-            <p data-i18n="login.subtitle" style="text-align: center; color: var(--text-muted); margin-bottom: 2rem;">Đăng nhập vào tài khoản của bạn</p>
-            
-            <form id="loginForm" data-i18n-aria-label="login.form_aria">
-                <div>
-                    <label for="username" data-i18n="auth.username.label">Tên đăng nhập</label>
-                    <input type="text"
-                           id="username"
-                           autocomplete="username"
-                           data-i18n-placeholder="auth.username.placeholder"
-                           required>
-                </div>
-                <div>
-                    <label for="password" data-i18n="auth.password.label">Mật khẩu</label>
-                    <input type="password"
-                           id="password"
-                           autocomplete="current-password"
-                           data-i18n-placeholder="auth.password.placeholder"
-                           required>
-                </div>
-                <button type="submit" data-i18n="login.submit" style="width: 100%;">Đăng nhập</button>
-                <div id="errorMsg" aria-live="polite" style="color: #ef4444; margin-top: 1rem; text-align: center;"></div>
-            </form>
-            <div style="text-align: center; margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem;">
-                <p><a href="#" onclick="showForgotModal()" data-i18n="login.forgot_password" style="color: var(--text-muted); text-decoration: none; font-size: 0.9rem;">Quên mật khẩu?</a></p>
-                <p><span data-i18n="login.no_account">Chưa có tài khoản?</span> <a href="/register" data-i18n="login.register_seller" style="color: var(--primary);">Đăng ký Người bán</a></p>
+        <figure class="counter-stage" id="assistant-demo" aria-labelledby="counter-caption">
+          <div class="screen-frame">
+            <div class="screen-bar">
+              <strong data-i18n="landing.r11.stage_title">Quầy bán hàng F-Selling</strong>
+              <span data-i18n="landing.r11.stage_status">Màn hình đang chạy</span>
             </div>
-        </div>
-        </div>
-    </main>
+            <img src="/img/landing-pos-cart.jpg" alt="Màn hình POS F-Selling với danh sách sản phẩm, giỏ hàng và nút hoàn tất đơn" fetchpriority="high">
+            <div class="hotspot hotspot-one"><span>1</span> <b data-i18n="landing.r11.hotspot_select">Chọn hàng</b></div>
+            <div class="hotspot hotspot-two"><span>2</span> <b data-i18n="landing.r11.hotspot_total">Kiểm tra tiền</b></div>
+            <div class="hotspot hotspot-three"><span>3</span> <b data-i18n="landing.r11.hotspot_finish">Hoàn tất đơn</b></div>
+          </div>
+          <aside class="assistant-dock" aria-label="Ví dụ Trợ lý hướng dẫn bán hàng">
+            <header><strong data-i18n="landing.r11.assistant_name">Trợ lý F-Selling</strong><span data-i18n="landing.r11.assistant_status">Sẵn sàng chỉ đường</span></header>
+            <p class="assistant-question" data-i18n="landing.r11.assistant_question">Hướng dẫn tôi bán hàng</p>
+            <p class="assistant-answer"><strong data-i18n="landing.r11.assistant_answer_title">Mở POS bán hàng.</strong><br><span data-i18n="landing.r11.assistant_answer_body">Chọn hàng → kiểm tra số tiền → bạn tự xác nhận hoàn tất.</span></p>
+          </aside>
+          <figcaption class="stage-caption" id="counter-caption" data-i18n="landing.r11.stage_caption">Một quầy bán hàng, ba điểm cần nhìn và Trợ lý ở ngay bên cạnh.</figcaption>
+        </figure>
+      </div>
+    </section>
 
-    <!-- Modal Quên Mật Khẩu -->
-    <div id="forgotModal"
-         role="dialog"
-         aria-modal="true"
-         data-i18n-aria-label="forgot.title"
-         style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center;">
-        <div class="glass-card" style="max-width: 400px; width: 90%; background: var(--card-bg); text-align: center; position: relative;">
-            <button type="button"
-                    onclick="closeForgotModal()"
-                    data-i18n-aria-label="forgot.close_aria"
-                    data-i18n-title="forgot.close_aria"
-                    style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: var(--text-muted); font-size: 1.5rem; cursor: pointer; box-shadow: none; padding: 0;">&times;</button>
-            
-            <h3 class="text-gradient" id="forgotModalTitle" data-i18n="forgot.title" style="margin-top: 1rem;">Quên mật khẩu</h3>
-            
-            <!-- Step 1: Nhập email gửi OTP -->
-            <form id="forgotStep1Form" data-i18n-aria-label="forgot.request_form_aria">
-                <p data-i18n="forgot.request_instructions" style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">Nhập địa chỉ email liên kết với tài khoản của bạn để nhận mã xác minh OTP.</p>
-                <div style="text-align: left;">
-                    <label for="forgotEmail" data-i18n="auth.email.label" style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Email</label>
-                    <input type="email"
-                           id="forgotEmail"
-                           autocomplete="email"
-                           data-i18n-placeholder="auth.email.placeholder"
-                           required>
-                </div>
-                <button type="submit" data-i18n="forgot.send_code" style="width: 100%; margin-top: 0.5rem;">Gửi mã xác nhận</button>
-            </form>
-            
-            <!-- Step 2: Nhập OTP & Đặt mật khẩu mới -->
-            <form id="forgotStep2Form" data-i18n-aria-label="forgot.reset_form_aria" style="display: none;">
-                <p data-i18n="forgot.reset_instructions" style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">Mã xác thực đã được gửi. Vui lòng nhập mã và mật khẩu mới.</p>
-                <div style="text-align: left;">
-                    <label for="forgotOTP" data-i18n="forgot.otp_label" style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mã OTP (6 chữ số)</label>
-                    <input type="text"
-                           id="forgotOTP"
-                           maxlength="6"
-                           inputmode="numeric"
-                           autocomplete="one-time-code"
-                           data-i18n-placeholder="forgot.otp_placeholder"
-                           required
-                           style="text-align: center; letter-spacing: 4px; font-weight: bold;">
-                </div>
-                <div style="text-align: left;">
-                    <label for="forgotNewPassword" data-i18n="auth.password.new_label" style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Mật khẩu mới</label>
-                    <input type="password"
-                           id="forgotNewPassword"
-                           autocomplete="new-password"
-                           data-i18n-placeholder="auth.password.new_placeholder"
-                           required>
-                </div>
-                <div style="text-align: left;">
-                    <label for="forgotConfirmPassword" data-i18n="auth.password.confirm_label" style="display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.5rem;">Xác nhận mật khẩu</label>
-                    <input type="password"
-                           id="forgotConfirmPassword"
-                           autocomplete="new-password"
-                           data-i18n-placeholder="auth.password.confirm_placeholder"
-                           required>
-                </div>
-                <button type="submit" data-i18n="forgot.reset_submit" style="width: 100%; margin-top: 0.5rem;">Đặt lại mật khẩu</button>
-            </form>
-            
-            <div id="forgotErrorMsg" aria-live="polite" style="color: #ef4444; margin-top: 1rem; text-align: center; font-size: 0.9rem;"></div>
-            <div id="forgotSuccessMsg" aria-live="polite" style="color: var(--success); margin-top: 1rem; text-align: center; font-weight: 600; font-size: 0.9rem;"></div>
+    <section class="sale-path" id="pos" aria-labelledby="sale-title">
+      <div class="wrap sale-path-inner">
+        <div class="sale-path-title">
+          <p data-i18n="landing.r11.sale_kicker">Một đơn qua quầy</p>
+          <h2 id="sale-title" data-i18n="landing.r11.sale_title">Không cần nhớ nhiều nút.</h2>
         </div>
+        <div class="sale-steps">
+          <article class="sale-step">
+            <span>01</span>
+            <strong data-i18n="landing.r11.sale_step1_title">Chọn hoặc quét hàng</strong>
+            <p data-i18n="landing.r11.sale_step1_body">Tìm bằng tên hoặc mã vạch.</p>
+          </article>
+          <article class="sale-step">
+            <span>02</span>
+            <strong data-i18n="landing.r11.sale_step2_title">Nhìn lại số tiền</strong>
+            <p data-i18n="landing.r11.sale_step2_body">Giỏ hàng và tổng cần thu ở cùng một chỗ.</p>
+          </article>
+          <article class="sale-step">
+            <span>03</span>
+            <strong data-i18n="landing.r11.sale_step3_title">Bạn tự xác nhận</strong>
+            <p data-i18n="landing.r11.sale_step3_body">Kiểm tra lần cuối rồi hoàn tất đơn.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="proof" id="proof" aria-labelledby="proof-title">
+      <div class="wrap">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow" data-i18n="landing.r11.proof_kicker">Sau quầy hàng</p>
+            <h2 class="section-title" id="proof-title" data-i18n="landing.r11.proof_title">Bán xong rồi, việc tiếp theo hiện ra rõ ràng.</h2>
+          </div>
+          <p class="section-lead" data-i18n="landing.r11.proof_body">Không phải mở từng sổ để dò. F-Selling gom đúng thông tin cần xem sau một ngày bán hàng.</p>
+        </div>
+
+        <div class="proof-grid">
+          <article class="proof-card proof-stock">
+            <div class="proof-image">
+              <img src="/img/landing-warehouse-reorder.jpg" alt="Màn hình Kho F-Selling cho biết mặt hàng cần nhập và tiền cần chuẩn bị" loading="lazy">
+            </div>
+            <div class="proof-copy">
+              <p class="proof-label" data-i18n="landing.r11.stock_label">Hàng hóa và tồn kho</p>
+              <h3 data-i18n="landing.r11.stock_title">Biết hàng nào cần kiểm tra trước.</h3>
+              <p data-i18n="landing.r11.stock_body">Xem hàng sắp hết, số còn lại và lượng đề xuất nhập mà không dò từng dòng.</p>
+            </div>
+          </article>
+
+          <article class="proof-card proof-mobile">
+            <div>
+              <p class="proof-label" data-i18n="landing.r11.mobile_label">Xem nhanh trên điện thoại</p>
+              <h3 data-i18n="landing.r11.mobile_title">Rời quầy vẫn nắm được tình hình.</h3>
+              <p data-i18n="landing.r11.mobile_body">Dữ liệu trong ảnh là minh họa cho cách xem doanh thu, đơn hàng và việc cần xử lý.</p>
+            </div>
+            <figure class="phone">
+              <img src="/img/landing-seller-mobile.png" alt="Màn hình thống kê F-Selling trên điện thoại với dữ liệu minh họa" loading="lazy">
+            </figure>
+          </article>
+
+          <article class="proof-card proof-offline">
+            <div class="proof-copy">
+              <p class="proof-label" data-i18n="landing.r11.offline_label">Khi đường truyền không ổn định</p>
+              <h3 data-i18n="landing.r11.offline_title">Mạng chập chờn, quầy không biến thành màn hình trắng.</h3>
+              <p data-i18n="landing.r11.offline_body">F-Selling có luồng bán hàng offline và trạng thái đồng bộ để người bán biết đơn đang ở đâu.</p>
+              <ul class="proof-points">
+                <li data-i18n="landing.r11.offline_point1">Hiện rõ trạng thái mất kết nối</li>
+                <li data-i18n="landing.r11.offline_point2">Lưu đơn chờ đồng bộ theo luồng offline</li>
+                <li data-i18n="landing.r11.offline_point3">Có trạng thái phục hồi khi cần kiểm tra</li>
+              </ul>
+            </div>
+            <div class="proof-image">
+              <img src="/img/landing-pos-offline.png" alt="Màn hình POS minh họa trạng thái bán hàng khi mất kết nối" loading="lazy">
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="assistant-section" id="assistant" aria-labelledby="assistant-title">
+      <div class="wrap assistant-grid">
+        <div class="assistant-copy">
+          <p class="eyebrow eyebrow-light" data-i18n="landing.r11.assistant_kicker">Trợ lý nằm trong hệ thống POS</p>
+          <h2 class="section-title" id="assistant-title" data-i18n="landing.r11.assistant_title">Không nhớ đường đi, cứ nói việc đang cần làm.</h2>
+          <p class="section-lead" data-i18n="landing.r11.assistant_body">Trợ lý trả lời bằng tiếng Việt, giải thích ngắn và mở đúng màn hình để bạn tiếp tục.</p>
+          <div class="prompt-list" aria-label="Các câu hỏi mẫu cho Trợ lý">
+            <div class="prompt-item"><span data-i18n="landing.r11.prompt1">“Hướng dẫn tôi bán hàng”</span> <span>→ POS</span></div>
+            <div class="prompt-item"><span data-i18n="landing.r11.prompt2">“Sản phẩm nào sắp hết?”</span> <span>→ Kho</span></div>
+            <div class="prompt-item"><span data-i18n="landing.r11.prompt3">“Hôm nay bán được bao nhiêu?”</span> <span data-i18n="landing.r11.prompt3_target">→ Thống kê</span></div>
+          </div>
+          <p class="assistant-boundary" data-i18n="landing.r11.assistant_boundary">Trợ lý hướng dẫn và mở màn hình. Bạn vẫn tự xác nhận thao tác thay đổi dữ liệu.</p>
+        </div>
+        <figure class="assistant-media">
+          <img src="/img/landing-assistant-guided-task.jpg" alt="Trợ lý F-Selling hướng dẫn cách bán một đơn hàng bằng ba bước" loading="lazy">
+          <figcaption data-i18n="landing.r11.assistant_caption">Ví dụ thật: “Hướng dẫn tôi bán hàng”</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="human-support" id="support" aria-labelledby="support-title">
+      <div class="wrap">
+        <div class="support-card">
+          <div>
+            <p class="support-kicker" data-i18n="landing.r11.support_kicker">Không phải tự mò một mình</p>
+            <h2 id="support-title" data-i18n="landing.r11.support_title">Chưa quen phần mềm? Có người thật hướng dẫn.</h2>
+            <p data-i18n="landing.r11.support_body">Gọi điện hoặc nhắn Zalo để được chỉ cách vào quầy, bán đơn mẫu và tìm đúng màn hình cần dùng.</p>
+          </div>
+          <div class="support-actions">
+            <a class="button button-primary" id="support-call" href="tel:+84774867057"><span data-i18n="landing.r11.cta_call">Gọi</span> <span class="support-number">0774 867 057</span></a>
+            <a class="button button-zalo" id="support-zalo" href="https://zalo.me/0774867057" target="_blank" rel="noopener" data-i18n="landing.r11.cta_zalo">Nhắn Zalo</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="trial" id="demo" aria-labelledby="demo-title">
+      <div class="wrap trial-grid">
+        <div>
+          <p class="eyebrow" data-i18n="landing.r11.demo_kicker">Thử trước khi quyết định</p>
+          <h2 class="section-title" id="demo-title" data-i18n="landing.r11.demo_title">Bán thử một đơn bằng dữ liệu mẫu.</h2>
+          <ol class="trial-steps">
+            <li><span>1</span><div><strong data-i18n="landing.r11.demo_step1_title">Đăng nhập tài khoản chung</strong><p data-i18n="landing.r11.demo_step1_body">Dùng thông tin ở bên cạnh.</p></div></li>
+            <li><span>2</span><div><strong data-i18n="landing.r11.demo_step2_title">Chọn một món và hoàn tất đơn</strong><p data-i18n="landing.r11.demo_step2_body">Không cần nhập dữ liệu cửa hàng thật.</p></div></li>
+            <li><span>3</span><div><strong data-i18n="landing.r11.demo_step3_title">Hỏi Trợ lý nếu quên bước</strong><p data-i18n="landing.r11.demo_step3_body">Chọn câu gợi ý “Hướng dẫn tôi bán hàng”.</p></div></li>
+          </ol>
+        </div>
+
+        <article class="credential-card">
+          <h3 data-i18n="landing.r11.credential_title">Tài khoản demo chung</h3>
+          <p data-i18n="landing.r11.credential_body">Dữ liệu có thể thay đổi vì nhiều người cùng sử dụng.</p>
+          <div class="credentials">
+            <div class="credential"><span data-i18n="auth.username.label">Tên đăng nhập</span><strong>demo</strong></div>
+            <div class="credential"><span data-i18n="auth.password.label">Mật khẩu</span><strong>Demo@2026</strong></div>
+          </div>
+          <p class="demo-warning"><strong data-i18n="landing.r11.warning_label">Lưu ý:</strong> <span data-i18n="landing.r11.warning_body">Không nhập thông tin cá nhân, khách hàng hoặc dữ liệu kinh doanh thật.</span></p>
+          <div class="credential-actions">
+            <a class="button button-primary" id="credential-demo" href="#login" data-demo-login><span data-i18n="landing.r11.cta_demo">Mở bản demo</span> <span class="arrow" aria-hidden="true">→</span></a>
+            <a class="button button-secondary" id="credential-call" href="tel:+84774867057" data-i18n="landing.r11.cta_help">Cần người hướng dẫn</a>
+          </div>
+          <p class="credential-register"><span data-i18n="landing.r11.new_shop">Cửa hàng mới?</span> <a href="/register" data-i18n="login.register_seller">Đăng ký Người bán</a></p>
+        </article>
+      </div>
+    </section>
+
+    <section class="faq" aria-labelledby="faq-title">
+      <div class="wrap faq-grid">
+        <div>
+          <p class="eyebrow" data-i18n="landing.r11.faq_kicker">Hỏi trước khi dùng</p>
+          <h2 class="section-title" id="faq-title" data-i18n="landing.r11.faq_title">Nói rõ để bạn dễ quyết định.</h2>
+          <p class="section-lead" data-i18n="landing.r11.faq_body">Không chắc bước nào, bạn có thể gọi hoặc nhắn Zalo trước khi vào demo.</p>
+        </div>
+        <div class="faq-list">
+          <details open>
+            <summary data-i18n="landing.r11.faq_q1">Tôi chưa từng dùng POS, có xem demo được không?</summary>
+            <p data-i18n="landing.r11.faq_a1">Có. Tài khoản demo mở sẵn dữ liệu mẫu. Bạn có thể bán thử một đơn hoặc hỏi Trợ lý “Hướng dẫn tôi bán hàng”.</p>
+          </details>
+          <details>
+            <summary data-i18n="landing.r11.faq_q2">Trợ lý có tự tạo đơn hoặc sửa số liệu không?</summary>
+            <p data-i18n="landing.r11.faq_a2">Không. Trợ lý hướng dẫn, giải thích và mở đúng màn hình. Những thao tác thay đổi dữ liệu vẫn do bạn thực hiện và xác nhận.</p>
+          </details>
+          <details>
+            <summary data-i18n="landing.r11.faq_q3">Mất mạng thì màn hình bán hàng thế nào?</summary>
+            <p data-i18n="landing.r11.faq_a3">POS có luồng offline và hiển thị trạng thái đơn chờ đồng bộ. Khi có vấn đề cần kiểm tra, hệ thống hiện trạng thái phục hồi thay vì im lặng.</p>
+          </details>
+          <details>
+            <summary data-i18n="landing.r11.faq_q4">Tài khoản demo có lưu riêng dữ liệu của tôi không?</summary>
+            <p data-i18n="landing.r11.faq_a4">Không. Đây là tài khoản dùng chung. Không nhập thông tin cá nhân, khách hàng hoặc dữ liệu kinh doanh thật.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="closing" aria-labelledby="closing-title">
+      <div class="wrap closing-inner">
+        <h2 id="closing-title"><span class="closing-title-main" data-i18n="landing.r11.closing_title">Mở quầy demo, bán một đơn mẫu.</span> <span data-i18n="landing.r11.closing_accent">Cần thì có người hướng dẫn.</span></h2>
+        <div class="closing-actions">
+          <a class="button button-primary" id="closing-demo" href="#login" data-i18n="landing.r11.cta_demo" data-demo-login>Mở bản demo</a>
+          <a class="button button-dark" id="closing-zalo" href="https://zalo.me/0774867057" target="_blank" rel="noopener" data-i18n="landing.r11.cta_zalo">Nhắn Zalo</a>
+          <a class="button button-dark" href="/register" data-i18n="login.register_seller">Đăng ký Người bán</a>
+        </div>
+      </div>
+    </section>
+    <section class="login-section" id="login" aria-labelledby="login-title">
+      <div class="wrap login-grid">
+        <div class="login-copy">
+          <p class="eyebrow" data-i18n="landing.login.kicker">Dành cho người đã có tài khoản</p>
+          <h2 id="login-title" data-i18n="landing.login.title">Đăng nhập và bán thử một đơn.</h2>
+          <p data-i18n="landing.login.body">Dùng tài khoản demo chung ở phía trên hoặc tài khoản cửa hàng của bạn. Sau khi đăng nhập, F-Selling đưa bạn đến đúng khu vực theo vai trò.</p>
+          <p class="hero-note" data-i18n="landing.r11.demo_note">Demo dùng dữ liệu mẫu chung. Không nhập dữ liệu kinh doanh thật.</p>
+        </div>
+        <div class="login-card">
+          <img class="login-logo" src="/img/logo.png" width="114" height="58" alt="F-Selling">
+          <h3 data-i18n="login.subtitle">Đăng nhập vào tài khoản của bạn</h3>
+          <p class="login-card-subtitle" data-i18n="landing.login.hint">Tài khoản demo: demo · Demo@2026</p>
+          <p class="demo-login-status" id="demoLoginStatus" aria-live="polite"></p>
+          <form class="login-form" id="loginForm" data-i18n-aria-label="login.form_aria">
+            <div><label for="username" data-i18n="auth.username.label">Tên đăng nhập</label><input type="text" id="username" autocomplete="username" data-i18n-placeholder="auth.username.placeholder" required></div>
+            <div><label for="password" data-i18n="auth.password.label">Mật khẩu</label><input type="password" id="password" autocomplete="current-password" data-i18n-placeholder="auth.password.placeholder" required></div>
+            <button type="submit" data-i18n="login.submit">Đăng nhập</button>
+            <div class="form-message" id="errorMsg" aria-live="polite"></div>
+          </form>
+          <div class="login-links">
+            <p><button class="link-button" type="button" onclick="showForgotModal()" data-i18n="login.forgot_password">Quên mật khẩu?</button></p>
+            <p><span data-i18n="login.no_account">Chưa có tài khoản?</span> <a href="/register" data-i18n="login.register_seller">Đăng ký Người bán</a></p>
+          </div>
+          <noscript><p class="noscript" data-i18n="landing.login.noscript">Cần bật JavaScript để đăng nhập. Nội dung giới thiệu vẫn có thể xem bình thường.</p></noscript>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="forgotModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="forgotModalTitle">
+    <div class="modal-card">
+      <button class="modal-close" type="button" onclick="closeForgotModal()" data-i18n-aria-label="forgot.close_aria">&times;</button>
+      <h3 id="forgotModalTitle" data-i18n="forgot.title">Quên mật khẩu</h3>
+      <form class="forgot-form" id="forgotStep1Form" data-i18n-aria-label="forgot.request_form_aria">
+        <p data-i18n="forgot.request_instructions">Nhập email liên kết với tài khoản để nhận mã xác minh.</p>
+        <div><label for="forgotEmail" data-i18n="auth.email.label">Email</label><input type="email" id="forgotEmail" autocomplete="email" data-i18n-placeholder="auth.email.placeholder" required></div>
+        <button type="submit" data-i18n="forgot.send_code">Gửi mã xác nhận</button>
+      </form>
+      <form class="forgot-form" id="forgotStep2Form" data-i18n-aria-label="forgot.reset_form_aria" style="display:none">
+        <p data-i18n="forgot.reset_instructions">Nhập mã xác thực và mật khẩu mới.</p>
+        <div><label for="forgotOTP" data-i18n="forgot.otp_label">Mã OTP (6 chữ số)</label><input type="text" id="forgotOTP" maxlength="6" inputmode="numeric" autocomplete="one-time-code" data-i18n-placeholder="forgot.otp_placeholder" required></div>
+        <div><label for="forgotNewPassword" data-i18n="auth.password.new_label">Mật khẩu mới</label><input type="password" id="forgotNewPassword" autocomplete="new-password" data-i18n-placeholder="auth.password.new_placeholder" required></div>
+        <div><label for="forgotConfirmPassword" data-i18n="auth.password.confirm_label">Xác nhận mật khẩu</label><input type="password" id="forgotConfirmPassword" autocomplete="new-password" data-i18n-placeholder="auth.password.confirm_placeholder" required></div>
+        <button type="submit" data-i18n="forgot.reset_submit">Đặt lại mật khẩu</button>
+      </form>
+      <div class="form-message" id="forgotErrorMsg" aria-live="polite"></div>
+      <div class="success-message" id="forgotSuccessMsg" aria-live="polite"></div>
     </div>
+  </div>
 
-    <div id="toast" aria-live="polite"></div>
+  <footer>
+    <div class="wrap footer-inner">
+      <img class="production-footer-logo" src="/img/logo.png" width="114" height="58" alt="F-Selling">
+      <div class="footer-copy">
+        <div><strong>F-Selling</strong> · <span data-i18n="landing.r11.footer_product">Phần mềm bán hàng cho tiệm tạp hóa</span></div>
+        <div><span data-i18n="landing.r11.footer_support">Hỗ trợ:</span> <a href="tel:+84774867057">0774 867 057</a> · <span data-i18n="landing.r11.footer_data">Dữ liệu trên trang là dữ liệu minh họa</span></div>
+      </div>
+    </div>
+  </footer>
 
-    <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
-    <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/auth-admin.js?v=20260822-login-landing-r1"></script>
-    <script src="/js/i18n.js?v=20260731-i18n4"></script>
-<script src="/js/api.js?v=20260812-i09-f1-c1&g=20260813-i09-g2h2"></script>
-    <script src="/js/auth.js?v=20260812-i09-f1-c1"></script>
-    <script src="/js/pwa.js?v=20260806-pwa"></script>
+  <div id="toast" aria-live="polite"></div>
+  <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
+  <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
+  <script src="/js/locales/auth-admin.js?v=20260828-landing-r11-demo2"></script>
+  <script src="/js/i18n.js?v=20260731-i18n4"></script>
+  <script src="/js/api.js?v=20260812-i09-f1-c1&amp;g=20260813-i09-g2h2"></script>
+  <script src="/js/auth.js?v=20260828-landing-r11-demo1"></script>
+  <script>
+    (function () {
+      'use strict';
+      function revealLoginFromUrl() {
+        if (window.location.hash !== '#login' && !new URLSearchParams(window.location.search).has('auth')) return;
+        window.requestAnimationFrame(function () {
+          window.requestAnimationFrame(function () {
+            var target = window.matchMedia('(max-width: 760px)').matches ? document.querySelector('.login-card') : document.getElementById('login');
+            target.scrollIntoView({ block: 'start' });
+            document.getElementById('username').focus({ preventScroll: true });
+          });
+        });
+      }
+      function fillDemoLogin() {
+        var username = document.getElementById('username');
+        var password = document.getElementById('password');
+        var form = document.getElementById('loginForm');
+        var status = document.getElementById('demoLoginStatus');
+        username.value = 'demo';
+        password.value = 'Demo@2026';
+        form.dataset.demoSale = '1';
+        status.dataset.i18n = 'landing.r11.demo_ready';
+        status.textContent = typeof window.t === 'function'
+          ? window.t('landing.r11.demo_ready')
+          : 'Đã điền tài khoản demo. Bấm Đăng nhập để tiếp tục.';
+      }
+      document.querySelectorAll('[data-demo-login]').forEach(function (link) {
+        link.addEventListener('click', fillDemoLogin);
+      });
+      document.querySelectorAll('.mobile-menu-panel a').forEach(function (link) {
+        link.addEventListener('click', function () {
+          var menu = link.closest('details');
+          if (menu) menu.removeAttribute('open');
+        });
+      });
+      window.addEventListener('load', revealLoginFromUrl, { once: true });
+      window.addEventListener('pageshow', revealLoginFromUrl);
+      window.addEventListener('hashchange', revealLoginFromUrl);
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(revealLoginFromUrl);
+      if (new URLSearchParams(window.location.search).get('demo') === '1') fillDemoLogin();
+      revealLoginFromUrl();
+    }());
+  </script>
+  <script src="/js/pwa.js?v=20260806-pwa"></script>
 </body>
 </html>

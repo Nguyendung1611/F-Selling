@@ -23,6 +23,17 @@ input{
     margin-bottom: 1em;
 }
 
+.auth-trial-note {
+    margin: -1rem 0 1.5rem;
+    padding: 0.65rem 0.85rem;
+    border-radius: 0.65rem;
+    color: #087f5b;
+    background: #e8f6f0;
+    font-size: 0.9rem;
+    font-weight: 700;
+    text-align: center;
+}
+
 .auth-landing {
     width: min(74rem, 100%);
     min-height: 100vh;

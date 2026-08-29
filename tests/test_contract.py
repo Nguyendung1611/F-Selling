@@ -84,6 +84,11 @@ ROUTES_BO_SUNG = {
     ("DELETE", "/api/customers/member/{customer_id}"),  # C2b: xóa khách
     ("GET", "/api/customers/member/{customer_id}/history"),  # C2c: lịch sử mua
     ("GET", "/api/products/{shop_id}/barcode/{barcode}"),  # B1a: tra SP theo mã vạch
+    # Product Import R1: owner-only, preview-first create flow. Commit is
+    # idempotent by operation id; undo hides only products from that import.
+    ("POST", "/api/products/{shop_id}/imports/preview"),
+    ("POST", "/api/products/{shop_id}/imports/commit"),
+    ("POST", "/api/products/{shop_id}/imports/{operation_id}/undo"),
     ("POST", "/api/products/{shop_id}/stocktake"),  # B4: áp dụng kết quả kiểm kê
     ("POST", "/api/tts"),          # D3: sinh giọng đọc khi máy thiếu giọng Việt
     ("GET", "/api/tts/status"),    # D3: frontend hỏi server có đọc hộ được không

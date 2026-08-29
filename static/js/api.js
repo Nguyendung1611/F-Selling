@@ -204,10 +204,13 @@ function getToken() {
 }
 
 async function apiCall(endpoint, method = 'GET', body = null) {
+    const isFormData = body instanceof FormData;
     const headers = {
-        'Content-Type': 'application/json',
         'Accept-Language': currentLanguage()
     };
+    // Với FormData, trình duyệt phải tự thêm multipart boundary. Gắn thủ công
+    // Content-Type sẽ làm server không đọc được file.
+    if (!isFormData) headers['Content-Type'] = 'application/json';
     
     const token = getToken();
     if (token) {
@@ -216,7 +219,7 @@ async function apiCall(endpoint, method = 'GET', body = null) {
 
     const options = { method, headers, cache: 'no-store' };
     if (body) {
-        options.body = JSON.stringify(body);
+        options.body = isFormData ? body : JSON.stringify(body);
     }
 
     let res;

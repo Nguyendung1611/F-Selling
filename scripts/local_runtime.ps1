@@ -8,6 +8,7 @@ $AppRoot = Split-Path -Parent $PSScriptRoot
 $AppUrl = "http://127.0.0.1:8000/"
 $ReadyUrl = "http://127.0.0.1:8000/api/health/ready"
 $PythonPath = Join-Path $AppRoot ".venv\Scripts\python.exe"
+$PidPath = Join-Path $AppRoot ".fselling-local.pid"
 
 function Test-FSellingReady {
     try {
@@ -20,33 +21,69 @@ function Test-FSellingReady {
 }
 
 function Get-LocalListener {
-    return Get-NetTCPConnection -LocalAddress "127.0.0.1" -LocalPort 8000 `
-        -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    try {
+        return Get-NetTCPConnection -LocalAddress "127.0.0.1" -LocalPort 8000 `
+            -State Listen -ErrorAction Stop | Select-Object -First 1
+    }
+    catch {
+        foreach ($line in (& netstat -ano -p tcp 2>$null)) {
+            if ($line -match '^\s*TCP\s+127\.0\.0\.1:8000\s+\S+\s+LISTENING\s+(\d+)\s*$') {
+                return [PSCustomObject]@{ OwningProcess = [int]$Matches[1] }
+            }
+        }
+        return $null
+    }
 }
 
 function Get-OwnedServerProcess {
     param([int]$ProcessId)
 
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId"
-    if (-not $process) {
+    try {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId"
+    }
+    catch {
+        $process = $null
+    }
+
+    if ($process) {
+        $expectedPython = [System.IO.Path]::GetFullPath($PythonPath)
+        $commandLine = [string]$process.CommandLine
+        $actualPython = [System.IO.Path]::GetFullPath([string]$process.ExecutablePath)
+        $isExpectedPython = $actualPython.Equals(
+                $expectedPython,
+                [System.StringComparison]::OrdinalIgnoreCase
+            ) -or $commandLine.IndexOf(
+                $expectedPython,
+                [System.StringComparison]::OrdinalIgnoreCase
+            ) -ge 0
+        $isExpectedCommand = $commandLine -match `
+            "-m\s+uvicorn\s+(app|fselling\.main):app"
+
+        if ($isExpectedPython -and $isExpectedCommand) {
+            return $process
+        }
         return $null
     }
 
-    $expectedPython = [System.IO.Path]::GetFullPath($PythonPath)
-    $commandLine = [string]$process.CommandLine
-    $actualPython = [System.IO.Path]::GetFullPath([string]$process.ExecutablePath)
-    $isExpectedPython = $actualPython.Equals(
-            $expectedPython,
-            [System.StringComparison]::OrdinalIgnoreCase
-        ) -or $commandLine.IndexOf(
-            $expectedPython,
-            [System.StringComparison]::OrdinalIgnoreCase
-        ) -ge 0
-    $isExpectedCommand = $commandLine -match `
-        "-m\s+uvicorn\s+(app|fselling\.main):app"
-
-    if ($isExpectedPython -and $isExpectedCommand) {
-        return $process
+    if (-not (Test-Path -LiteralPath $PidPath)) {
+        return $null
+    }
+    [int]$savedProcessId = 0
+    $savedPid = (Get-Content -LiteralPath $PidPath -Raw).Trim()
+    if (-not [int]::TryParse($savedPid, [ref]$savedProcessId)) {
+        return $null
+    }
+    if ($savedProcessId -ne $ProcessId -or -not (Test-FSellingReady)) {
+        return $null
+    }
+    try {
+        $localProcess = Get-Process -Id $ProcessId -ErrorAction Stop
+    }
+    catch {
+        return $null
+    }
+    if ($localProcess.ProcessName -match '^python(?:w)?$') {
+        return [PSCustomObject]@{ ProcessId = $localProcess.Id }
     }
     return $null
 }
@@ -75,6 +112,7 @@ if ($Action -eq "stop") {
     }
 
     Stop-Process -Id $serverProcess.ProcessId
+    Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue
     Write-Host "F-Selling stopped."
     exit 0
 }
@@ -121,6 +159,11 @@ $server = Start-Process `
 $deadline = (Get-Date).AddSeconds(30)
 while ((Get-Date) -lt $deadline) {
     if (Test-FSellingReady) {
+        $listener = Get-LocalListener
+        if (-not $listener) {
+            Write-Error "F-Selling is ready but its local listener could not be identified."
+        }
+        $listener.OwningProcess | Set-Content -LiteralPath $PidPath -Encoding ascii
         Write-Host "F-Selling is READY at $AppUrl" -ForegroundColor Green
         Write-Host "Stop later with: run.bat stop"
         Start-Process $AppUrl
@@ -133,4 +176,5 @@ while ((Get-Date) -lt $deadline) {
 }
 
 Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue
 Write-Error "F-Selling did not become ready within 30 seconds."

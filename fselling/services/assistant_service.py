@@ -233,7 +233,7 @@ _MAU_Y_DINH: List[Tuple[str, str]] = [
     (r"\bbao nhieu don\b|\bmay don\b|\bso don\b|\bso luong don\b|\bdon hang\b"
      r"|\bchung nao don\b|\bkhach mua bao nhieu luot\b",
      Y_DINH_SO_DON),
-    (r"\bdoanh thu\b|\bban duoc bao nhieu\b|\bthu ve\b"
+    (r"\bdoanh thu\b|\bban (duoc|dc) bao nhi(eu|u)\b|\bthu ve\b"
      r"|\bthu (duoc )?(bao nhieu|chung nao)\b"
      r"|\bban duoc\b|\bbao nhieu tien\b|\bduoc bao nhieu\b|\bkiem duoc\b|\bthu nhap\b"
      r"|\btien ban.*duoc may\b|\btong thu.*may\b|\bban buon.*may tien\b"
