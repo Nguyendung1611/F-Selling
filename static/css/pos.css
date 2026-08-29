@@ -1592,6 +1592,68 @@ body.pos-modal-open {
     }
 }
 
+.receipt-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.receipt-actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    width: 100%;
+    min-height: 46px;
+    margin: 0;
+    padding: 10px 12px;
+}
+
+@media (max-width: 620px) {
+    .receipt-actions {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media print {
+    @page {
+        margin: 8mm;
+    }
+
+    body {
+        overflow: visible !important;
+        background: #fff !important;
+    }
+
+    body * {
+        visibility: hidden !important;
+    }
+
+    #hoaDonSection,
+    #hoaDonSection * {
+        visibility: visible !important;
+    }
+
+    #hoaDonSection {
+        position: fixed !important;
+        inset: 0 auto auto 0 !important;
+        display: block !important;
+        width: 80mm !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border-radius: 0 !important;
+        background: #fff !important;
+        color: #000 !important;
+        box-shadow: none !important;
+        print-color-adjust: exact;
+    }
+
+    #hoaDonActions {
+        display: none !important;
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
     *,
     *::before,

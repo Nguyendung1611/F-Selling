@@ -3460,6 +3460,7 @@ async function hienHoaDon(orderId, ketQuaDiemMoiNhat = null) {
         }));
     }
     resetPOS();
+    duLieuHoaDonHienTai = d;
     veHoaDon(d);
     document.getElementById('hoaDonSection').style.display = 'block';
     showFirstRunSaleSuccess(d);
@@ -3501,6 +3502,149 @@ function dinhDangNgayGioHoaDon(value) {
         : fallbackDate.toLocaleString('vi-VN');
 }
 
+// RECEIPT_ACTIONS_R1_START
+let duLieuHoaDonHienTai = null;
+
+function phuongThucThanhToanHoaDon(d) {
+    if (d.payment_method === 'debt') return 'Ghi nợ';
+    const coChuyenKhoan = Number(d.bank_paid_amount || 0) > 0;
+    const coTienMat = Number(d.cash_paid_amount || 0) > 0;
+    if (coChuyenKhoan && coTienMat) return 'Chuyển khoản + tiền mặt';
+    if (d.payment_method === 'transfer' || coChuyenKhoan) return 'Chuyển khoản';
+    return 'Tiền mặt';
+}
+
+function taoNoiDungHoaDonChiaSe(d) {
+    const coChuyenKhoan = Number(d.bank_paid_amount || 0) > 0;
+    const coTienMat = Number(d.cash_paid_amount || 0) > 0;
+    const coTienKhachDua = d.cash_tendered_amount !== null
+        && d.cash_tendered_amount !== undefined;
+    const nhanVien = d.cashier_username || localStorage.getItem('username') || '—';
+    const pttt = phuongThucThanhToanHoaDon(d);
+    const giamBangDiem = Math.max(
+        0,
+        Number(d.loyalty_discount ?? d.loyalty_discount_amount) || 0
+    );
+    const diemDaDung = Math.max(0, Math.trunc(Number(d.loyalty_points_redeemed) || 0));
+    const diemDaNhan = Math.max(0, Math.trunc(Number(d.loyalty_points_earned) || 0));
+    const lines = [
+        d.shop_name || 'F-Selling',
+        'HÓA ĐƠN BÁN HÀNG',
+        `Số đơn: #${d.id}`,
+        `Thời gian: ${dinhDangNgayGioHoaDon(d.created_at)}`,
+        `Nhân viên: ${nhanVien}`,
+        `Thanh toán: ${pttt}`
+    ];
+
+    if (d.customer?.name) lines.push(`Khách hàng: ${d.customer.name}`);
+    lines.push('------------------------------');
+    (d.items || []).forEach(item => {
+        lines.push(item.product_name || 'Sản phẩm');
+        lines.push(`  ${dinhDangTienHoaDon(item.price)} × ${item.quantity} = ${dinhDangTienHoaDon(item.line_total)}`);
+    });
+    lines.push('------------------------------');
+    lines.push(`Tạm tính: ${dinhDangTienHoaDon(d.subtotal)}`);
+    if (Number(d.discount_amount || 0) > 0) {
+        const ma = d.voucher_code ? ` (${d.voucher_code})` : '';
+        lines.push(`Giảm giá${ma}: - ${dinhDangTienHoaDon(d.discount_amount)}`);
+    }
+    if (giamBangDiem > 0) {
+        lines.push(`Giảm bằng ${dinhDangSoHoaDon(diemDaDung)} điểm: - ${dinhDangTienHoaDon(giamBangDiem)}`);
+    }
+    lines.push(`TỔNG CỘNG: ${dinhDangTienHoaDon(d.total_amount)}`);
+    if (coChuyenKhoan && coTienMat) {
+        lines.push(`Qua ngân hàng: ${dinhDangTienHoaDon(d.bank_paid_amount)}`);
+        lines.push(`Bù tiền mặt: ${dinhDangTienHoaDon(d.cash_paid_amount)}`);
+    }
+    if (coTienKhachDua) {
+        lines.push(`Khách đưa: ${dinhDangTienHoaDon(d.cash_tendered_amount)}`);
+        lines.push(`Tiền thối: ${dinhDangTienHoaDon(d.cash_change_amount || 0)}`);
+    }
+    if (d.refund_pending) {
+        lines.push(`Thực nhận: ${dinhDangTienHoaDon(d.received_amount)}`);
+        lines.push(`CẦN HOÀN KHÁCH: ${dinhDangTienHoaDon(d.refund_due_amount)}`);
+    }
+    if (diemDaNhan > 0) lines.push(`Điểm vừa nhận: +${dinhDangSoHoaDon(diemDaNhan)} điểm`);
+    if (d.loyalty_balance !== null && d.loyalty_balance !== undefined) {
+        lines.push(`Số dư điểm: ${dinhDangSoHoaDon(d.loyalty_balance)} điểm`);
+    }
+    lines.push('Cảm ơn quý khách!');
+    return lines.join('\n');
+}
+
+async function chiaSeHoaDon() {
+    if (!duLieuHoaDonHienTai) {
+        showToast(dich('pos.receipt.not_ready'));
+        return;
+    }
+    const payload = {
+        title: `Hóa đơn #${duLieuHoaDonHienTai.id} · ${duLieuHoaDonHienTai.shop_name || 'F-Selling'}`,
+        text: taoNoiDungHoaDonChiaSe(duLieuHoaDonHienTai)
+    };
+    if (typeof navigator.share !== 'function') {
+        try {
+            await saoChepVanBanHoaDon(payload.text);
+            showToast(dich('pos.receipt.copied_for_share'));
+        } catch (_) {
+            showToast(dich('pos.receipt.copy_error'));
+        }
+        return;
+    }
+    try {
+        await navigator.share(payload);
+    } catch (error) {
+        if (error?.name !== 'AbortError') showToast(dich('pos.receipt.share_error'));
+    }
+}
+
+async function saoChepVanBanHoaDon(text) {
+    if (navigator.clipboard?.writeText) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return;
+        } catch (_) {
+            // Trình duyệt có API nhưng có thể chặn quyền; thử lối tương thích.
+        }
+    }
+    const field = document.createElement('textarea');
+    field.value = text;
+    field.setAttribute('readonly', '');
+    field.style.position = 'fixed';
+    field.style.opacity = '0';
+    document.body.appendChild(field);
+    field.focus();
+    field.select();
+    let copied = false;
+    try {
+        copied = document.execCommand('copy');
+    } finally {
+        field.remove();
+    }
+    if (!copied) throw new Error('COPY_UNAVAILABLE');
+}
+
+async function saoChepHoaDon() {
+    if (!duLieuHoaDonHienTai) {
+        showToast(dich('pos.receipt.not_ready'));
+        return;
+    }
+    try {
+        await saoChepVanBanHoaDon(taoNoiDungHoaDonChiaSe(duLieuHoaDonHienTai));
+        showToast(dich('pos.receipt.copied'));
+    } catch (_) {
+        showToast(dich('pos.receipt.copy_error'));
+    }
+}
+
+function inHoaDon() {
+    if (!duLieuHoaDonHienTai) {
+        showToast(dich('pos.receipt.not_ready'));
+        return;
+    }
+    window.print();
+}
+// RECEIPT_ACTIONS_R1_END
+
 function veHoaDon(d) {
     // Tên thu ngân và tiền thối lấy từ bản ghi server, không lấy theo tài khoản
     // đang mở trình duyệt (hóa đơn cũ có thể do người khác bán).
@@ -3528,9 +3672,7 @@ function veHoaDon(d) {
     // Trả hàng có thể làm số dư âm khi điểm đã cộng trước đó đã được khách dùng
     // mất. Phải in đúng số âm để shop nhìn thấy, không che thành 0.
     const soDuDiem = Math.trunc(Number(d.loyalty_balance) || 0);
-    const pttt = coChuyenKhoan && coTienMat
-        ? 'Chuyển khoản + tiền mặt'
-        : (coChuyenKhoan ? 'Chuyển khoản' : 'Tiền mặt');
+    const pttt = phuongThucThanhToanHoaDon(d);
 
     const dongHang = (d.items || []).map(i => `
         <tr>
@@ -3588,7 +3730,7 @@ function veHoaDon(d) {
             <div><b>Thời gian:</b> ${dinhDangNgayGioHoaDon(d.created_at)}</div>
             <div><b>Nhân viên:</b> ${escapeHtml(nhanVien)}</div>
             <div><b>Thanh toán:</b> ${pttt}</div>
-            ${d.customer ? `<div><b>Khách hàng:</b> ${escapeHtml(d.customer.name)} (${escapeHtml(d.customer.phone)})</div>` : ''}
+            ${d.customer?.name ? `<div><b>Khách hàng:</b> ${escapeHtml(d.customer.name)}</div>` : ''}
         </div>
         <table style="width:100%; border-collapse:collapse; font-size:0.88rem; border-top:1px dashed #94A3B8; border-bottom:1px dashed #94A3B8;">
             ${dongHang}
@@ -3598,6 +3740,7 @@ function veHoaDon(d) {
 }
 
 function dongHoaDon() {
+    duLieuHoaDonHienTai = null;
     document.getElementById('hoaDonSection').style.display = 'none';
     dismissFirstRunSaleSuccess();
 }
