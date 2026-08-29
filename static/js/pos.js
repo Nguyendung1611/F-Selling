@@ -3527,9 +3527,10 @@ function taoNoiDungHoaDonChiaSe(d) {
     );
     const diemDaDung = Math.max(0, Math.trunc(Number(d.loyalty_points_redeemed) || 0));
     const diemDaNhan = Math.max(0, Math.trunc(Number(d.loyalty_points_earned) || 0));
+    const returnedTotal = Math.max(0, Number(d.returned_total) || 0);
     const lines = [
         d.shop_name || 'F-Selling',
-        'HÓA ĐƠN BÁN HÀNG',
+        d.receipt_copy ? 'HÓA ĐƠN BÁN HÀNG · BẢN SAO' : 'HÓA ĐƠN BÁN HÀNG',
         `Số đơn: #${d.id}`,
         `Thời gian: ${dinhDangNgayGioHoaDon(d.created_at)}`,
         `Nhân viên: ${nhanVien}`,
@@ -3541,6 +3542,9 @@ function taoNoiDungHoaDonChiaSe(d) {
     (d.items || []).forEach(item => {
         lines.push(item.product_name || 'Sản phẩm');
         lines.push(`  ${dinhDangTienHoaDon(item.price)} × ${item.quantity} = ${dinhDangTienHoaDon(item.line_total)}`);
+        if (Number(item.returned_quantity || 0) > 0) {
+            lines.push(`  Đã trả: ${dinhDangSoHoaDon(item.returned_quantity)}`);
+        }
     });
     lines.push('------------------------------');
     lines.push(`Tạm tính: ${dinhDangTienHoaDon(d.subtotal)}`);
@@ -3552,6 +3556,10 @@ function taoNoiDungHoaDonChiaSe(d) {
         lines.push(`Giảm bằng ${dinhDangSoHoaDon(diemDaDung)} điểm: - ${dinhDangTienHoaDon(giamBangDiem)}`);
     }
     lines.push(`TỔNG CỘNG: ${dinhDangTienHoaDon(d.total_amount)}`);
+    if (returnedTotal > 0) {
+        lines.push(`ĐÃ HOÀN KHÁCH: - ${dinhDangTienHoaDon(returnedTotal)}`);
+        lines.push(`GIÁ TRỊ CÒN LẠI: ${dinhDangTienHoaDon(Math.max(0, Number(d.total_amount || 0) - returnedTotal))}`);
+    }
     if (coChuyenKhoan && coTienMat) {
         lines.push(`Qua ngân hàng: ${dinhDangTienHoaDon(d.bank_paid_amount)}`);
         lines.push(`Bù tiền mặt: ${dinhDangTienHoaDon(d.cash_paid_amount)}`);
@@ -3742,12 +3750,96 @@ function inHoaDon() {
 }
 // RECEIPT_ACTIONS_R1_END
 
+// RECEIPT_LOOKUP_R2_START
+let timHoaDonRequestId = 0;
+
+function moModalHoaDonCu() {
+    if (!currentShopId) return showToast(dich('pos.receipt_lookup.select_shop'));
+    timHoaDonRequestId += 1;
+    document.getElementById('oldReceiptOrderId').value = '';
+    document.getElementById('oldReceiptMsg').innerText = '';
+    datNutDangXuLy('btnFindOldReceipt', false);
+    hienModalCa('oldReceiptModal', 'oldReceiptOrderId');
+}
+
+function dongModalHoaDonCu() {
+    timHoaDonRequestId += 1;
+    datNutDangXuLy('btnFindOldReceipt', false);
+    dongModalCa('oldReceiptModal');
+}
+
+async function timHoaDonCu() {
+    const raw = (document.getElementById('oldReceiptOrderId').value || '').trim();
+    const message = document.getElementById('oldReceiptMsg');
+    message.innerText = '';
+    const orderId = Number(raw);
+    if (!/^\d+$/.test(raw) || !Number.isSafeInteger(orderId) || orderId <= 0) {
+        message.innerText = dich('pos.receipt_lookup.invalid_id');
+        return;
+    }
+    if (!currentShopId) {
+        message.innerText = dich('pos.receipt_lookup.select_shop');
+        return;
+    }
+
+    const requestId = ++timHoaDonRequestId;
+    datNutDangXuLy('btnFindOldReceipt', true, 'pos.receipt_lookup.loading');
+    try {
+        const detail = await apiCall(`/orders/${orderId}/detail`);
+        if (requestId !== timHoaDonRequestId) return;
+        if (String(detail.shop_id) !== String(currentShopId)) {
+            message.innerText = dich('pos.receipt_lookup.other_shop');
+            return;
+        }
+        if (!['PAID', 'DEBT'].includes(detail.status)) {
+            message.innerText = dich('pos.receipt_lookup.not_finalized');
+            return;
+        }
+
+        detail.receipt_copy = true;
+        duLieuHoaDonHienTai = detail;
+        veHoaDon(detail);
+        const section = document.getElementById('hoaDonSection');
+        section.style.display = 'block';
+        dongModalCa('oldReceiptModal');
+        section.focus({ preventScroll: true });
+        section.scrollIntoView({
+            behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+                ? 'auto'
+                : 'smooth',
+            block: 'start'
+        });
+    } catch (error) {
+        if (requestId !== timHoaDonRequestId) return;
+        if (Number(error?.status) === 404) {
+            message.innerText = dich('pos.receipt_lookup.not_found');
+        } else if (Number(error?.status) === 403) {
+            message.innerText = dich('pos.receipt_lookup.forbidden');
+        } else {
+            message.innerText = dich('pos.receipt_lookup.load_error');
+        }
+    } finally {
+        if (requestId === timHoaDonRequestId) {
+            datNutDangXuLy('btnFindOldReceipt', false);
+        }
+    }
+}
+// RECEIPT_LOOKUP_R2_END
+
 function veHoaDon(d) {
     // Tên thu ngân và tiền thối lấy từ bản ghi server, không lấy theo tài khoản
     // đang mở trình duyệt (hóa đơn cũ có thể do người khác bán).
     const nhanVien = d.cashier_username || localStorage.getItem('username') || '—';
     const copyButton = document.getElementById('btnCopyReceipt');
     if (copyButton) copyButton.hidden = !coTheSaoChepHoaDon();
+    const closeLabel = document.getElementById('btnCloseReceiptLabel');
+    if (closeLabel) {
+        const key = d.receipt_copy ? 'pos.receipt.close' : 'pos.receipt.new_order';
+        closeLabel.dataset.i18n = key;
+        closeLabel.innerText = dich(key);
+    }
+    const closeIcon = document.getElementById('btnCloseReceiptIcon');
+    if (closeIcon) closeIcon.className = `ph ${d.receipt_copy ? 'ph-x-circle' : 'ph-plus-circle'}`;
     const coChuyenKhoan = Number(d.bank_paid_amount || 0) > 0;
     const coTienMat = Number(d.cash_paid_amount || 0) > 0;
     const coTienKhachDua = d.cash_tendered_amount !== null
@@ -3766,6 +3858,7 @@ function veHoaDon(d) {
         0,
         Math.trunc(Number(d.loyalty_points_earned) || 0)
     );
+    const returnedTotal = Math.max(0, Number(d.returned_total) || 0);
     const coSoDuDiem = d.loyalty_balance !== null
         && d.loyalty_balance !== undefined;
     // Trả hàng có thể làm số dư âm khi điểm đã cộng trước đó đã được khách dùng
@@ -3776,7 +3869,8 @@ function veHoaDon(d) {
     const dongHang = (d.items || []).map(i => `
         <tr>
             <td style="padding:0.25rem 0;">${escapeHtml(i.product_name)}<br>
-                <span style="color:#64748B; font-size:0.8rem;">${dinhDangSoHoaDon(i.price)} × ${i.quantity}</span></td>
+                <span style="color:#64748B; font-size:0.8rem;">${dinhDangSoHoaDon(i.price)} × ${i.quantity}</span>
+                ${Number(i.returned_quantity || 0) > 0 ? `<br><span style="color:#B45309; font-size:0.8rem; font-weight:700;">Đã trả: ${dinhDangSoHoaDon(i.returned_quantity)}</span>` : ''}</td>
             <td style="padding:0.25rem 0; text-align:right; white-space:nowrap; font-weight:600;">${dinhDangTienHoaDon(i.line_total)}</td>
         </tr>`).join('');
 
@@ -3789,6 +3883,10 @@ function veHoaDon(d) {
         tongKet += `<div style="display:flex; justify-content:space-between; color:#6D28D9;"><span>Giảm bằng ${dinhDangSoHoaDon(diemDaDung)} điểm</span><span>- ${dinhDangTienHoaDon(giamBangDiem)}</span></div>`;
     }
     tongKet += `<div style="display:flex; justify-content:space-between; font-size:1.15rem; font-weight:700; margin-top:0.4rem; padding-top:0.4rem; border-top:2px solid #0F172A;"><span>TỔNG CỘNG</span><span>${dinhDangTienHoaDon(d.total_amount)}</span></div>`;
+    if (returnedTotal > 0) {
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#B91C1C; font-weight:700; margin-top:0.35rem;"><span>ĐÃ HOÀN KHÁCH</span><span>- ${dinhDangTienHoaDon(returnedTotal)}</span></div>`;
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#0F766E; font-weight:700;"><span>GIÁ TRỊ CÒN LẠI</span><span>${dinhDangTienHoaDon(Math.max(0, Number(d.total_amount || 0) - returnedTotal))}</span></div>`;
+    }
     if (coChuyenKhoan && coTienMat) {
         tongKet += `<div style="display:flex; justify-content:space-between; margin-top:0.35rem;"><span>Qua ngân hàng</span><span>${dinhDangTienHoaDon(d.bank_paid_amount)}</span></div>`;
         tongKet += `<div style="display:flex; justify-content:space-between;"><span>Bù tiền mặt</span><span>${dinhDangTienHoaDon(d.cash_paid_amount)}</span></div>`;
@@ -3822,7 +3920,7 @@ function veHoaDon(d) {
     document.getElementById('hoaDonNoiDung').innerHTML = `
         <div style="text-align:center; border-bottom:1px dashed #94A3B8; padding-bottom:0.6rem; margin-bottom:0.6rem;">
             <div style="font-weight:700; font-size:1.05rem;">${escapeHtml(d.shop_name || '')}</div>
-            <div style="font-size:0.9rem;">HÓA ĐƠN BÁN HÀNG</div>
+            <div style="font-size:0.9rem;">${d.receipt_copy ? 'HÓA ĐƠN BÁN HÀNG · BẢN SAO' : 'HÓA ĐƠN BÁN HÀNG'}</div>
         </div>
         <div style="font-size:0.85rem; line-height:1.7; margin-bottom:0.6rem;">
             <div><b>Số đơn:</b> #${d.id}</div>
@@ -4439,7 +4537,9 @@ document.getElementById('voucherInput')?.addEventListener('input', capNhatNhapVo
 
 document.querySelectorAll('.pos-modal').forEach(modal => {
     modal.addEventListener('click', event => {
-        if (event.target === modal) dongModalCa(modal.id);
+        if (event.target !== modal) return;
+        if (modal.id === 'oldReceiptModal') dongModalHoaDonCu();
+        else dongModalCa(modal.id);
     });
 });
 
@@ -4448,7 +4548,9 @@ document.addEventListener('keydown', event => {
     const modalMo = [...document.querySelectorAll('.pos-modal')]
         .reverse()
         .find(modal => modal.style.display === 'flex');
-    if (modalMo) dongModalCa(modalMo.id);
+    if (!modalMo) return;
+    if (modalMo.id === 'oldReceiptModal') dongModalHoaDonCu();
+    else dongModalCa(modalMo.id);
 });
 
 function capNhatNgonNguPOS() {

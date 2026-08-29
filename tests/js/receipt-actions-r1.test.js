@@ -8,6 +8,19 @@ const source = fs.readFileSync('static/js/pos.js', 'utf8');
 const start = source.indexOf('// RECEIPT_ACTIONS_R1_START');
 const end = source.indexOf('// RECEIPT_ACTIONS_R1_END');
 assert(start >= 0 && end > start, 'missing Receipt R1 action block');
+const lookupStart = source.indexOf('// RECEIPT_LOOKUP_R2_START');
+const lookupEnd = source.indexOf('// RECEIPT_LOOKUP_R2_END');
+assert(lookupStart >= 0 && lookupEnd > lookupStart, 'missing Receipt Lookup R2 block');
+const posHtml = fs.readFileSync('static/pos.html', 'utf8');
+const posCss = fs.readFileSync('static/css/pos.css', 'utf8');
+
+assert.match(posHtml, /id="btnOldReceipt"[^>]+onclick="moModalHoaDonCu\(\)"/);
+assert.match(posHtml, /id="oldReceiptModal"[^>]+role="dialog"[^>]+aria-labelledby="oldReceiptTitle"/);
+assert.match(posHtml, /id="oldReceiptOrderId"[^>]+inputmode="numeric"[^>]+onkeydown="[^"]*timHoaDonCu\(\)/);
+assert.match(posHtml, /id="btnFindOldReceipt"[^>]+onclick="timHoaDonCu\(\)"/);
+assert.match(posHtml, /id="hoaDonSection"[^>]+role="region"[^>]+tabindex="-1"[^>]+data-i18n-aria-label="pos\.receipt\.region_label"/);
+assert.match(posCss, /\.receipt-lookup-help\s*\{[^}]*color:\s*var\(--pos-muted\)/s);
+assert.match(posCss, /\.receipt-lookup-message\s*\{[^}]*color:\s*var\(--pos-danger\)/s);
 
 {
     const localeContext = { window: {} };
@@ -22,12 +35,20 @@ assert(start >= 0 && end > start, 'missing Receipt R1 action block');
     assert.equal(resources.vi.translation['pos.receipt.image_copied'], 'Đã sao chép ảnh hóa đơn. Mở Zalo và dán để gửi.');
     assert.equal(resources.vi.translation['pos.receipt.image_downloaded'], 'Đã tải ảnh hóa đơn xuống máy.');
     assert.equal(resources.vi.translation['pos.receipt.copy_not_allowed'], 'Chỉ chủ cửa hàng được sao chép nội dung hóa đơn.');
+    assert.equal(resources.vi.translation['pos.receipt_lookup.open'], 'Tìm hóa đơn');
+    assert.equal(resources.vi.translation['pos.receipt_lookup.title'], 'Tìm hóa đơn cũ');
+    assert.equal(resources.vi.translation['pos.receipt_lookup.invalid_id'], 'Nhập đúng mã đơn gồm các chữ số, lớn hơn 0.');
+    assert.equal(resources.vi.translation['pos.receipt_lookup.not_finalized'], 'Đơn này chưa hoàn tất nên chưa thể gửi hóa đơn.');
     assert.equal(resources.en.translation['pos.receipt.print'], 'Print receipt');
     assert.equal(resources.en.translation['pos.receipt.share'], 'Share image');
     assert.equal(resources.en.translation['pos.receipt.copy'], 'Copy');
     assert.equal(resources.en.translation['pos.receipt.image_copied'], 'Receipt image copied. Open Zalo and paste it to send.');
     assert.equal(resources.en.translation['pos.receipt.image_downloaded'], 'Receipt image downloaded.');
     assert.equal(resources.en.translation['pos.receipt.copy_not_allowed'], 'Only the store owner can copy receipt text.');
+    assert.equal(resources.en.translation['pos.receipt_lookup.open'], 'Find receipt');
+    assert.equal(resources.en.translation['pos.receipt_lookup.title'], 'Find an old receipt');
+    assert.equal(resources.en.translation['pos.receipt_lookup.invalid_id'], 'Enter an order number greater than 0, using digits only.');
+    assert.equal(resources.en.translation['pos.receipt_lookup.not_finalized'], 'This order is not finalized, so its receipt cannot be shared yet.');
 }
 
 function createContext(overrides = {}) {
@@ -105,6 +126,53 @@ function order(overrides = {}) {
     };
 }
 
+function createLookupContext(overrides = {}) {
+    let rendered = null;
+    let closedModal = null;
+    let scrolled = false;
+    let focused = false;
+    const busyStates = [];
+    const elements = {
+        oldReceiptOrderId: { value: '' },
+        oldReceiptMsg: { innerText: '' },
+        btnFindOldReceipt: { disabled: false, dataset: {}, innerHTML: '' },
+        hoaDonSection: {
+            style: { display: 'none' },
+            focus() { focused = true; },
+            scrollIntoView() { scrolled = true; }
+        }
+    };
+    const context = createContext({
+        currentShopId: 7,
+        document: {
+            getElementById: id => elements[id] || null
+        },
+        window: {
+            print() {},
+            matchMedia: () => ({ matches: true })
+        },
+        apiCall: async () => order({ shop_id: 7, status: 'PAID' }),
+        datNutDangXuLy: (_id, state) => { busyStates.push(state); },
+        hienModalCa() {},
+        dongModalCa: id => { closedModal = id; },
+        veHoaDon: value => { rendered = value; },
+        ...overrides
+    });
+    context.elements = elements;
+    context.busyStates = busyStates;
+    context.getRendered = () => rendered;
+    context.getClosedModal = () => closedModal;
+    context.wasScrolled = () => scrolled;
+    context.wasFocused = () => focused;
+    vm.runInContext(`${source.slice(lookupStart, lookupEnd)};
+        this.openLookup = moModalHoaDonCu;
+        this.closeLookup = dongModalHoaDonCu;
+        this.findReceipt = timHoaDonCu;
+        this.getCurrentReceipt = () => duLieuHoaDonHienTai;
+    `, context);
+    return context;
+}
+
 {
     const context = createContext();
     const text = context.buildReceipt(order());
@@ -121,6 +189,21 @@ function order(overrides = {}) {
         })),
         /Thanh toán: Ghi nợ/
     );
+    const returnedCopy = context.buildReceipt(order({
+        receipt_copy: true,
+        returned_total: 12000,
+        items: [{
+            product_name: 'Nước mắm',
+            price: 12000,
+            quantity: 2,
+            line_total: 24000,
+            returned_quantity: 1
+        }]
+    }));
+    assert.match(returnedCopy, /HÓA ĐƠN BÁN HÀNG · BẢN SAO/);
+    assert.match(returnedCopy, /Đã trả: 1/);
+    assert.match(returnedCopy, /ĐÃ HOÀN KHÁCH: - 12\.000 ₫/);
+    assert.match(returnedCopy, /GIÁ TRỊ CÒN LẠI: 12\.000 ₫/);
 }
 
 {
@@ -156,9 +239,125 @@ function order(overrides = {}) {
     assert.match(receipt.innerHTML, /Khách hàng:<\/b> Cô Lan/);
     assert.doesNotMatch(receipt.innerHTML, /0774867057/);
     assert.equal(copyButton.hidden, true);
+
+    renderContext.renderReceipt(order({
+        receipt_copy: true,
+        returned_total: 12000,
+        items: [{
+            product_name: 'Nước mắm',
+            price: 12000,
+            quantity: 2,
+            line_total: 24000,
+            returned_quantity: 1
+        }]
+    }));
+    assert.match(receipt.innerHTML, /HÓA ĐƠN BÁN HÀNG · BẢN SAO/);
+    assert.match(receipt.innerHTML, /Đã trả: 1/);
+    assert.match(receipt.innerHTML, /ĐÃ HOÀN KHÁCH/);
+    assert.match(receipt.innerHTML, /GIÁ TRỊ CÒN LẠI/);
 }
 
 (async () => {
+    let lookupPath = null;
+    const lookupContext = createLookupContext({
+        apiCall: async path => {
+            lookupPath = path;
+            return order({
+                shop_id: 7,
+                status: 'PAID',
+                returned_total: 12000,
+                items: [{
+                    product_name: 'Nước mắm',
+                    price: 12000,
+                    quantity: 2,
+                    line_total: 24000,
+                    returned_quantity: 1
+                }]
+            });
+        }
+    });
+    lookupContext.elements.oldReceiptOrderId.value = '42';
+    await lookupContext.findReceipt();
+    assert.equal(lookupPath, '/orders/42/detail');
+    assert.equal(lookupContext.getRendered().receipt_copy, true);
+    assert.equal(lookupContext.getCurrentReceipt().id, 42);
+    assert.equal(lookupContext.elements.hoaDonSection.style.display, 'block');
+    assert.equal(lookupContext.getClosedModal(), 'oldReceiptModal');
+    assert.equal(lookupContext.wasScrolled(), true);
+    assert.equal(lookupContext.wasFocused(), true);
+    assert.deepEqual(lookupContext.busyStates, [true, false]);
+
+    const debtLookupContext = createLookupContext({
+        apiCall: async () => order({ shop_id: 7, status: 'DEBT' })
+    });
+    debtLookupContext.elements.oldReceiptOrderId.value = '43';
+    await debtLookupContext.findReceipt();
+    assert.equal(debtLookupContext.getRendered().status, 'DEBT');
+
+    let invalidCalls = 0;
+    const invalidLookupContext = createLookupContext({
+        apiCall: async () => { invalidCalls += 1; }
+    });
+    invalidLookupContext.elements.oldReceiptOrderId.value = '42abc';
+    await invalidLookupContext.findReceipt();
+    assert.equal(invalidCalls, 0);
+    assert.equal(invalidLookupContext.elements.oldReceiptMsg.innerText, 'pos.receipt_lookup.invalid_id');
+
+    invalidLookupContext.elements.oldReceiptOrderId.value = '9007199254740992';
+    await invalidLookupContext.findReceipt();
+    assert.equal(invalidCalls, 0);
+
+    const otherShopContext = createLookupContext({
+        apiCall: async () => order({ shop_id: 8, status: 'PAID' })
+    });
+    otherShopContext.elements.oldReceiptOrderId.value = '42';
+    await otherShopContext.findReceipt();
+    assert.equal(otherShopContext.getRendered(), null);
+    assert.equal(otherShopContext.elements.oldReceiptMsg.innerText, 'pos.receipt_lookup.other_shop');
+
+    const pendingOrderContext = createLookupContext({
+        apiCall: async () => order({ shop_id: 7, status: 'PENDING' })
+    });
+    pendingOrderContext.elements.oldReceiptOrderId.value = '42';
+    await pendingOrderContext.findReceipt();
+    assert.equal(pendingOrderContext.getRendered(), null);
+    assert.equal(pendingOrderContext.elements.oldReceiptMsg.innerText, 'pos.receipt_lookup.not_finalized');
+
+    let resolveLookup;
+    const staleLookupContext = createLookupContext({
+        apiCall: () => new Promise(resolve => { resolveLookup = resolve; })
+    });
+    staleLookupContext.elements.oldReceiptOrderId.value = '42';
+    const staleRequest = staleLookupContext.findReceipt();
+    staleLookupContext.closeLookup();
+    resolveLookup(order({ shop_id: 7, status: 'PAID' }));
+    await staleRequest;
+    assert.equal(staleLookupContext.getRendered(), null);
+
+    const resolvers = [];
+    const reopenedLookupContext = createLookupContext({
+        apiCall: () => new Promise(resolve => { resolvers.push(resolve); })
+    });
+    reopenedLookupContext.elements.oldReceiptOrderId.value = '41';
+    const firstRequest = reopenedLookupContext.findReceipt();
+    reopenedLookupContext.closeLookup();
+    reopenedLookupContext.openLookup();
+    reopenedLookupContext.elements.oldReceiptOrderId.value = '42';
+    const secondRequest = reopenedLookupContext.findReceipt();
+    resolvers[0](order({ id: 41, shop_id: 7, status: 'PAID' }));
+    await firstRequest;
+    assert.equal(reopenedLookupContext.getRendered(), null);
+    resolvers[1](order({ id: 42, shop_id: 7, status: 'PAID' }));
+    await secondRequest;
+    assert.equal(reopenedLookupContext.getRendered().id, 42);
+
+    const missingLookupContext = createLookupContext({
+        apiCall: async () => { throw { status: 404 }; }
+    });
+    missingLookupContext.elements.oldReceiptOrderId.value = '999';
+    await missingLookupContext.findReceipt();
+    assert.equal(missingLookupContext.elements.oldReceiptMsg.innerText, 'pos.receipt_lookup.not_found');
+
     let payload = null;
     const context = createContext({
         navigator: {
@@ -378,7 +577,7 @@ function order(overrides = {}) {
     await openedContext.shareReceipt();
     assert.equal(openedPayload, null);
 
-    console.log('receipt-actions-r1 harness: 14 passed');
+    console.log('receipt-actions-r1 harness: 24 passed');
 })().catch(error => {
     console.error(error);
     process.exitCode = 1;

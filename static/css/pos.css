@@ -1287,6 +1287,51 @@ button:disabled {
     color: var(--pos-ink);
 }
 
+.receipt-lookup-card {
+    max-width: 460px;
+}
+
+.receipt-lookup-help {
+    margin: 0 0 0.85rem;
+    color: var(--pos-muted);
+    line-height: 1.5;
+}
+
+.receipt-lookup-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.55rem;
+    align-items: stretch;
+}
+
+.receipt-lookup-row input {
+    min-width: 0;
+    margin: 0;
+}
+
+.receipt-lookup-row button {
+    min-height: 44px;
+    white-space: nowrap;
+}
+
+.receipt-lookup-message {
+    min-height: 1.25rem;
+    margin: 0.5rem 0 0;
+    color: var(--pos-danger);
+    font-size: 0.85rem;
+    line-height: 1.45;
+}
+
+@media (max-width: 420px) {
+    .receipt-lookup-row {
+        grid-template-columns: 1fr;
+    }
+
+    .receipt-lookup-row button {
+        width: 100%;
+    }
+}
+
 .pos-modal-money input {
     min-height: 52px;
 }
