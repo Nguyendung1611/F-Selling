@@ -19,4 +19,4 @@ def test_receipt_actions_node_harness():
         check=False,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "receipt-actions-r1 harness: 11 passed" in completed.stdout
+    assert "receipt-actions-r1 harness: 14 passed" in completed.stdout

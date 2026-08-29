@@ -3572,28 +3572,117 @@ function taoNoiDungHoaDonChiaSe(d) {
     return lines.join('\n');
 }
 
+function xuongDongHoaDonAnh(value, maxLength = 44) {
+    let remaining = String(value ?? '').trimEnd();
+    if (!remaining) return [''];
+    const lines = [];
+    while (remaining.length > maxLength) {
+        let cut = remaining.lastIndexOf(' ', maxLength);
+        if (cut < Math.floor(maxLength / 2)) cut = maxLength;
+        lines.push(remaining.slice(0, cut).trimEnd());
+        remaining = remaining.slice(cut).trimStart();
+    }
+    lines.push(remaining);
+    return lines;
+}
+
+function taoFileHoaDonPng(d) {
+    const canvas = document.createElement('canvas');
+    const width = 720;
+    const padding = 48;
+    const lineHeight = 36;
+    const rows = [];
+    taoNoiDungHoaDonChiaSe(d).split('\n').forEach((line, index) => {
+        xuongDongHoaDonAnh(line).forEach(text => rows.push({
+            text,
+            center: index < 2,
+            bold: index < 2 || text.startsWith('TỔNG CỘNG') || text.startsWith('CẦN HOÀN KHÁCH')
+        }));
+    });
+    rows.push({ text: '', center: false, bold: false });
+    rows.push({ text: `Tạo từ F-Selling · Đơn #${d.id}`, center: true, bold: true, brand: true });
+
+    canvas.width = width;
+    canvas.height = padding * 2 + rows.length * lineHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('CANVAS_UNAVAILABLE');
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.textBaseline = 'top';
+    rows.forEach((row, index) => {
+        ctx.font = `${row.bold ? '700 ' : ''}${index < 2 ? 28 : 24}px ui-monospace, monospace`;
+        ctx.fillStyle = row.brand
+            ? '#C95100'
+            : (row.text.startsWith('CẦN HOÀN KHÁCH') ? '#B42318' : '#132344');
+        ctx.textAlign = row.center ? 'center' : 'left';
+        ctx.fillText(row.text, row.center ? width / 2 : padding, padding + index * lineHeight);
+    });
+    const dataUrl = canvas.toDataURL('image/png');
+    const encoded = dataUrl.split(',', 2)[1];
+    if (!encoded) throw new Error('PNG_UNAVAILABLE');
+    const binary = atob(encoded);
+    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+    return new File([bytes], `hoa-don-${d.id}.png`, { type: 'image/png' });
+}
+
+async function saoChepAnhHoaDon(file) {
+    if (!navigator.clipboard?.write || typeof ClipboardItem !== 'function') return false;
+    try {
+        await navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': file })
+        ]);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+function taiAnhHoaDon(file) {
+    const url = URL.createObjectURL(file);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = file.name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function duPhongChiaSeAnhHoaDon(file) {
+    if (await saoChepAnhHoaDon(file)) {
+        showToast(dich('pos.receipt.image_copied'));
+        return;
+    }
+    try {
+        taiAnhHoaDon(file);
+        showToast(dich('pos.receipt.image_downloaded'));
+    } catch (_) {
+        showToast(dich('pos.receipt.image_error'));
+    }
+}
+
 async function chiaSeHoaDon() {
     if (!duLieuHoaDonHienTai) {
         showToast(dich('pos.receipt.not_ready'));
         return;
     }
-    const payload = {
-        title: `Hóa đơn #${duLieuHoaDonHienTai.id} · ${duLieuHoaDonHienTai.shop_name || 'F-Selling'}`,
-        text: taoNoiDungHoaDonChiaSe(duLieuHoaDonHienTai)
-    };
-    if (typeof navigator.share !== 'function') {
-        try {
-            await saoChepVanBanHoaDon(payload.text);
-            showToast(dich('pos.receipt.copied_for_share'));
-        } catch (_) {
-            showToast(dich('pos.receipt.copy_error'));
-        }
+    const title = `Hóa đơn #${duLieuHoaDonHienTai.id} · ${duLieuHoaDonHienTai.shop_name || 'F-Selling'}`;
+    let file;
+    try {
+        file = await taoFileHoaDonPng(duLieuHoaDonHienTai);
+    } catch (_) {
+        showToast(dich('pos.receipt.share_error'));
+        return;
+    }
+    const payload = { title, files: [file] };
+    if (typeof navigator.share !== 'function' || !navigator.canShare?.({ files: [file] })) {
+        await duPhongChiaSeAnhHoaDon(file);
         return;
     }
     try {
         await navigator.share(payload);
     } catch (error) {
-        if (error?.name !== 'AbortError') showToast(dich('pos.receipt.share_error'));
+        if (error?.name !== 'AbortError') await duPhongChiaSeAnhHoaDon(file);
     }
 }
 
@@ -3623,7 +3712,15 @@ async function saoChepVanBanHoaDon(text) {
     if (!copied) throw new Error('COPY_UNAVAILABLE');
 }
 
+function coTheSaoChepHoaDon() {
+    return localStorage.getItem('role') !== 'STAFF';
+}
+
 async function saoChepHoaDon() {
+    if (!coTheSaoChepHoaDon()) {
+        showToast(dich('pos.receipt.copy_not_allowed'));
+        return;
+    }
     if (!duLieuHoaDonHienTai) {
         showToast(dich('pos.receipt.not_ready'));
         return;
@@ -3649,6 +3746,8 @@ function veHoaDon(d) {
     // Tên thu ngân và tiền thối lấy từ bản ghi server, không lấy theo tài khoản
     // đang mở trình duyệt (hóa đơn cũ có thể do người khác bán).
     const nhanVien = d.cashier_username || localStorage.getItem('username') || '—';
+    const copyButton = document.getElementById('btnCopyReceipt');
+    if (copyButton) copyButton.hidden = !coTheSaoChepHoaDon();
     const coChuyenKhoan = Number(d.bank_paid_amount || 0) > 0;
     const coTienMat = Number(d.cash_paid_amount || 0) > 0;
     const coTienKhachDua = d.cash_tendered_amount !== null

@@ -17,20 +17,49 @@ assert(start >= 0 && end > start, 'missing Receipt R1 action block');
     );
     const resources = localeContext.window.FSELLING_I18N_RESOURCES;
     assert.equal(resources.vi.translation['pos.receipt.print'], 'In hóa đơn');
-    assert.equal(resources.vi.translation['pos.receipt.share'], 'Chia sẻ');
+    assert.equal(resources.vi.translation['pos.receipt.share'], 'Chia sẻ ảnh');
     assert.equal(resources.vi.translation['pos.receipt.copy'], 'Sao chép');
+    assert.equal(resources.vi.translation['pos.receipt.image_copied'], 'Đã sao chép ảnh hóa đơn. Mở Zalo và dán để gửi.');
+    assert.equal(resources.vi.translation['pos.receipt.image_downloaded'], 'Đã tải ảnh hóa đơn xuống máy.');
+    assert.equal(resources.vi.translation['pos.receipt.copy_not_allowed'], 'Chỉ chủ cửa hàng được sao chép nội dung hóa đơn.');
     assert.equal(resources.en.translation['pos.receipt.print'], 'Print receipt');
-    assert.equal(resources.en.translation['pos.receipt.share'], 'Share');
+    assert.equal(resources.en.translation['pos.receipt.share'], 'Share image');
     assert.equal(resources.en.translation['pos.receipt.copy'], 'Copy');
+    assert.equal(resources.en.translation['pos.receipt.image_copied'], 'Receipt image copied. Open Zalo and paste it to send.');
+    assert.equal(resources.en.translation['pos.receipt.image_downloaded'], 'Receipt image downloaded.');
+    assert.equal(resources.en.translation['pos.receipt.copy_not_allowed'], 'Only the store owner can copy receipt text.');
 }
 
 function createContext(overrides = {}) {
     const toMoney = value => `${Math.round(Number(value) || 0).toLocaleString('vi-VN')} ₫`;
+    const drawnReceipt = [];
+    const canvasContext = {
+        fillStyle: '',
+        font: '',
+        textAlign: 'left',
+        textBaseline: 'top',
+        fillRect() {},
+        fillText: text => { drawnReceipt.push(String(text)); }
+    };
     const context = {
         console,
+        atob,
+        Blob,
+        File,
         navigator: {},
         window: { print() {} },
-        document: {},
+        document: {
+            createElement: tag => {
+                assert.equal(tag, 'canvas');
+                return {
+                    width: 0,
+                    height: 0,
+                    getContext: () => canvasContext,
+                    toDataURL: () => 'data:image/png;base64,cG5n',
+                    toBlob: () => { throw new Error('async canvas export forfeits share activation'); }
+                };
+            }
+        },
         dich: key => key,
         showToast() {},
         dinhDangSoHoaDon: value => Math.round(Number(value) || 0).toLocaleString('vi-VN'),
@@ -39,6 +68,7 @@ function createContext(overrides = {}) {
         localStorage: { getItem: () => 'thu-ngan-a' },
         ...overrides
     };
+    context.drawnReceipt = drawnReceipt;
     vm.createContext(context);
     vm.runInContext(`${source.slice(start, end)};
         this.buildReceipt = taoNoiDungHoaDonChiaSe;
@@ -96,15 +126,22 @@ function order(overrides = {}) {
 {
     const receipt = { innerHTML: '' };
     const warning = { style: {}, innerText: '' };
+    const copyButton = { hidden: false };
     const renderContext = {
         document: {
-            getElementById: id => id === 'hoaDonNoiDung' ? receipt : warning
+            getElementById: id => ({
+                hoaDonNoiDung: receipt,
+                hoaDonCanhBao: warning,
+                btnCopyReceipt: copyButton
+            })[id] || null
         },
         navigator: {},
         window: {},
         dich: key => key,
         showToast() {},
-        localStorage: { getItem: () => 'thu-ngan-a' },
+        localStorage: {
+            getItem: key => key === 'role' ? 'STAFF' : 'thu-ngan-a'
+        },
         escapeHtml: value => String(value ?? ''),
         dinhDangSoHoaDon: value => Math.round(Number(value) || 0).toLocaleString('vi-VN'),
         dinhDangTienHoaDon: value => `${Math.round(Number(value) || 0).toLocaleString('vi-VN')} ₫`,
@@ -118,20 +155,27 @@ function order(overrides = {}) {
     renderContext.renderReceipt(order());
     assert.match(receipt.innerHTML, /Khách hàng:<\/b> Cô Lan/);
     assert.doesNotMatch(receipt.innerHTML, /0774867057/);
+    assert.equal(copyButton.hidden, true);
 }
 
 (async () => {
     let payload = null;
     const context = createContext({
         navigator: {
+            canShare: value => value.files?.[0]?.type === 'image/png',
             share: async value => { payload = value; }
         }
     });
     context.setReceipt(order());
     await context.shareReceipt();
     assert.equal(payload.title, 'Hóa đơn #42 · Tạp hóa An Nhiên');
-    assert.match(payload.text, /Nước mắm/);
-    assert.doesNotMatch(payload.text, /0774867057/);
+    assert.equal(payload.files.length, 1);
+    assert.equal(payload.files[0].name, 'hoa-don-42.png');
+    assert.equal(payload.files[0].type, 'image/png');
+    assert.equal(Object.hasOwn(payload, 'text'), false);
+    assert.match(context.drawnReceipt.join('\n'), /Nước mắm/);
+    assert.match(context.drawnReceipt.join('\n'), /Tạo từ F-Selling · Đơn #42/);
+    assert.doesNotMatch(context.drawnReceipt.join('\n'), /0774867057/);
 
     let copied = null;
     let toast = null;
@@ -148,6 +192,24 @@ function order(overrides = {}) {
     assert.match(copied, /HÓA ĐƠN BÁN HÀNG/);
     assert.doesNotMatch(copied, /0774867057/);
     assert.equal(toast, 'pos.receipt.copied');
+
+    let staffCopied = null;
+    let staffToast = null;
+    const staffCopyContext = createContext({
+        navigator: {
+            clipboard: {
+                writeText: async text => { staffCopied = text; }
+            }
+        },
+        localStorage: {
+            getItem: key => key === 'role' ? 'STAFF' : 'nhan-vien-a'
+        },
+        showToast: message => { staffToast = message; }
+    });
+    staffCopyContext.setReceipt(order());
+    await staffCopyContext.copyReceipt();
+    assert.equal(staffCopied, null);
+    assert.equal(staffToast, 'pos.receipt.copy_not_allowed');
 
     let legacyField = null;
     let legacySelected = false;
@@ -202,20 +264,81 @@ function order(overrides = {}) {
     await rejectedClipboardContext.copyReceipt();
     assert.equal(rejectedFallbackUsed, true);
 
-    let fallbackShareText = null;
+    let fallbackShareItems = null;
     let fallbackShareToast = null;
+    class TestClipboardItem {
+        constructor(items) { this.items = items; }
+    }
     const fallbackShareContext = createContext({
+        ClipboardItem: TestClipboardItem,
         navigator: {
             clipboard: {
-                writeText: async text => { fallbackShareText = text; }
+                write: async items => { fallbackShareItems = items; }
             }
         },
         showToast: message => { fallbackShareToast = message; }
     });
     fallbackShareContext.setReceipt(order());
     await fallbackShareContext.shareReceipt();
-    assert.match(fallbackShareText, /HÓA ĐƠN BÁN HÀNG/);
-    assert.equal(fallbackShareToast, 'pos.receipt.copied_for_share');
+    assert.equal(fallbackShareItems.length, 1);
+    assert.equal(fallbackShareItems[0].items['image/png'].type, 'image/png');
+    assert.equal(fallbackShareToast, 'pos.receipt.image_copied');
+
+    let failedShareItems = null;
+    let failedShareToast = null;
+    const failedShareContext = createContext({
+        ClipboardItem: TestClipboardItem,
+        navigator: {
+            canShare: () => true,
+            share: async () => { throw new Error('share failed'); },
+            clipboard: {
+                write: async items => { failedShareItems = items; }
+            }
+        },
+        showToast: message => { failedShareToast = message; }
+    });
+    failedShareContext.setReceipt(order());
+    await failedShareContext.shareReceipt();
+    assert.equal(failedShareItems.length, 1);
+    assert.equal(failedShareItems[0].items['image/png'].type, 'image/png');
+    assert.equal(failedShareToast, 'pos.receipt.image_copied');
+
+    let downloadAnchor = null;
+    let revokedUrl = null;
+    let downloadToast = null;
+    const downloadContext = createContext({
+        navigator: {},
+        URL: {
+            createObjectURL: file => {
+                assert.equal(file.type, 'image/png');
+                return 'blob:receipt-42';
+            },
+            revokeObjectURL: url => { revokedUrl = url; }
+        },
+        setTimeout: callback => callback(),
+        showToast: message => { downloadToast = message; }
+    });
+    const createElement = downloadContext.document.createElement;
+    downloadContext.document.body = { appendChild() {} };
+    downloadContext.document.createElement = tag => {
+        if (tag !== 'a') return createElement(tag);
+        downloadAnchor = {
+            href: '',
+            download: '',
+            clicked: false,
+            removed: false,
+            click() { this.clicked = true; },
+            remove() { this.removed = true; }
+        };
+        return downloadAnchor;
+    };
+    downloadContext.setReceipt(order());
+    await downloadContext.shareReceipt();
+    assert.equal(downloadAnchor.download, 'hoa-don-42.png');
+    assert.equal(downloadAnchor.clicked, true);
+    assert.equal(downloadAnchor.removed, true);
+    assert.equal(revokedUrl, 'blob:receipt-42');
+    assert.equal(downloadToast, 'pos.receipt.image_downloaded');
 
     let printCount = 0;
     const printContext = createContext({
@@ -227,11 +350,12 @@ function order(overrides = {}) {
 
     let openedPayload = null;
     const openedContext = createContext({
-        navigator: { share: async value => { openedPayload = value; } },
-        document: {
-            getElementById: () => ({ style: {} })
+        navigator: {
+            canShare: value => value.files?.[0]?.type === 'image/png',
+            share: async value => { openedPayload = value; }
         }
     });
+    openedContext.document.getElementById = () => ({ style: {} });
     openedContext.apiCall = async () => order();
     openedContext.resetPOS = () => {};
     openedContext.veHoaDon = () => {};
@@ -254,7 +378,7 @@ function order(overrides = {}) {
     await openedContext.shareReceipt();
     assert.equal(openedPayload, null);
 
-    console.log('receipt-actions-r1 harness: 11 passed');
+    console.log('receipt-actions-r1 harness: 14 passed');
 })().catch(error => {
     console.error(error);
     process.exitCode = 1;

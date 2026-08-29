@@ -1610,6 +1610,10 @@ body.pos-modal-open {
     padding: 10px 12px;
 }
 
+.receipt-actions button[hidden] {
+    display: none;
+}
+
 @media (max-width: 620px) {
     .receipt-actions {
         grid-template-columns: 1fr;
