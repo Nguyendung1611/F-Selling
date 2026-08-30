@@ -1,5 +1,6 @@
 .env
 .venv/
+.worktrees/
 *.db
 request_log.txt
 backup_log.txt
