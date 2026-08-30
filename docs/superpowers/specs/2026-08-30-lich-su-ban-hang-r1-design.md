@@ -2,7 +2,7 @@
 
 Ngày: 2026-08-30
 
-Trạng thái: Đã được khách hàng duyệt ngày 2026-08-30; chờ duyệt đặc tả trước khi lập kế hoạch triển khai.
+Trạng thái: Đặc tả đã được khách hàng duyệt ngày 2026-08-30; kế hoạch triển khai đã được lập.
 
 ## 1. Bối cảnh
 
