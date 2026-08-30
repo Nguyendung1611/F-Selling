@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
-from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam, func, or_, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from .. import models
 from ..core.i18n import tr
@@ -62,6 +62,36 @@ STATUS_UNRECONCILED = "UNRECONCILED"
 #     sẽ không bao giờ kết ca được, vì đơn nợ treo hàng tuần là chuyện bình thường.
 # Cả hai chỗ đó lọc đúng chuỗi "PENDING" nên trạng thái riêng tự tránh được.
 STATUS_DEBT = "DEBT"
+
+HISTORY_PAGE_SIZE = 20
+HISTORY_SCOPES = frozenset({"today", "7d"})
+LOCAL_UTC_OFFSET = timedelta(hours=7)
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _mask_customer_phone(value: Optional[str]) -> Optional[str]:
+    digits = "".join(ch for ch in (value or "") if ch.isdigit())
+    if not digits:
+        return None
+    if len(digits) < 7:
+        return "***"
+    return f"{digits[:3]} *** {digits[-4:]}"
+
+
+def _history_bounds_utc(scope: str, now_utc: datetime) -> Tuple[datetime, datetime]:
+    local_now = now_utc + LOCAL_UTC_OFFSET
+    days_back = 0 if scope == "today" else 6
+    local_start = datetime.combine(
+        local_now.date() - timedelta(days=days_back), time.min
+    )
+    local_end = datetime.combine(local_now.date() + timedelta(days=1), time.min)
+    return (
+        local_start - LOCAL_UTC_OFFSET,
+        local_end - LOCAL_UTC_OFFSET,
+    )
 
 MANUAL_PAY_FROM: Tuple[str, ...] = (STATUS_PENDING,)
 # Trạng thái mà webhook ngân hàng ĐƯỢC PHÉP đụng vào.
@@ -1639,6 +1669,74 @@ def complete_refund(
     }
     response.update(payment_summary(order))
     return response
+
+
+def list_sales_history(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    scope: str = "today",
+    q: Optional[str] = None,
+    page: int = 1,
+) -> Dict[str, Any]:
+    require_shop_access(db, shop_id, current_user)
+    require_staff_permission(current_user, PERMISSION_SALE)
+    if scope not in HISTORY_SCOPES or page < 1:
+        raise HTTPException(status_code=400, detail=tr("Bộ lọc lịch sử không hợp lệ"))
+
+    query_text = (q or "").strip()
+    base = (
+        db.query(models.Order)
+        .options(joinedload(models.Order.customer))
+        .filter(
+            models.Order.shop_id == shop_id,
+            models.Order.status.in_((STATUS_PAID, STATUS_DEBT)),
+        )
+    )
+    if query_text:
+        escaped = _escape_like(query_text)
+        matches = [models.Customer.name.ilike(f"%{escaped}%", escape="\\")]
+        phone_digits = "".join(ch for ch in query_text if ch.isdigit())
+        if phone_digits:
+            normalized_phone = models.Customer.phone
+            for separator in (" ", "-", ".", "(", ")", "+"):
+                normalized_phone = func.replace(normalized_phone, separator, "")
+            matches.append(normalized_phone.like(f"%{phone_digits}%", escape="\\"))
+        if query_text.isdecimal():
+            matches.append(models.Order.id == int(query_text))
+        base = base.outerjoin(models.Customer).filter(or_(*matches))
+    else:
+        start_utc, end_utc = _history_bounds_utc(scope, datetime.utcnow())
+        base = base.filter(
+            models.Order.created_at >= start_utc,
+            models.Order.created_at < end_utc,
+        )
+
+    rows = (
+        base.order_by(models.Order.created_at.desc(), models.Order.id.desc())
+        .offset((page - 1) * HISTORY_PAGE_SIZE)
+        .limit(HISTORY_PAGE_SIZE + 1)
+        .all()
+    )
+    has_more = len(rows) > HISTORY_PAGE_SIZE
+    rows = rows[:HISTORY_PAGE_SIZE]
+    return {
+        "orders": [{
+            "id": row.id,
+            "created_at": row.created_at,
+            "status": row.status,
+            "payment_method": row.payment_method,
+            "total_amount": row.total_amount,
+            "customer_name": row.customer.name if row.customer else None,
+            "customer_phone_masked": _mask_customer_phone(
+                row.customer.phone if row.customer else None
+            ),
+        } for row in rows],
+        "page": page,
+        "per_page": HISTORY_PAGE_SIZE,
+        "has_more": has_more,
+        "searching_all_history": bool(query_text),
+    }
 
 
 def get_order_detail(db: Session, current_user: models.User, order_id: int) -> Dict[str, Any]:

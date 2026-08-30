@@ -1,6 +1,7 @@
 import json
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -105,6 +106,20 @@ def create_order(
     if current_user.role == "STAFF" or order.payment_method == "debt":
         subscription_service.require_pro(db, shop_id)
     return order_service.create_order(db, current_user, shop_id, order)
+
+
+@router.get("/{shop_id}/history")
+def get_sales_history(
+    shop_id: int,
+    scope: Literal["today", "7d"] = Query("today"),
+    q: str | None = Query(None, max_length=100),
+    page: int = Query(1, ge=1),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return order_service.list_sales_history(
+        db, current_user, shop_id, scope=scope, q=q, page=page
+    )
 
 
 @router.post("/{shop_id}/offline")
