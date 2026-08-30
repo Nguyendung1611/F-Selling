@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
     <link rel="stylesheet" href="/css/pos.css?v=20260824-r14-production2&amp;landing=20260828-demo1&amp;receipt=20260829-r1&amp;receipt-image=20260829-r1&amp;receipt-lookup=20260829-r2a">
     <link rel="stylesheet" href="/css/onboarding-r2.css?v=20260828-r2-1">
+    <link rel="stylesheet" href="/css/pos-sales-history-r1.css?v=20260830-r1">
 
 </head>
 <body>
@@ -80,8 +81,8 @@
                 <button id="btnReturn" type="button" class="btn-outline" onclick="moModalTraHang()">
                     <i class="ph ph-arrow-u-down-left"></i> <span data-i18n="pos.return.open">Trả hàng</span>
                 </button>
-                <button id="btnOldReceipt" type="button" class="btn-outline" onclick="moModalHoaDonCu()">
-                    <i class="ph ph-receipt"></i> <span data-i18n="pos.receipt_lookup.open">Tìm hóa đơn</span>
+                <button id="btnSalesHistory" type="button" class="btn-outline" onclick="moLichSuDon()" aria-haspopup="dialog" aria-controls="salesHistoryModal">
+                    <i class="ph ph-clock-counter-clockwise" aria-hidden="true"></i> <span data-i18n="pos.sales_history.open">Lịch sử đơn</span>
                 </button>
                 <button id="btnCloseShift" type="button" class="btn-outline btn-shift-close" onclick="moModalKetCa()" style="display:none;">
                     <i class="ph ph-stop-circle"></i> <span data-i18n="pos.shift.close">Kết ca</span>
@@ -434,25 +435,31 @@
         </div>
     </div>
 
-    <div id="oldReceiptModal" class="pos-modal" role="dialog" aria-modal="true" aria-labelledby="oldReceiptTitle" aria-describedby="oldReceiptHint" style="display:none;">
-        <div class="pos-modal-card receipt-lookup-card">
-            <div class="pos-modal-head">
+    <div id="salesHistoryModal" class="pos-modal sales-history-modal" role="dialog" aria-modal="true" aria-labelledby="salesHistoryTitle" style="display:none;">
+        <div class="pos-modal-card sales-history-card">
+            <header class="pos-modal-head sales-history-header">
                 <div>
-                    <small data-i18n="pos.receipt_lookup.eyebrow">GỬI LẠI CHO KHÁCH</small>
-                    <h3 id="oldReceiptTitle"><i class="ph ph-receipt"></i> <span data-i18n="pos.receipt_lookup.title">Tìm hóa đơn cũ</span></h3>
+                    <small data-i18n="pos.sales_history.eyebrow">TÌM VÀ GỬI LẠI</small>
+                    <h3 id="salesHistoryTitle" data-i18n="pos.sales_history.title">Lịch sử đơn</h3>
                 </div>
-                <button type="button" class="pos-modal-close" onclick="dongModalHoaDonCu()" aria-label="Đóng" data-i18n-aria-label="pos.modal.close">&times;</button>
+                <button id="salesHistoryClose" type="button" class="pos-modal-close" data-i18n-aria-label="pos.sales_history.close" aria-label="Đóng">&times;</button>
+            </header>
+            <form id="salesHistoryForm" class="sales-history-search" novalidate>
+                <label for="salesHistorySearch" data-i18n="pos.sales_history.search_label">Tìm đơn</label>
+                <div>
+                    <input id="salesHistorySearch" type="search" maxlength="100" autocomplete="off" placeholder="Tìm mã đơn, tên khách hoặc số điện thoại" data-i18n-placeholder="pos.sales_history.search_placeholder">
+                    <button id="salesHistorySubmit" type="submit" data-i18n="pos.sales_history.search">Tìm</button>
+                </div>
+            </form>
+            <div class="sales-history-scopes" role="group" data-i18n-aria-label="pos.sales_history.range_label" aria-label="Khoảng thời gian">
+                <button id="salesHistoryToday" type="button" aria-pressed="true" data-i18n="pos.sales_history.today">Hôm nay</button>
+                <button id="salesHistory7d" type="button" aria-pressed="false" data-i18n="pos.sales_history.seven_days">7 ngày</button>
             </div>
-            <p id="oldReceiptHint" class="receipt-lookup-help" data-i18n="pos.receipt_lookup.hint">Nhập mã đơn in trên hóa đơn, ví dụ 128.</p>
-            <label class="pos-field-label" for="oldReceiptOrderId" data-i18n="pos.receipt_lookup.order_id">Mã đơn hàng</label>
-            <div class="receipt-lookup-row">
-                <input id="oldReceiptOrderId" type="text" inputmode="numeric" maxlength="16" autocomplete="off" placeholder="Ví dụ: 128" data-i18n-placeholder="pos.receipt_lookup.placeholder" onkeydown="if(event.key==='Enter'){event.preventDefault();timHoaDonCu();}">
-                <button id="btnFindOldReceipt" type="button" onclick="timHoaDonCu()"><i class="ph ph-magnifying-glass"></i> <span data-i18n="pos.receipt_lookup.find">Tìm</span></button>
-            </div>
-            <p id="oldReceiptMsg" class="receipt-lookup-message" aria-live="polite"></p>
-            <div class="pos-modal-actions">
-                <button type="button" class="btn-outline" onclick="dongModalHoaDonCu()" data-i18n="pos.modal.close">Đóng</button>
-            </div>
+            <p id="salesHistoryAllHint" class="sales-history-hint" hidden data-i18n="pos.sales_history.searching_all">Đang tìm trong toàn bộ lịch sử</p>
+            <div id="salesHistoryStatus" class="sales-history-status" role="status" aria-live="polite"></div>
+            <div id="salesHistoryList" class="sales-history-list"></div>
+            <button id="salesHistoryLoadMore" class="sales-history-more" type="button" hidden data-i18n="pos.sales_history.load_more">Xem thêm 20 đơn</button>
+            <section id="salesHistoryDetail" class="sales-history-detail" hidden tabindex="-1" aria-live="polite"></section>
         </div>
     </div>
 
@@ -508,7 +515,7 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/pos.js?v=20260815-i11-doisoat&amp;landing=20260828-demo1&amp;onboarding=20260828-r2-1&amp;uat=20260829-p1&amp;receipt=20260829-r1&amp;receipt-image=20260829-r1&amp;receipt-lookup=20260829-r2a"></script>
+    <script src="/js/locales/pos.js?v=20260815-i11-doisoat&amp;landing=20260828-demo1&amp;onboarding=20260828-r2-1&amp;uat=20260829-p1&amp;receipt=20260829-r1&amp;receipt-image=20260829-r1&amp;receipt-lookup=20260829-r2a&amp;sales-history=20260830-r1"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
 <script src="/js/api.js?v=20260812-i09-f1-c1&g=20260813-i09-g2h2"></script>
     <!-- barcode.js phải nạp trước pos.js: pos.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
@@ -547,7 +554,8 @@
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
     <script src="/js/offline-ban.js?v=20260813-i09-f3&g=20260813-i09-g2h6"></script>
-    <script src="/js/pos.js?v=20260824-r14-production2&amp;onboarding=20260828-r2-1&amp;uat=20260829-p1&amp;receipt=20260829-r1&amp;receipt-image=20260829-r1&amp;receipt-lookup=20260829-r2a"></script>
+    <script src="/js/pos-sales-history-r1.js?v=20260830-r1"></script>
+    <script src="/js/pos.js?v=20260824-r14-production2&amp;onboarding=20260828-r2-1&amp;uat=20260829-p1&amp;receipt=20260829-r1&amp;receipt-image=20260829-r1&amp;receipt-lookup=20260829-r2a&amp;sales-history=20260830-r1"></script>
     <script>
         (function () {
             if (new URLSearchParams(window.location.search).get('tour') !== 'sale') return;

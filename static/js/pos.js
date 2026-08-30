@@ -554,6 +554,7 @@ async function changeShopPOS() {
         document.getElementById('shopSelect').value = String(currentShopId);
         return showToast(dich('pos.order.close_shift_before_shop'));
     }
+    salesHistoryR1?.resetForShopChange();
     currentShopId = shopMoi;
     localStorage.setItem('currentShopId', currentShopId);
     resetPOS();
@@ -3750,81 +3751,38 @@ function inHoaDon() {
 }
 // RECEIPT_ACTIONS_R1_END
 
-// RECEIPT_LOOKUP_R2_START
-let timHoaDonRequestId = 0;
+let salesHistoryR1 = null;
 
-function moModalHoaDonCu() {
-    if (!currentShopId) return showToast(dich('pos.receipt_lookup.select_shop'));
-    timHoaDonRequestId += 1;
-    document.getElementById('oldReceiptOrderId').value = '';
-    document.getElementById('oldReceiptMsg').innerText = '';
-    datNutDangXuLy('btnFindOldReceipt', false);
-    hienModalCa('oldReceiptModal', 'oldReceiptOrderId');
+function chuanBiBanSaoHoaDon(detail) {
+    duLieuHoaDonHienTai = { ...detail, receipt_copy: true };
+    veHoaDon(duLieuHoaDonHienTai);
 }
 
-function dongModalHoaDonCu() {
-    timHoaDonRequestId += 1;
-    datNutDangXuLy('btnFindOldReceipt', false);
-    dongModalCa('oldReceiptModal');
+function moLichSuDon() {
+    if (!currentShopId) return showToast(dich('pos.sales_history.select_shop'));
+    hienModalCa('salesHistoryModal', 'salesHistorySearch');
+    salesHistoryR1.open();
 }
 
-async function timHoaDonCu() {
-    const raw = (document.getElementById('oldReceiptOrderId').value || '').trim();
-    const message = document.getElementById('oldReceiptMsg');
-    message.innerText = '';
-    const orderId = Number(raw);
-    if (!/^\d+$/.test(raw) || !Number.isSafeInteger(orderId) || orderId <= 0) {
-        message.innerText = dich('pos.receipt_lookup.invalid_id');
-        return;
+salesHistoryR1 = window.FSellingSalesHistoryR1.mount({
+    request: endpoint => apiCall(endpoint),
+    getShopId: () => currentShopId,
+    t: dich,
+    escapeHtml,
+    money: dinhDangTienHoaDon,
+    dateTime: dinhDangNgayGioHoaDon,
+    closeModal: dongModalCa,
+    goToLogin: () => window.location.assign('/#login'),
+    prepareReceipt: chuanBiBanSaoHoaDon,
+    printReceipt: detail => {
+        chuanBiBanSaoHoaDon(detail);
+        inHoaDon();
+    },
+    shareReceipt: async detail => {
+        chuanBiBanSaoHoaDon(detail);
+        await chiaSeHoaDon();
     }
-    if (!currentShopId) {
-        message.innerText = dich('pos.receipt_lookup.select_shop');
-        return;
-    }
-
-    const requestId = ++timHoaDonRequestId;
-    datNutDangXuLy('btnFindOldReceipt', true, 'pos.receipt_lookup.loading');
-    try {
-        const detail = await apiCall(`/orders/${orderId}/detail`);
-        if (requestId !== timHoaDonRequestId) return;
-        if (String(detail.shop_id) !== String(currentShopId)) {
-            message.innerText = dich('pos.receipt_lookup.other_shop');
-            return;
-        }
-        if (!['PAID', 'DEBT'].includes(detail.status)) {
-            message.innerText = dich('pos.receipt_lookup.not_finalized');
-            return;
-        }
-
-        detail.receipt_copy = true;
-        duLieuHoaDonHienTai = detail;
-        veHoaDon(detail);
-        const section = document.getElementById('hoaDonSection');
-        section.style.display = 'block';
-        dongModalCa('oldReceiptModal');
-        section.focus({ preventScroll: true });
-        section.scrollIntoView({
-            behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
-                ? 'auto'
-                : 'smooth',
-            block: 'start'
-        });
-    } catch (error) {
-        if (requestId !== timHoaDonRequestId) return;
-        if (Number(error?.status) === 404) {
-            message.innerText = dich('pos.receipt_lookup.not_found');
-        } else if (Number(error?.status) === 403) {
-            message.innerText = dich('pos.receipt_lookup.forbidden');
-        } else {
-            message.innerText = dich('pos.receipt_lookup.load_error');
-        }
-    } finally {
-        if (requestId === timHoaDonRequestId) {
-            datNutDangXuLy('btnFindOldReceipt', false);
-        }
-    }
-}
-// RECEIPT_LOOKUP_R2_END
+});
 
 function veHoaDon(d) {
     // Tên thu ngân và tiền thối lấy từ bản ghi server, không lấy theo tài khoản
@@ -4538,7 +4496,7 @@ document.getElementById('voucherInput')?.addEventListener('input', capNhatNhapVo
 document.querySelectorAll('.pos-modal').forEach(modal => {
     modal.addEventListener('click', event => {
         if (event.target !== modal) return;
-        if (modal.id === 'oldReceiptModal') dongModalHoaDonCu();
+        if (modal.id === 'salesHistoryModal') salesHistoryR1.close();
         else dongModalCa(modal.id);
     });
 });
@@ -4549,7 +4507,7 @@ document.addEventListener('keydown', event => {
         .reverse()
         .find(modal => modal.style.display === 'flex');
     if (!modalMo) return;
-    if (modalMo.id === 'oldReceiptModal') dongModalHoaDonCu();
+    if (modalMo.id === 'salesHistoryModal') salesHistoryR1.close();
     else dongModalCa(modalMo.id);
 });
 
