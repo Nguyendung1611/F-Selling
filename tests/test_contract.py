@@ -57,6 +57,8 @@ BASELINE_ROUTES = {
 # BASELINE_ROUTES hoặc danh sách này đều bị coi là thêm ngoài ý muốn.
 ROUTES_BO_SUNG = {
     ("GET", "/api/health/ready"),  # I04: readiness chỉ GO sau schema verify
+    # Lịch sử đơn R1: read model tối thiểu cho POS, vẫn khóa theo shop và SALE.
+    ("GET", "/api/orders/{shop_id}/history"),
     # I10-B: metadata đã lọc và ảnh QR được render cùng origin từ intent v1
     # đã tồn tại. Hai route này không phát hành/tái tạo intent và không nhận
     # token qua query string.

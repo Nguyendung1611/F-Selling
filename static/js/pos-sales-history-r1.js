@@ -288,6 +288,8 @@
                         ? actionButton('seven-days', 'pos.sales_history.show_seven_days')
                         : '';
                     elements.status.innerHTML = `${ui.escapeHtml(ui.t(emptyKey))} ${next}`;
+                } else if (state.query) {
+                    elements.status.innerHTML = actionButton('clear', 'pos.sales_history.clear_search');
                 } else {
                     elements.status.textContent = '';
                 }

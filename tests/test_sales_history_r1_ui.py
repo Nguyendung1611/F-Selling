@@ -38,7 +38,7 @@ def test_pos_hosts_sales_history_assets_and_accessible_dialog():
     ):
         assert f'id="{element_id}"' in html
     assert "/css/pos-sales-history-r1.css?v=20260830-r1" in html
-    assert "/js/pos-sales-history-r1.js?v=20260830-r1" in html
+    assert "/js/pos-sales-history-r1.js?v=20260830-r1a" in html
     assert html.count("sales-history=20260830-r1") == 2
 
 

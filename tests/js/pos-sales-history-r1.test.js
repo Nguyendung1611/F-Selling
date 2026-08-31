@@ -51,10 +51,7 @@ function fakeDocument() {
     };
 }
 
-const tick = async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-};
+const tick = () => new Promise(resolve => setImmediate(resolve));
 
 (async () => {
     const paths = [];
@@ -247,6 +244,11 @@ const tick = async () => {
     await tick();
     assert.equal(firstMount.getState().scope, '7d');
     assert.equal(firstDom.elements.salesHistory7d.attributes['aria-pressed'], 'true');
+    firstDom.elements.salesHistorySearch.value = '24';
+    firstDom.elements.salesHistoryForm.emit('submit', { preventDefault() {} });
+    firstRequests[4].resolve(page([row(24)], 1, false, true));
+    await tick();
+    assert.match(firstDom.elements.salesHistoryStatus.innerHTML, /data-history-action="clear"/);
 
     let listCall = 0;
     const listDom = fakeDocument();
@@ -271,6 +273,7 @@ const tick = async () => {
     await tick();
     assert.deepEqual(listMount.getState().orders.map(item => item.id), [3]);
     assert.equal(listMount.getState().error, 'network');
+    assert.match(listDom.elements.salesHistoryStatus.innerHTML, /data-history-action="retry"/);
     listDom.elements.salesHistory7d.emit('click');
     await tick();
     assert.equal(listDom.elements.salesHistory7d.attributes['aria-pressed'], 'true');
