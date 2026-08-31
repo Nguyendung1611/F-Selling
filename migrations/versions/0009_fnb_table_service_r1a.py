@@ -273,7 +273,8 @@ def verify(connection):
         """SELECT COUNT(*) FROM fnb_session_lines l
            LEFT JOIN fnb_service_sessions s ON s.id = l.session_id
            LEFT JOIN products p ON p.id = l.product_id
-           WHERE s.id IS NULL OR p.id IS NULL OR p.shop_id <> s.shop_id
+           WHERE s.id IS NULL OR p.id IS NULL OR p.shop_id IS NULL
+              OR p.shop_id <> s.shop_id
               OR typeof(l.quantity) <> 'integer' OR l.quantity <= 0
               OR typeof(l.cancelled_quantity) <> 'integer'
               OR l.cancelled_quantity < 0 OR l.cancelled_quantity > l.quantity"""

@@ -180,3 +180,22 @@ def test_constraints_and_verifier_protect_fnb_scope(tmp_path):
         connection.commit()
     with pytest.raises(RuntimeError, match="FNB_VERIFY_LINK_SCOPE"):
         runner.verify()
+
+
+def test_verifier_rejects_tenantless_product_line(tmp_path):
+    database = tmp_path / "fnb-tenantless-product.db"
+    runner = coordinator(database)
+    assert runner.init() == ["0001_legacy_9cf7106_baseline"]
+    runner.upgrade("head")
+    with sqlite3.connect(database) as connection:
+        _seed_domain(connection)
+        connection.execute("UPDATE products SET shop_id=NULL WHERE id=1")
+        connection.execute(
+            "INSERT INTO fnb_session_lines "
+            "(session_id, product_id, product_name, unit_price_vnd, quantity, "
+            "cancelled_quantity, created_by_user_id) "
+            "VALUES (1, 1, 'Product 1', 10000, 1, 0, 1)"
+        )
+        connection.commit()
+    with pytest.raises(RuntimeError, match="FNB_VERIFY_LINE_SCOPE"):
+        runner.verify()
