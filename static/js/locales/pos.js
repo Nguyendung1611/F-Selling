@@ -23,6 +23,7 @@
         'pos.shift.wait': 'Vui lòng chờ trong giây lát',
         'pos.shift.server_status': 'Trạng thái được tải trực tiếp từ máy chủ',
         'pos.shift.open': 'Mở ca',
+        'pos.tools.title': 'Công cụ',
         'pos.shift.cash_movement': 'Thu / chi',
         'pos.shift.close': 'Kết ca',
         'pos.shift.opened': 'Ca #{{id}} đang mở',
@@ -72,6 +73,11 @@
 
         'pos.cart.title': 'Giỏ hàng',
         'pos.cart.empty': 'Giỏ hàng đang trống',
+        'pos.cart.empty_action': 'Chọn sản phẩm để bắt đầu',
+        'pos.cart.empty_hint': 'Chạm vào món hàng; giỏ và số tiền sẽ hiện ở đây.',
+        'pos.cart.mobile_count': '{{count}} món trong giỏ',
+        'pos.cart.view': 'Xem giỏ',
+        'pos.cart.close': 'Đóng giỏ hàng',
         'pos.cart.locked_created': 'Đơn đã tạo, hãy hoàn tất hoặc hủy đơn trước khi chỉnh sửa',
         'pos.cart.locked_unknown': 'Kết quả tạo đơn chưa rõ; hãy bấm thử tạo đơn lại',
 
@@ -116,6 +122,9 @@
         'pos.checkout.zero_total_done': 'Đơn đã giảm còn 0đ và được hoàn tất ngay; khách không cần thanh toán.',
 
         'pos.checkout.title': 'Thanh toán',
+        'pos.checkout.column_label': 'Giỏ hàng và thanh toán',
+        'pos.checkout.more_info': 'Thêm thông tin',
+        'pos.checkout.more_info_hint': 'Khách hàng · giảm giá',
         'pos.checkout.subtotal': 'Tạm tính:',
         'pos.checkout.discount': 'Giảm giá (Voucher):',
         'pos.checkout.total_due': 'Tổng cần thu:',
@@ -479,6 +488,7 @@
         'pos.shift.wait': 'This will only take a moment',
         'pos.shift.server_status': 'Status loaded directly from the server',
         'pos.shift.open': 'Open shift',
+        'pos.tools.title': 'Tools',
         'pos.shift.cash_movement': 'Cash in / out',
         'pos.shift.close': 'Close shift',
         'pos.shift.opened': 'Shift #{{id}} is open',
@@ -528,6 +538,11 @@
 
         'pos.cart.title': 'Cart',
         'pos.cart.empty': 'The cart is empty',
+        'pos.cart.empty_action': 'Choose a product to begin',
+        'pos.cart.empty_hint': 'Select an item; the cart and amount will appear here.',
+        'pos.cart.mobile_count': '{{count}} item(s) in cart',
+        'pos.cart.view': 'View cart',
+        'pos.cart.close': 'Close cart',
         'pos.cart.locked_created': 'The order has been created. Complete or cancel it before making changes',
         'pos.cart.locked_unknown': 'The order result is uncertain. Retry creating the order',
 
@@ -572,6 +587,9 @@
         'pos.checkout.zero_total_done': 'The order was discounted to zero and completed immediately; no payment is required.',
 
         'pos.checkout.title': 'Checkout',
+        'pos.checkout.column_label': 'Cart and checkout',
+        'pos.checkout.more_info': 'Add details',
+        'pos.checkout.more_info_hint': 'Customer · discount',
         'pos.checkout.subtotal': 'Subtotal:',
         'pos.checkout.discount': 'Discount (promo code):',
         'pos.checkout.total_due': 'Amount due:',

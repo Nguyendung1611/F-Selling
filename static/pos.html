@@ -12,7 +12,7 @@
     <title data-i18n="pos.page_title">POS Bán Hàng Chuyên Nghiệp | F-Selling</title>
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
-    <link rel="stylesheet" href="/css/pos.css?v=20260824-r14-production2&amp;landing=20260828-demo1&amp;receipt=20260829-r1&amp;receipt-image=20260829-r1&amp;receipt-lookup=20260829-r2a">
+    <link rel="stylesheet" href="/css/pos.css?v=20260824-r14-production2&amp;landing=20260828-demo1&amp;receipt=20260829-r1&amp;receipt-image=20260829-r1&amp;receipt-lookup=20260829-r2a&amp;stabilization=20260831-r1d">
     <link rel="stylesheet" href="/css/onboarding-r2.css?v=20260828-r2-1">
     <link rel="stylesheet" href="/css/pos-sales-history-r1.css?v=20260830-r1">
 
@@ -72,21 +72,26 @@
                 <button id="btnOpenShift" type="button" onclick="moModalMoCa()" style="display:none;">
                     <i class="ph ph-play-circle"></i> <span data-i18n="pos.shift.open">Mở ca</span>
                 </button>
-                <button id="btnCashMovement" type="button" class="btn-outline" onclick="moModalThuChi()" style="display:none;">
-                    <i class="ph ph-arrows-down-up"></i> <span data-i18n="pos.shift.cash_movement">Thu / chi</span>
-                </button>
-                <button id="btnDoiSoat" type="button" class="btn-outline" onclick="moModalDoiSoat()" style="display:none;">
-                    <i class="ph ph-bank"></i> <span data-i18n="pos.reconciliation.open_button">Đối Soát</span>
-                </button>
-                <button id="btnReturn" type="button" class="btn-outline" onclick="moModalTraHang()">
-                    <i class="ph ph-arrow-u-down-left"></i> <span data-i18n="pos.return.open">Trả hàng</span>
-                </button>
                 <button id="btnSalesHistory" type="button" class="btn-outline" onclick="moLichSuDon()" aria-haspopup="dialog" aria-controls="salesHistoryModal">
                     <i class="ph ph-clock-counter-clockwise" aria-hidden="true"></i> <span data-i18n="pos.sales_history.open">Lịch sử đơn</span>
                 </button>
-                <button id="btnCloseShift" type="button" class="btn-outline btn-shift-close" onclick="moModalKetCa()" style="display:none;">
-                    <i class="ph ph-stop-circle"></i> <span data-i18n="pos.shift.close">Kết ca</span>
-                </button>
+                <details id="posTools" class="pos-tools">
+                    <summary><i class="ph ph-dots-three-circle" aria-hidden="true"></i> <span data-i18n="pos.tools.title">Công cụ</span></summary>
+                    <div class="pos-tools-menu">
+                        <button id="btnCashMovement" type="button" class="btn-outline" onclick="moModalThuChi()" style="display:none;">
+                            <i class="ph ph-arrows-down-up"></i> <span data-i18n="pos.shift.cash_movement">Thu / chi</span>
+                        </button>
+                        <button id="btnDoiSoat" type="button" class="btn-outline" onclick="moModalDoiSoat()" style="display:none;">
+                            <i class="ph ph-bank"></i> <span data-i18n="pos.reconciliation.open_button">Đối Soát</span>
+                        </button>
+                        <button id="btnReturn" type="button" class="btn-outline" onclick="moModalTraHang()">
+                            <i class="ph ph-arrow-u-down-left"></i> <span data-i18n="pos.return.open">Trả hàng</span>
+                        </button>
+                        <button id="btnCloseShift" type="button" class="btn-outline btn-shift-close" onclick="moModalKetCa()" style="display:none;">
+                            <i class="ph ph-stop-circle"></i> <span data-i18n="pos.shift.close">Kết ca</span>
+                        </button>
+                    </div>
+                </details>
             </div>
         </section>
 
@@ -109,21 +114,15 @@
             </div>
         </section>
 
-        <aside class="pos-checkout-column">
+        <aside id="posCheckoutColumn" class="pos-checkout-column is-cart-empty" aria-label="Giỏ hàng và thanh toán" data-i18n-aria-label="pos.checkout.column_label">
         <!-- CỘT 2: GIỎ HÀNG -->
         <section class="pos-col pos-cart">
-            <h3 class="pos-section-title"><i class="ph ph-shopping-cart"></i> <span data-i18n="pos.cart.title">Giỏ hàng</span></h3>
+            <div class="pos-section-title pos-cart-title">
+                <h3><i class="ph ph-shopping-cart"></i> <span data-i18n="pos.cart.title">Giỏ hàng</span></h3>
+                <button id="btnCloseCartMobile" type="button" class="pos-cart-sheet-close" onclick="dongGioHangMobile()" aria-label="Đóng giỏ hàng" data-i18n-aria-label="pos.cart.close">&times;</button>
+            </div>
             <div class="scroll-area" id="cartContainer">
                 <!-- Cart items -->
-            </div>
-            
-            <!-- Phần Voucher -->
-            <div class="voucher-box">
-                <div class="voucher-row">
-                    <input type="text" id="voucherInput" placeholder="Nhập mã khuyến mãi" data-i18n-placeholder="pos.voucher.placeholder">
-                    <button onclick="applyVoucher()"><i class="ph ph-check"></i> <span data-i18n="pos.voucher.apply">Áp dụng</span></button>
-                </div>
-                <small id="voucherMsg"></small>
             </div>
         </section>
 
@@ -139,8 +138,22 @@
                 <div class="summary-row total"><span data-i18n="pos.checkout.total_due">Tổng cần thu:</span><span id="txtTotal">0 ₫</span></div>
             </div>
 
-            <!-- Khách hàng (tùy chọn) -->
-            <div class="customer-panel">
+            <details id="posExtraInfo" class="pos-extra-info">
+                <summary>
+                    <span data-i18n="pos.checkout.more_info">Thêm thông tin</span>
+                    <small data-i18n="pos.checkout.more_info_hint">Khách hàng · giảm giá</small>
+                </summary>
+                <div class="pos-extra-info-body">
+                    <div class="voucher-box">
+                        <div class="voucher-row">
+                            <input type="text" id="voucherInput" placeholder="Nhập mã khuyến mãi" data-i18n-placeholder="pos.voucher.placeholder">
+                            <button onclick="applyVoucher()"><i class="ph ph-check"></i> <span data-i18n="pos.voucher.apply">Áp dụng</span></button>
+                        </div>
+                        <small id="voucherMsg"></small>
+                    </div>
+
+                    <!-- Khách hàng (tùy chọn) -->
+                    <div class="customer-panel">
                 <div class="customer-heading">
                     <span><i class="ph ph-user"></i> <span data-i18n="pos.customer.optional">Khách hàng (tùy chọn)</span></span>
                     <span id="khachDaChon" data-i18n="pos.customer.walk_in">Khách vãng lai</span>
@@ -165,12 +178,12 @@
                     <i class="ph ph-hand-coins"></i> <span id="btnThuNoLabel"></span>
                 </button>
                 <button id="khachBoChon" onclick="boChonKhach()" class="btn-outline" style="display: none; width: 100%; padding: 0.3rem; font-size: 0.8rem;" data-i18n="pos.customer.clear">Bỏ chọn khách</button>
-            </div>
+                    </div>
 
-            <!-- Chỉ hiện khi chương trình đang bật VÀ khách được chọn vẫn đang
-                 hoạt động. Điểm là dữ liệu online: số dư luôn tải lại từ API
-                 chi tiết khách, không lấy con số cũ trong danh sách tìm kiếm. -->
-            <div id="loyaltyBox" class="loyalty-box" style="display:none;">
+                    <!-- Chỉ hiện khi chương trình đang bật VÀ khách được chọn vẫn đang
+                         hoạt động. Điểm là dữ liệu online: số dư luôn tải lại từ API
+                         chi tiết khách, không lấy con số cũ trong danh sách tìm kiếm. -->
+                    <div id="loyaltyBox" class="loyalty-box" style="display:none;">
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; margin-bottom:0.45rem;">
                     <strong style="color:#EDE9FE;"><i class="ph ph-star"></i> <span data-i18n="pos.loyalty.title">Điểm khách thân thiết</span></strong>
                     <span id="loyaltyBalanceText" style="color:#C4B5FD; font-size:0.85rem;"></span>
@@ -182,7 +195,9 @@
                 </div>
                 <small id="loyaltyMsg" style="display:block; min-height:1.1rem; margin-top:0.3rem; color:#C4B5FD;"></small>
                 <small id="loyaltyEarnPreview" style="display:block; color:#86EFAC;"></small>
-            </div>
+                    </div>
+                </div>
+            </details>
 
             <!-- Chỉ hiện khi máy thật sự offline, giỏ đang áp Voucher/điểm và
                  request tạo đơn CHƯA rời khỏi máy. Nếu đã có operation đang
@@ -291,6 +306,15 @@
         </section>
         </aside>
     </main>
+
+    <button id="posCartBackdrop" type="button" class="pos-cart-backdrop" onclick="dongGioHangMobile()" aria-label="Đóng giỏ hàng" data-i18n-aria-label="pos.cart.close" hidden></button>
+    <button id="posCartDock" type="button" class="pos-cart-dock" onclick="moGioHangMobile()" aria-controls="posCheckoutColumn" aria-expanded="false" hidden>
+        <span class="pos-cart-dock-copy">
+            <small id="posCartDockCount" aria-live="polite"></small>
+            <strong id="posCartDockTotal">0 ₫</strong>
+        </span>
+        <span class="pos-cart-dock-action" data-i18n="pos.cart.view">Xem giỏ</span>
+    </button>
 
     <!-- Hộp xác nhận dựng trong trang.
          KHÔNG dùng confirm() của trình duyệt: khi người dùng lỡ tick "chặn hộp
@@ -515,7 +539,7 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/pos.js?v=20260815-i11-doisoat&amp;landing=20260828-demo1&amp;onboarding=20260828-r2-1&amp;uat=20260829-p1&amp;receipt=20260829-r1&amp;receipt-image=20260829-r1&amp;receipt-lookup=20260829-r2a&amp;sales-history=20260830-r1"></script>
+    <script src="/js/locales/pos.js?v=20260815-i11-doisoat&amp;landing=20260828-demo1&amp;onboarding=20260828-r2-1&amp;uat=20260829-p1&amp;receipt=20260829-r1&amp;receipt-image=20260829-r1&amp;receipt-lookup=20260829-r2a&amp;sales-history=20260830-r1&amp;stabilization=20260831-r1d"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
 <script src="/js/api.js?v=20260812-i09-f1-c1&g=20260813-i09-g2h2"></script>
     <!-- barcode.js phải nạp trước pos.js: pos.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
@@ -555,7 +579,7 @@
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
     <script src="/js/offline-ban.js?v=20260813-i09-f3&g=20260813-i09-g2h6"></script>
     <script src="/js/pos-sales-history-r1.js?v=20260830-r1a"></script>
-    <script src="/js/pos.js?v=20260824-r14-production2&amp;onboarding=20260828-r2-1&amp;uat=20260829-p1&amp;receipt=20260829-r1&amp;receipt-image=20260829-r1&amp;receipt-lookup=20260829-r2a&amp;sales-history=20260830-r1"></script>
+    <script src="/js/pos.js?v=20260824-r14-production2&amp;onboarding=20260828-r2-1&amp;uat=20260829-p1&amp;receipt=20260829-r1&amp;receipt-image=20260829-r1&amp;receipt-lookup=20260829-r2a&amp;sales-history=20260830-r1&amp;stabilization=20260831-r1d"></script>
     <script>
         (function () {
             if (new URLSearchParams(window.location.search).get('tour') !== 'sale') return;

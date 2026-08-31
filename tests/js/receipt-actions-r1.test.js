@@ -400,6 +400,9 @@ function order(overrides = {}) {
     openedContext.resetPOS = () => {};
     openedContext.veHoaDon = () => {};
     openedContext.showFirstRunSaleSuccess = () => {};
+    openedContext.capNhatGioHangResponsivePOS = () => {};
+    openedContext.posMobileCartMedia = { matches: true };
+    openedContext.moGioHangMobile = () => {};
     const openStart = source.indexOf('async function hienHoaDon(');
     const openEnd = source.indexOf('function showFirstRunSaleSuccess(', openStart);
     assert(openStart >= 0 && openEnd > openStart, 'missing receipt opening flow');

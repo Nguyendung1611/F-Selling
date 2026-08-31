@@ -1435,14 +1435,77 @@ async function applyVoucher() {
     }
 }
 
+const posMobileCartMedia = window.matchMedia('(max-width: 900px)');
+
+function dongGioHangMobile(traFocus = true) {
+    const checkout = document.getElementById('posCheckoutColumn');
+    const backdrop = document.getElementById('posCartBackdrop');
+    const dock = document.getElementById('posCartDock');
+    checkout?.classList.remove('is-mobile-open');
+    document.body.classList.remove('pos-cart-sheet-open');
+    if (backdrop) backdrop.hidden = true;
+    if (dock) dock.setAttribute('aria-expanded', 'false');
+    if (posMobileCartMedia.matches) checkout?.setAttribute('inert', '');
+    else checkout?.removeAttribute('inert');
+    if (traFocus && dock && !dock.hidden) dock.focus();
+}
+
+function moGioHangMobile() {
+    if (!posMobileCartMedia.matches || !cart.length) return;
+    const checkout = document.getElementById('posCheckoutColumn');
+    const backdrop = document.getElementById('posCartBackdrop');
+    const dock = document.getElementById('posCartDock');
+    checkout?.removeAttribute('inert');
+    checkout?.classList.add('is-mobile-open');
+    document.body.classList.add('pos-cart-sheet-open');
+    if (backdrop) backdrop.hidden = false;
+    if (dock) dock.setAttribute('aria-expanded', 'true');
+    document.getElementById('btnCloseCartMobile')?.focus();
+}
+
+function capNhatGioHangResponsivePOS() {
+    const checkout = document.getElementById('posCheckoutColumn');
+    const dock = document.getElementById('posCartDock');
+    const count = cart.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    const receiptVisible = Boolean(
+        duLieuHoaDonHienTai
+        && document.getElementById('hoaDonSection')?.style.display !== 'none'
+    );
+    const empty = cart.length === 0 && !receiptVisible;
+    checkout?.classList.toggle('is-cart-empty', empty);
+
+    if (dock) {
+        dock.hidden = cart.length === 0;
+        document.getElementById('posCartDockCount').innerText = dich(
+            'pos.cart.mobile_count',
+            { count: dinhDangSoPOS(count) }
+        );
+        document.getElementById('posCartDockTotal').innerText = dinhDangTien(total);
+    }
+
+    if (!posMobileCartMedia.matches) {
+        checkout?.removeAttribute('inert');
+        checkout?.classList.remove('is-mobile-open');
+        document.body.classList.remove('pos-cart-sheet-open');
+        const backdrop = document.getElementById('posCartBackdrop');
+        if (backdrop) backdrop.hidden = true;
+        return;
+    }
+    if (empty) dongGioHangMobile(false);
+    else if (!checkout?.classList.contains('is-mobile-open')) {
+        checkout?.setAttribute('inert', '');
+    }
+}
+
 function updateUI() {
     const container = document.getElementById('cartContainer');
     container.innerHTML = '';
     if (!cart.length) {
         container.innerHTML = `
             <div class="cart-empty">
-                <i class="ph ph-shopping-cart-simple"></i>
-                <span>${dichHtml('pos.cart.empty')}</span>
+                <i class="ph ph-shopping-cart-simple" aria-hidden="true"></i>
+                <strong>${dichHtml('pos.cart.empty_action')}</strong>
+                <span>${dichHtml('pos.cart.empty_hint')}</span>
             </div>`;
     }
     cart.forEach((item, index) => {
@@ -1473,6 +1536,7 @@ function updateUI() {
     capNhatHopDiem();
     renderCashQuickAmounts();
     capNhatTienKhachDua();
+    capNhatGioHangResponsivePOS();
 }
 
 function setMethod(m) {
@@ -3464,6 +3528,8 @@ async function hienHoaDon(orderId, ketQuaDiemMoiNhat = null) {
     duLieuHoaDonHienTai = d;
     veHoaDon(d);
     document.getElementById('hoaDonSection').style.display = 'block';
+    capNhatGioHangResponsivePOS();
+    if (posMobileCartMedia.matches) moGioHangMobile();
     showFirstRunSaleSuccess(d);
 }
 
@@ -3898,6 +3964,7 @@ function dongHoaDon() {
     duLieuHoaDonHienTai = null;
     document.getElementById('hoaDonSection').style.display = 'none';
     dismissFirstRunSaleSuccess();
+    capNhatGioHangResponsivePOS();
 }
 
 function resetPOS() {
@@ -4492,6 +4559,10 @@ document.getElementById('loyaltyPointsInput')?.addEventListener('keydown', event
 
 document.getElementById('movementNote')?.addEventListener('input', capNhatMovementDraft);
 document.getElementById('voucherInput')?.addEventListener('input', capNhatNhapVoucher);
+document.getElementById('posTools')?.addEventListener('click', event => {
+    if (event.target.closest('button')) event.currentTarget.open = false;
+});
+posMobileCartMedia.addEventListener('change', capNhatGioHangResponsivePOS);
 
 document.querySelectorAll('.pos-modal').forEach(modal => {
     modal.addEventListener('click', event => {
