@@ -40,6 +40,11 @@
       "down_revision": "0007_i10a_qr_payment_domain",
       "path": "versions/0008_purchase_orders.py",
       "sha256": "2811f22c5f4deae23e01d6a96f5b9b3bc4cd2150698bbe22520f84994874ef1c"
+    },
+    "0009_fnb_table_service_r1a": {
+      "down_revision": "0008_purchase_orders",
+      "path": "versions/0009_fnb_table_service_r1a.py",
+      "sha256": "a31ac17b8459ba93bbcda2c55b0a93177a1fd8d618e8fe87cc143e05d395e6c5"
     }
   }
 }

@@ -11,6 +11,14 @@ from .catalog import (
 )
 from .customer import Customer
 from .expense import ExpenseCategory, ExpenseTemplate, OperatingExpense
+from .fnb import (
+    FnbActionLog,
+    FnbArea,
+    FnbServiceSession,
+    FnbSessionLine,
+    FnbSessionTable,
+    FnbTable,
+)
 from .loyalty import LoyaltyPointEntry, LoyaltyProgram
 from .offline import (
     OfflineLease,
@@ -82,6 +90,12 @@ __all__ = [
     "ExpenseCategory",
     "ExpenseTemplate",
     "OperatingExpense",
+    "FnbArea",
+    "FnbTable",
+    "FnbServiceSession",
+    "FnbSessionTable",
+    "FnbSessionLine",
+    "FnbActionLog",
     "LoyaltyProgram",
     "OfflineLease",
     "OfflineRecoveryAction",
