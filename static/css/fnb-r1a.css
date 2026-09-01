@@ -56,6 +56,8 @@ body.fnb-page {
 .fnb-floor-heading h2, .fnb-session-panel h2 { margin: 3px 0 0; font-size: clamp(1.25rem, 2vw, 1.7rem); }
 .eyebrow { margin: 0; color: var(--fnb-muted); font-size: .75rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
 .fnb-heading-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.fnb-queue-link { display: inline-flex; min-height: 44px; align-items: center; padding: 9px 13px; border: 1px solid var(--fnb-line); border-radius: 9px; background: #fff; color: var(--fnb-ink); font-weight: 750; text-decoration: none; }
+.fnb-queue-link:hover { border-color: #94a3b8; background: #f8fafc; }
 .fnb-refresh-note { align-self: center; color: #9a3412; font-size: .84rem; font-weight: 750; }
 
 .fnb-page button {
@@ -129,6 +131,10 @@ body.fnb-page {
 .fnb-draft-lines { display: grid; gap: 10px; }
 .fnb-draft-row { padding: 12px; border: 1px solid var(--fnb-line); border-radius: 8px; }
 .fnb-draft-row header { display: flex; justify-content: space-between; gap: 8px; }
+.fnb-sent-section { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--fnb-line); }
+.fnb-sent-row { background: #f8fafc; }
+.fnb-line-meta, .fnb-station-chip { color: var(--fnb-muted); font-size: .8rem; font-weight: 700; }
+.fnb-station-chip { display: inline-block; margin-top: 4px; padding: 2px 7px; border-radius: 999px; background: #e2e8f0; }
 .fnb-draft-edit { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto; gap: 8px; margin-top: 9px; align-items: end; }
 .fnb-unsynced { color: #9a3412; font-size: .78rem; font-weight: 800; }
 .fnb-conflict { margin-top: 12px; padding: 12px; background: #fff7ed; border: 1px solid #fdba74; border-radius: 8px; }
@@ -153,6 +159,19 @@ body.fnb-page {
 .fnb-setup-forms form { display: grid; gap: 7px; align-content: start; }
 .fnb-setup-forms h3 { margin: 0 0 5px; }
 #fnbSetupStatus { min-height: 22px; color: var(--fnb-muted); }
+.fnb-station-setup { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--fnb-line); }
+.fnb-station-setup h3, .fnb-station-setup p { margin: 0 0 8px; }
+.fnb-station-list { display: grid; gap: 7px; max-height: 260px; overflow-y: auto; }
+.fnb-station-row { display: grid; grid-template-columns: minmax(0, 1fr) 130px auto; gap: 8px; align-items: center; }
+.fnb-pin-form { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 8px; align-items: end; margin-top: 16px; }
+.fnb-pin-form label { grid-column: 1 / -1; }
+
+#fnbApprovalDialog { width: min(480px, calc(100vw - 24px)); padding: 22px; border: 1px solid var(--fnb-line); border-radius: 12px; color: var(--fnb-ink); }
+#fnbApprovalDialog::backdrop { background: rgb(15 23 42 / .58); }
+#fnbApprovalForm { display: grid; gap: 8px; }
+#fnbApprovalForm label { color: var(--fnb-muted); font-size: .84rem; font-weight: 700; }
+#fnbApprovalForm input, #fnbApprovalForm select { width: 100%; padding: 9px 10px; border: 1px solid var(--fnb-line); border-radius: 8px; }
+#fnbApprovalStatus { min-height: 22px; margin: 0; color: #9a3412; }
 
 #toast { display: none; position: fixed; z-index: 10000; right: 16px; bottom: 16px; max-width: min(420px, calc(100vw - 32px)); padding: 12px 16px; border-radius: 8px; background: var(--fnb-ink); color: #fff; }
 .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
@@ -175,6 +194,9 @@ body.fnb-page {
     .fnb-draft-edit button { grid-column: 1 / -1; }
     .fnb-setup-forms { grid-template-columns: 1fr; }
     .fnb-setup-row { grid-template-columns: minmax(0, 1fr) 76px; }
+    .fnb-station-row { grid-template-columns: minmax(0, 1fr) 116px; }
+    .fnb-station-row button { grid-column: 1 / -1; }
+    .fnb-pin-form { grid-template-columns: 1fr; }
     .fnb-setup-row button, .fnb-setup-row small { grid-column: auto; }
 }
 

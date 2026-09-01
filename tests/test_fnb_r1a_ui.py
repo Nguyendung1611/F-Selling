@@ -43,10 +43,33 @@ def test_fnb_page_and_assets_are_wired(client):
         assert f'id="{element_id}"' in html
     assert "/css/fnb-r1a.css?" in html
     assert "/js/locales/fnb.js?" in html
-    assert "/js/fnb-r1a.js?" in html
+    assert "/js/fnb-r1a.js?v=20260901-r1b2" in html
     assert client.get("/fnb.html", follow_redirects=False).headers["location"] == "/fnb"
     api_source = (ROOT / "static/js/api.js").read_text(encoding="utf-8")
     assert "error.detail =" in api_source
+
+
+def test_fnb_station_page_and_role_routing_are_wired(client):
+    page = client.get("/fnb/station/kitchen")
+    assert page.status_code == 200
+    assert 'id="fnbStationTickets"' in page.text
+    assert "/css/fnb-station-r1b.css?" in page.text
+    assert "/js/fnb-station-r1b.js?v=20260901-r1b2" in page.text
+
+    source = (ROOT / "static/js/fnb-r1a.js").read_text(encoding="utf-8")
+    assert "['KITCHEN', 'BAR'].includes(staffRole)" in source
+    assert "document.querySelectorAll('.fnb-queue-link')" in source
+
+
+def test_fnb_role_translations_use_one_fresh_common_catalog_url():
+    expected = "/js/locales/common.js?v=20260901-fnb-r1b"
+    for name in ("index.html", "seller.html", "fnb.html", "pos.html"):
+        assert expected in (ROOT / "static" / name).read_text(encoding="utf-8")
+
+
+def test_table_setup_forms_come_before_the_potentially_long_station_list():
+    html = (ROOT / "static/fnb.html").read_text(encoding="utf-8")
+    assert html.index('id="fnbAreaForm"') < html.index('id="fnbStationList"')
 
 
 def test_pos_entry_is_hidden_until_shop_capability_is_known():

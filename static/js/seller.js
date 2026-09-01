@@ -5,6 +5,9 @@ if(!['ADMIN', 'SELLER', 'STAFF'].includes(MY_ROLE)) redirectToLogin();
 const MY_STAFF_ROLE = MY_ROLE === 'STAFF'
     ? (localStorage.getItem('staff_role') || 'MANAGER').toUpperCase()
     : null;
+if (MY_ROLE === 'STAFF' && ['KITCHEN', 'BAR'].includes(MY_STAFF_ROLE)) {
+    navigateToPage(`/fnb/station/${MY_STAFF_ROLE.toLowerCase()}`);
+}
 const STAFF_UI_PERMISSIONS = Object.freeze({
     CASHIER: new Set(['SALE', 'CUSTOMER']),
     WAREHOUSE: new Set(['INVENTORY']),
@@ -5797,6 +5800,8 @@ function renderStaff(list) {
                     <option value="CASHIER" ${selectedRole === 'CASHIER' ? 'selected' : ''}>${escapeHtml(t('common.role.cashier'))}</option>
                     <option value="WAREHOUSE" ${selectedRole === 'WAREHOUSE' ? 'selected' : ''}>${escapeHtml(t('common.role.warehouse'))}</option>
                     <option value="MANAGER" ${selectedRole === 'MANAGER' ? 'selected' : ''}>${escapeHtml(t('common.role.manager'))}</option>
+                    <option value="KITCHEN" ${selectedRole === 'KITCHEN' ? 'selected' : ''}>${escapeHtml(t('common.role.kitchen'))}</option>
+                    <option value="BAR" ${selectedRole === 'BAR' ? 'selected' : ''}>${escapeHtml(t('common.role.bar'))}</option>
                 </select>
             </td>
             <td style="text-align:right;">

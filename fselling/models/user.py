@@ -36,6 +36,7 @@ class User(Base):
     # Preset phân quyền trong phạm vi STAFF: CASHIER, WAREHOUSE hoặc MANAGER.
     # NULL với ADMIN/SELLER; STAFF cũ có NULL được hiểu là MANAGER để tương thích.
     staff_role = Column(String, nullable=True)
+    fnb_manager_pin_hash = Column(String(128), nullable=True)
 
     shops = relationship("Shop", back_populates="owner", foreign_keys="Shop.owner_id")
     staff_shop = relationship("Shop", foreign_keys=[staff_shop_id])

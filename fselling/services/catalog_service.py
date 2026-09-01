@@ -698,6 +698,7 @@ def list_products(
                 "shop_id": p.shop_id,
                 "category_is_active": cat_active,
                 "track_batches": bool(p.track_batches),
+                "fnb_station": p.fnb_station,
                 # F6: cả hai NULL = sản phẩm đơn lẻ. Giao diện gom ô theo
                 # `variant_group`; `name` đã là tên đầy đủ nên chỗ nào không
                 # muốn gom thì cứ dùng `name` như trước, không phải sửa gì.

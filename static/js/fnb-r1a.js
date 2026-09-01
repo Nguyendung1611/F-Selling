@@ -13,6 +13,13 @@
             : JSON.parse(JSON.stringify(value));
     }
 
+    function partitionLines(lines) {
+        return {
+            draft: (lines || []).filter(line => Number(line.unsent_quantity || 0) > 0),
+            sent: (lines || []).filter(line => Number(line.active_sent_quantity || 0) > 0),
+        };
+    }
+
     function createController(deps) {
         const state = {
             shopId: null,
@@ -193,7 +200,10 @@
                             deps.render({ type: 'session-cancelled', value: result });
                         } else {
                             state.session = result;
-                            deps.render({ type: 'session', value: result, draft: null, saved: true });
+                            deps.render({
+                                type: 'session', value: result, draft: null,
+                                saved: ['add-line', 'update-line', 'cancel-line'].includes(mutation.action),
+                            });
                         }
                     } else {
                         if (Number.isInteger(Number(result?.fnb_revision))) {
@@ -344,14 +354,28 @@
             }, attempt, 'session');
         }
 
-        function cancelLine(lineId, quantity) {
+        function cancelLine(lineId, quantity, details = {}) {
             const line = (state.session?.lines || []).find(row => Number(row.id) === Number(lineId));
-            const attempt = { line_id: Number(lineId), quantity: Number(quantity) };
+            const attempt = { line_id: Number(lineId), quantity: Number(quantity), ...details };
             return startMutation('cancel-line', `/fnb/sessions/${Number(state.session.id)}/cancel-line`, 'POST', {
                 ...attempt,
                 expected_line_version: Number(line?.state_version || 0),
                 expected_revision: Number(state.session.revision),
             }, attempt, 'session');
+        }
+
+        function sendSession() {
+            return startMutation('send-session', `/fnb/sessions/${Number(state.session.id)}/send`, 'POST', {
+                expected_revision: Number(state.session.revision),
+            }, { session_id: Number(state.session.id) }, 'session');
+        }
+
+        function updateProductStation(productId, station) {
+            const attempt = { product_id: Number(productId), station };
+            return startMutation('update-product-station', `/fnb/menu-items/${Number(productId)}/station`, 'PATCH', {
+                station,
+                expected_revision: Number(state.floorRevision),
+            }, attempt, 'setup');
         }
 
         function moveTable(fromTableId, toTableId) {
@@ -410,13 +434,15 @@
             addLine,
             updateLine,
             cancelLine,
+            sendSession,
+            updateProductStation,
             moveTable,
             mergeTable,
             cancelSession,
         };
     }
 
-    const api = Object.freeze({ createController, escapeHtml });
+    const api = Object.freeze({ createController, escapeHtml, partitionLines });
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     if (global) global.FnbR1A = api;
 
@@ -426,6 +452,9 @@
         const role = localStorage.getItem('role');
         const staffRole = (localStorage.getItem('staff_role') || 'MANAGER').toUpperCase();
         if (!localStorage.getItem('token')) return redirectToLogin();
+        if (role === 'STAFF' && ['KITCHEN', 'BAR'].includes(staffRole)) {
+            return navigateToPage(`/fnb/station/${staffRole.toLowerCase()}`);
+        }
         if (role === 'STAFF' && staffRole === 'WAREHOUSE') {
             nhanSangTrangSau(t('fnb.auth.warehouse'));
             return navigateToPage('/pos');
@@ -434,21 +463,27 @@
             nhanSangTrangSau(t('fnb.auth.no_access'));
             return navigateToPage('/pos');
         }
+        if (role === 'STAFF' && staffRole === 'CASHIER') {
+            document.querySelectorAll('.fnb-queue-link').forEach(link => { link.hidden = true; });
+        }
 
         const elements = Object.fromEntries([
             'fnbShopSelect', 'fnbFloor', 'fnbAreaTabs', 'fnbLiveStatus', 'fnbRetry', 'fnbRefreshNote',
             'fnbSetupOpen', 'fnbSetupDialog', 'fnbSetupAreas', 'fnbSetupStatus',
             'fnbAreaForm', 'fnbAreaName', 'fnbTableForm', 'fnbTableArea', 'fnbTableName',
             'fnbSessionPanel', 'fnbSessionBackdrop', 'fnbSessionClose', 'fnbSessionTitle',
-            'fnbProductSearch', 'fnbProductGrid', 'fnbDraftLines', 'fnbSubtotal',
+            'fnbProductSearch', 'fnbProductGrid', 'fnbDraftLines', 'fnbSentLines', 'fnbSubtotal',
             'fnbConflict', 'fnbSessionStatus', 'fnbTableActions', 'fnbTargetTable',
-            'fnbCancelSession'
+            'fnbCancelSession', 'fnbSend', 'fnbStationList', 'fnbPinForm', 'fnbManagerPin',
+            'fnbApprovalDialog', 'fnbApprovalForm', 'fnbApproverUsername', 'fnbApprovalPin',
+            'fnbCancelResolution', 'fnbCancelReason', 'fnbApprovalStatus'
         ].map(id => [id, document.getElementById(id)]));
         let shops = [];
         let products = [];
         let selectedAreaId = null;
         let lastTableTrigger = null;
         let setupAllowed = false;
+        let pendingCancelLineId = null;
 
         const storage = {
             get: key => sessionStorage.getItem(key),
@@ -528,7 +563,7 @@
                 String(product.name || '').toLocaleLowerCase().includes(query)
             );
             elements.fnbProductGrid.innerHTML = matches.length
-                ? matches.map(product => `<button type="button" data-action="add-product" data-id="${Number(product.id)}"><strong>${escapeHtml(product.name)}</strong><small>${escapeHtml(money(product.price))}</small></button>`).join('')
+                ? matches.map(product => `<button type="button" data-action="add-product" data-id="${Number(product.id)}"><strong>${escapeHtml(product.name)}</strong><small>${escapeHtml(money(product.price))}</small><span class="fnb-station-chip">${escapeHtml(t(`fnb.station.${String(product.fnb_station || 'DIRECT').toLowerCase()}`))}</span></button>`).join('')
                 : `<p>${escapeHtml(t('fnb.menu.empty'))}</p>`;
         }
 
@@ -546,7 +581,8 @@
             elements.fnbSessionBackdrop.hidden = false;
             elements.fnbSessionTitle.textContent = (value.tables || []).map(table => table.name).join(' + ');
             const pending = controller.getState().pendingMutation;
-            const serverLines = (value.lines || []).map(line => {
+            const buckets = partitionLines(value.lines || []);
+            const serverLines = buckets.draft.map(line => {
                     const saved = draft?.line_id === line.id ? draft : null;
                     const unsynced = pending?.attempt?.line_id === line.id || saved;
                     return `<article class="fnb-draft-row" data-line-id="${Number(line.id)}"><header><strong>${escapeHtml(line.product_name || `#${line.product_id}`)}</strong>${unsynced ? `<span class="fnb-unsynced">${escapeHtml(t('fnb.state.unsynced'))}</span>` : ''}</header><div class="fnb-draft-edit"><label><span class="sr-only">${escapeHtml(t('fnb.draft.quantity'))}</span><input data-field="quantity" type="number" min="1" inputmode="numeric" value="${Number(saved?.quantity ?? line.quantity)}" aria-label="${escapeHtml(t('fnb.draft.quantity'))}"></label><label><span class="sr-only">${escapeHtml(t('fnb.draft.note'))}</span><input data-field="note" maxlength="500" value="${escapeHtml(saved?.note ?? line.note ?? '')}" placeholder="${escapeHtml(t('fnb.draft.note_placeholder'))}" aria-label="${escapeHtml(t('fnb.draft.note'))}"></label><button type="button" class="fnb-secondary" data-action="save-line" data-id="${Number(line.id)}">${escapeHtml(t('fnb.action.save'))}</button></div><button type="button" class="fnb-secondary" data-action="cancel-line" data-id="${Number(line.id)}">${escapeHtml(t('fnb.action.cancel_quantity'))}</button></article>`;
@@ -560,9 +596,13 @@
             elements.fnbDraftLines.innerHTML = serverLines || localLine
                 ? serverLines + localLine
                 : `<p>${escapeHtml(t('fnb.draft.empty'))}</p>`;
+            elements.fnbSentLines.innerHTML = buckets.sent.length
+                ? buckets.sent.map(line => `<article class="fnb-draft-row fnb-sent-row" data-line-id="${Number(line.id)}"><header><strong>${escapeHtml(line.product_name || `#${line.product_id}`)}</strong><span class="fnb-station-chip">${escapeHtml(t(`fnb.station.${String(line.station || 'DIRECT').toLowerCase()}`))}</span></header><p class="fnb-line-meta">${escapeHtml(t('fnb.sent.quantity', { count: Number(line.active_sent_quantity || 0) }))}${line.note ? ` · ${escapeHtml(line.note)}` : ''}</p><button type="button" class="fnb-secondary" data-action="cancel-line" data-id="${Number(line.id)}">${escapeHtml(t('fnb.action.cancel_quantity'))}</button></article>`).join('')
+                : `<p>${escapeHtml(t('fnb.sent.empty'))}</p>`;
             elements.fnbSubtotal.textContent = t('fnb.session.total', { amount: money(value.subtotal_vnd) });
             elements.fnbTableActions.hidden = !setupAllowed;
-            elements.fnbCancelSession.disabled = Number(value.unsent_quantity || 0) > 0;
+            elements.fnbCancelSession.disabled = Number(value.subtotal_vnd || 0) > 0;
+            elements.fnbSend.disabled = Number(value.unsent_quantity || 0) <= 0 || Boolean(pending);
             renderTargets();
             renderProducts();
         }
@@ -589,6 +629,9 @@
                 }).join('');
                 return `<article class="fnb-setup-area${area.active === false ? ' is-inactive' : ''}" data-kind="area" data-id="${Number(area.id)}"><h3>${escapeHtml(area.name)} · ${escapeHtml(t(areaState))}</h3><div class="fnb-setup-row"><input data-field="name" maxlength="100" value="${escapeHtml(area.name)}" aria-label="${escapeHtml(t('fnb.setup.area_name'))}"><input data-field="sort_order" type="number" min="0" value="${Number(area.sort_order || 0)}" aria-label="${escapeHtml(t('fnb.setup.sort_order'))}"><button type="button" class="fnb-secondary" data-action="save-area">${escapeHtml(t('fnb.action.save'))}</button><button type="button" class="fnb-secondary" data-action="toggle-area" data-active="${area.active !== false}">${escapeHtml(t(area.active === false ? 'fnb.action.restore' : 'fnb.action.hide'))}</button></div>${tables}</article>`;
             }).join('') : `<p>${escapeHtml(t('fnb.state.no_tables'))}</p>`;
+            elements.fnbStationList.innerHTML = products.length
+                ? products.map(product => `<div class="fnb-station-row" data-product-id="${Number(product.id)}"><strong>${escapeHtml(product.name)}</strong><select aria-label="${escapeHtml(t('fnb.station.title'))}"><option value="KITCHEN" ${product.fnb_station === 'KITCHEN' ? 'selected' : ''}>${escapeHtml(t('fnb.station.kitchen'))}</option><option value="BAR" ${product.fnb_station === 'BAR' ? 'selected' : ''}>${escapeHtml(t('fnb.station.bar'))}</option><option value="DIRECT" ${!product.fnb_station || product.fnb_station === 'DIRECT' ? 'selected' : ''}>${escapeHtml(t('fnb.station.direct'))}</option></select><button type="button" class="fnb-secondary" data-action="save-station">${escapeHtml(t('fnb.action.save'))}</button></div>`).join('')
+                : `<p>${escapeHtml(t('fnb.menu.empty'))}</p>`;
             setupStatus('');
         }
 
@@ -736,7 +779,21 @@
                     note: row.querySelector('[data-field="note"]').value,
                 }).catch(() => {});
             } else if (action === 'cancel-line') {
-                controller.cancelLine(id, 1).catch(() => {});
+                controller.cancelLine(id, 1).catch(error => {
+                    const code = error?.code || error?.detail?.code;
+                    if (code !== 'FNB_APPROVAL_REQUIRED') return;
+                    pendingCancelLineId = id;
+                    elements.fnbApprovalStatus.textContent = '';
+                    elements.fnbApprovalDialog.showModal();
+                    elements.fnbApproverUsername.focus();
+                });
+            } else if (action === 'save-station') {
+                const row = button.closest('[data-product-id]');
+                controller.updateProductStation(
+                    Number(row.dataset.productId), row.querySelector('select').value,
+                ).then(loadProducts).catch(() => {});
+            } else if (action === 'close-approval') {
+                elements.fnbApprovalDialog.close();
             } else if (action === 'reapply') {
                 const draft = controller.getState().recoverableDraft;
                 if (!draft) return;
@@ -783,6 +840,9 @@
         elements.fnbProductSearch.addEventListener('input', renderProducts);
         elements.fnbShopSelect.addEventListener('change', event => chooseShop(Number(event.target.value)));
         elements.fnbCancelSession.addEventListener('click', () => controller.cancelSession().catch(error => sessionStatus(error.message)));
+        elements.fnbSend.addEventListener('click', () => controller.sendSession()
+            .then(() => showToast(t('fnb.send.done')))
+            .catch(error => sessionStatus(error.message)));
         elements.fnbAreaForm.addEventListener('submit', event => {
             event.preventDefault();
             controller.createArea({ name: elements.fnbAreaName.value, sort_order: 0 })
@@ -796,6 +856,41 @@
                 name: elements.fnbTableName.value,
                 sort_order: 0,
             }).then(() => { elements.fnbTableName.value = ''; }).catch(() => {});
+        });
+        elements.fnbPinForm.addEventListener('submit', event => {
+            event.preventDefault();
+            apiCall(`/fnb/shops/${Number(elements.fnbShopSelect.value)}/manager-pin`, 'PATCH', {
+                pin: elements.fnbManagerPin.value,
+            }).then(() => {
+                elements.fnbManagerPin.value = '';
+                setupStatus(t('fnb.pin.saved'));
+            }).catch(error => setupStatus(error.message));
+        });
+        elements.fnbApprovalForm.addEventListener('submit', async event => {
+            event.preventDefault();
+            const current = controller.getState().session;
+            if (!current || !pendingCancelLineId) return;
+            elements.fnbApprovalStatus.textContent = t('fnb.state.pending');
+            try {
+                const approval = await apiCall('/fnb/manager-approvals', 'POST', {
+                    shop_id: Number(elements.fnbShopSelect.value),
+                    approver_username: elements.fnbApproverUsername.value,
+                    pin: elements.fnbApprovalPin.value,
+                    action: 'CANCEL_SENT_LINE', entity_type: 'SESSION',
+                    entity_id: Number(current.id), revision: Number(current.revision),
+                });
+                await controller.cancelLine(pendingCancelLineId, 1, {
+                    resolution: elements.fnbCancelResolution.value,
+                    reason: elements.fnbCancelReason.value,
+                    approval_token: approval.approval_token,
+                });
+                elements.fnbApprovalPin.value = '';
+                elements.fnbCancelReason.value = '';
+                pendingCancelLineId = null;
+                elements.fnbApprovalDialog.close();
+            } catch (error) {
+                elements.fnbApprovalStatus.textContent = error.message;
+            }
         });
         elements.fnbDraftLines.addEventListener('input', event => {
             const row = event.target.closest('[data-line-id]');

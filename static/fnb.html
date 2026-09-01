@@ -11,7 +11,7 @@
     <meta name="apple-mobile-web-app-title" content="F-Selling">
     <title data-i18n="fnb.page_title">Bán tại bàn | F-Selling</title>
     <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
-    <link rel="stylesheet" href="/css/fnb-r1a.css?v=20260901-r1a">
+    <link rel="stylesheet" href="/css/fnb-r1a.css?v=20260901-r1b">
 </head>
 <body class="fnb-page">
     <header class="fnb-header">
@@ -38,6 +38,8 @@
                     <h2 id="fnbFloorTitle" data-i18n="fnb.floor.title">Chọn bàn để bắt đầu</h2>
                 </div>
                 <div class="fnb-heading-actions">
+                    <a class="fnb-queue-link" href="/fnb/station/kitchen" data-i18n="fnb.queue.kitchen">Màn hình Bếp</a>
+                    <a class="fnb-queue-link" href="/fnb/station/bar" data-i18n="fnb.queue.bar">Màn hình Bar</a>
                     <span id="fnbRefreshNote" class="fnb-refresh-note" hidden></span>
                     <button id="fnbSetupOpen" class="fnb-secondary" type="button" hidden data-i18n="fnb.setup.open">Thiết lập bàn</button>
                     <button id="fnbRetry" class="fnb-secondary" type="button" hidden data-i18n="common.retry">Thử lại</button>
@@ -64,6 +66,10 @@
                 <h3 id="fnbDraftTitle" data-i18n="fnb.draft.title">Món chưa gửi</h3>
                 <div id="fnbDraftLines" class="fnb-draft-lines"></div>
             </section>
+            <section aria-labelledby="fnbSentTitle" class="fnb-sent-section">
+                <h3 id="fnbSentTitle" data-i18n="fnb.sent.title">Đã gửi chế biến</h3>
+                <div id="fnbSentLines" class="fnb-draft-lines"></div>
+            </section>
             <div id="fnbConflict" class="fnb-conflict" hidden></div>
             <section id="fnbTableActions" class="fnb-table-actions" hidden>
                 <h3 data-i18n="fnb.table_actions.title">Chuyển hoặc gộp bàn</h3>
@@ -78,7 +84,7 @@
             <footer>
                 <strong id="fnbSubtotal"></strong>
                 <button id="fnbCancelSession" type="button" class="fnb-secondary" data-i18n="fnb.session.cancel">Hủy phiên trống</button>
-                <button id="fnbFutureSend" type="button" disabled data-i18n="fnb.send.r1b">Gửi Bếp/Bar — có ở R1B</button>
+                <button id="fnbSend" type="button" data-i18n="fnb.send.action">Gửi món</button>
             </footer>
         </aside>
     </main>
@@ -105,16 +111,45 @@
                 <button type="submit" data-i18n="fnb.setup.add_table">Thêm bàn</button>
             </form>
         </div>
+        <section class="fnb-station-setup" aria-labelledby="fnbStationTitle">
+            <h3 id="fnbStationTitle" data-i18n="fnb.station.title">Món đi đâu?</h3>
+            <p data-i18n="fnb.station.help">Chọn Bếp, Bar hoặc Giao thẳng cho từng món.</p>
+            <div id="fnbStationList" class="fnb-station-list"></div>
+            <form id="fnbPinForm" class="fnb-pin-form">
+                <label for="fnbManagerPin" data-i18n="fnb.pin.set_label">PIN quản lý (4–6 số)</label>
+                <input id="fnbManagerPin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" minlength="4" maxlength="6" autocomplete="new-password" required>
+                <button type="submit" class="fnb-secondary" data-i18n="fnb.pin.save">Lưu PIN quản lý</button>
+            </form>
+        </section>
         <p id="fnbSetupStatus" role="status" aria-live="polite"></p>
+    </dialog>
+
+    <dialog id="fnbApprovalDialog" aria-labelledby="fnbApprovalTitle">
+        <form id="fnbApprovalForm">
+            <div class="fnb-dialog-heading">
+                <div><p class="eyebrow" data-i18n="fnb.approval.eyebrow">Hủy món đang làm</p><h2 id="fnbApprovalTitle" data-i18n="fnb.approval.title">Quản lý duyệt hủy món</h2></div>
+                <button type="button" class="fnb-icon-button" data-action="close-approval" aria-label="Đóng" data-i18n-aria-label="common.close">×</button>
+            </div>
+            <label for="fnbApproverUsername" data-i18n="fnb.approval.username">Tài khoản quản lý</label>
+            <input id="fnbApproverUsername" autocomplete="username" required>
+            <label for="fnbApprovalPin" data-i18n="fnb.approval.pin">PIN quản lý</label>
+            <input id="fnbApprovalPin" type="password" inputmode="numeric" pattern="[0-9]{4,6}" maxlength="6" autocomplete="current-password" required>
+            <label for="fnbCancelResolution" data-i18n="fnb.approval.stock">Xử lý tồn kho</label>
+            <select id="fnbCancelResolution"><option value="WASTE" data-i18n="fnb.approval.waste">Không hoàn — ghi hao hụt</option><option value="RESTOCK" data-i18n="fnb.approval.restock">Hoàn lại tồn kho</option></select>
+            <label for="fnbCancelReason" data-i18n="fnb.approval.reason">Lý do</label>
+            <input id="fnbCancelReason" maxlength="500" required>
+            <p id="fnbApprovalStatus" role="status" aria-live="polite"></p>
+            <button type="submit" data-i18n="fnb.approval.confirm">Duyệt và hủy 1 món</button>
+        </form>
     </dialog>
 
     <div id="toast" role="status" aria-live="polite"></div>
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
-    <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/fnb.js?v=20260901-r1a"></script>
+    <script src="/js/locales/common.js?v=20260901-fnb-r1b"></script>
+    <script src="/js/locales/fnb.js?v=20260901-r1b"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260901-fnb-r1a&amp;g=20260813-i09-g2h2"></script>
-    <script src="/js/fnb-r1a.js?v=20260901-r1a"></script>
+    <script src="/js/fnb-r1a.js?v=20260901-r1b2"></script>
     <script src="/js/pwa.js?v=20260806-pwa"></script>
 </body>
 </html>

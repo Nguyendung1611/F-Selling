@@ -52,6 +52,7 @@ class Product(Base):
     cost_state_version = Column(Integer, nullable=False, default=0)
     image_url = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
+    fnb_station = Column(String(16), nullable=False, default="DIRECT")
     category_id = Column(Integer, ForeignKey("categories.id"))
     shop_id = Column(Integer, ForeignKey("shops.id"))
 

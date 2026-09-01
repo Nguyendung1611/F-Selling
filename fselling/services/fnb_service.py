@@ -3,17 +3,25 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import secrets
 import unicodedata
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..core.i18n import tr
-from ..core.money import checked_add, checked_multiply, checked_vnd
+from ..core.money import checked_add, checked_multiply, checked_vnd, cumulative_basis
+from ..core.numeric_limits import MAX_SAFE_QUANTITY
+from ..core.security import burn_password_time, hash_password, verify_password
 from ..dependencies import (
     PERMISSION_FNB_MANAGE,
+    PERMISSION_FNB_BAR,
+    PERMISSION_FNB_KITCHEN,
     PERMISSION_FNB_SERVICE,
+    STAFF_ROLE_MANAGER,
+    effective_staff_role,
     has_shop_operator_access,
     require_own_shop,
     require_shop_access,
@@ -25,13 +33,18 @@ from ..schemas.fnb import (
     FnbLineCancel,
     FnbLineCreate,
     FnbLineUpdate,
+    FnbManagerApprovalCreate,
+    FnbManagerPinSet,
     FnbMergeTable,
     FnbMoveTable,
     FnbSessionCancel,
     FnbSessionOpen,
+    FnbSessionSend,
     FnbSettingsUpdate,
+    FnbStationUpdate,
     FnbTableCreate,
     FnbTableUpdate,
+    FnbTicketTransition,
 )
 from . import inventory_service
 
@@ -272,6 +285,172 @@ def update_fnb_settings(
     except Exception:
         db.rollback()
         raise
+
+
+def update_product_station(
+    db: Session,
+    current_user: models.User,
+    product_id: int,
+    request: FnbStationUpdate,
+) -> dict:
+    action = "FNB_PRODUCT_STATION_UPDATE"
+    fingerprint = operation_fingerprint(action, _payload(request, product_id=product_id))
+    try:
+        product = db.get(models.Product, product_id)
+        if product is None:
+            raise fnb_error(404, "FNB_PRODUCT_NOT_FOUND", "Không tìm thấy món")
+        shop_id = int(product.shop_id)
+        require_fnb_access(db, shop_id, current_user, PERMISSION_FNB_MANAGE)
+        _prepare_locked_shop(db, shop_id)
+        shop = require_fnb_access(db, shop_id, current_user, PERMISSION_FNB_MANAGE)
+        existing = _existing_operation(db, shop_id, request.operation_id, fingerprint)
+        if existing is not None:
+            db.rollback()
+            return existing
+        if not bool(shop.fnb_enabled):
+            raise fnb_error(409, "FNB_DISABLED", "Cửa hàng chưa bật bán tại bàn")
+        require_floor_revision(shop, request.expected_revision)
+        product = (
+            db.query(models.Product)
+            .filter(models.Product.id == product_id, models.Product.shop_id == shop_id)
+            .first()
+        )
+        if product is None:
+            raise fnb_error(404, "FNB_PRODUCT_NOT_FOUND", "Không tìm thấy món")
+        before = {"station": product.fnb_station}
+        if product.fnb_station != request.station:
+            product.fnb_station = request.station
+            shop.fnb_revision = int(shop.fnb_revision or 0) + 1
+        result = {
+            "id": product.id,
+            "shop_id": shop_id,
+            "station": product.fnb_station,
+            "fnb_revision": int(shop.fnb_revision or 0),
+        }
+        return _finish(
+            db,
+            current_user,
+            action,
+            request.operation_id,
+            fingerprint,
+            result,
+            before=before,
+            after=result,
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+
+def set_manager_pin(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    request: FnbManagerPinSet,
+) -> dict:
+    shop = require_fnb_access(db, shop_id, current_user, PERMISSION_FNB_MANAGE)
+    is_owner = shop.owner_id == current_user.id
+    is_manager = (
+        current_user.role == "STAFF"
+        and effective_staff_role(current_user) == STAFF_ROLE_MANAGER
+        and current_user.staff_shop_id == shop_id
+    )
+    if not (is_owner or is_manager):
+        raise fnb_error(403, "FNB_MANAGER_REQUIRED", "Chỉ chủ quán hoặc quản lý được đặt PIN")
+    current_user.fnb_manager_pin_hash = hash_password(request.pin)
+    db.commit()
+    return {"shop_id": shop_id, "manager_pin_configured": True}
+
+
+def create_manager_approval(
+    db: Session,
+    current_user: models.User,
+    request: FnbManagerApprovalCreate,
+) -> dict:
+    shop = require_fnb_access(
+        db, request.shop_id, current_user, PERMISSION_FNB_SERVICE
+    )
+    session = (
+        db.query(models.FnbServiceSession)
+        .filter(
+            models.FnbServiceSession.id == request.entity_id,
+            models.FnbServiceSession.shop_id == request.shop_id,
+        )
+        .first()
+    )
+    if session is None:
+        raise fnb_error(404, "FNB_SESSION_NOT_FOUND", "Không tìm thấy phiên phục vụ")
+    require_session_revision(db, session, request.revision)
+    approver = (
+        db.query(models.User)
+        .filter(models.User.username == request.approver_username, models.User.is_active == True)  # noqa: E712
+        .first()
+    )
+    valid_approver = approver is not None and (
+        approver.id == shop.owner_id
+        or (
+            approver.role == "STAFF"
+            and approver.staff_shop_id == request.shop_id
+            and effective_staff_role(approver) == STAFF_ROLE_MANAGER
+        )
+    )
+    now = datetime.datetime.utcnow()
+    failed_attempts = (
+        db.query(models.FnbManagerApproval)
+        .filter(
+            models.FnbManagerApproval.shop_id == request.shop_id,
+            models.FnbManagerApproval.actor_user_id == current_user.id,
+            models.FnbManagerApproval.action == "PIN_FAILED",
+            models.FnbManagerApproval.created_at >= now - datetime.timedelta(minutes=15),
+        )
+        .count()
+    )
+    if failed_attempts >= 5:
+        raise fnb_error(
+            429,
+            "FNB_PIN_RATE_LIMITED",
+            "Đã nhập sai PIN quá nhiều lần; vui lòng thử lại sau",
+            retry_after_seconds=900,
+        )
+    pin_hash = approver.fnb_manager_pin_hash if valid_approver else None
+    pin_ok = False
+    if pin_hash is None:
+        burn_password_time()
+    else:
+        pin_ok = verify_password(request.pin, pin_hash)
+    if not pin_ok:
+        db.add(
+            models.FnbManagerApproval(
+                shop_id=request.shop_id,
+                approver_user_id=approver.id if valid_approver else current_user.id,
+                actor_user_id=current_user.id,
+                action="PIN_FAILED",
+                entity_type=request.entity_type,
+                entity_id=request.entity_id,
+                revision=request.revision,
+                token_hash=hashlib.sha256(secrets.token_bytes(32)).hexdigest(),
+                expires_at=now,
+                used_at=now,
+            )
+        )
+        db.commit()
+        raise fnb_error(403, "FNB_PIN_INVALID", "PIN quản lý không đúng")
+    token = secrets.token_urlsafe(32)
+    db.add(
+        models.FnbManagerApproval(
+            shop_id=request.shop_id,
+            approver_user_id=approver.id,
+            actor_user_id=current_user.id,
+            action=request.action,
+            entity_type=request.entity_type,
+            entity_id=request.entity_id,
+            revision=request.revision,
+            token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+            expires_at=datetime.datetime.utcnow() + datetime.timedelta(minutes=5),
+        )
+    )
+    db.commit()
+    return {"approval_token": token, "expires_in_seconds": 300}
 
 
 def create_area(
@@ -643,9 +822,18 @@ def serialize_session(db: Session, session: models.FnbServiceSession) -> dict:
             "product_id": line.product_id,
             "product_name": line.product_name,
             "unit_price_vnd": int(line.unit_price_vnd),
+            "station": line.station,
             "note": line.note,
             "quantity": int(line.quantity),
             "cancelled_quantity": int(line.cancelled_quantity or 0),
+            "sent_quantity": int(line.sent_quantity or 0),
+            "sent_cancelled_quantity": int(line.sent_cancelled_quantity or 0),
+            "active_sent_quantity": int(line.sent_quantity or 0)
+            - int(line.sent_cancelled_quantity or 0),
+            "unsent_quantity": int(line.quantity)
+            - int(line.sent_quantity or 0)
+            - int(line.cancelled_quantity or 0)
+            + int(line.sent_cancelled_quantity or 0),
             "billable_quantity": int(line.quantity)
             - int(line.cancelled_quantity or 0),
             "state_version": int(line.state_version or 0),
@@ -672,9 +860,7 @@ def serialize_session(db: Session, session: models.FnbServiceSession) -> dict:
         "tables": tables,
         "lines": serialized_lines,
         "subtotal_vnd": subtotal,
-        "unsent_quantity": sum(
-            line["billable_quantity"] for line in serialized_lines
-        ),
+        "unsent_quantity": sum(line["unsent_quantity"] for line in serialized_lines),
     }
 
 
@@ -879,6 +1065,7 @@ def add_line(
                 product_id=product.id,
                 product_name=product.name,
                 unit_price_vnd=price,
+                station=product.fnb_station,
                 note=_normalize_note(request.note),
                 quantity=request.quantity,
                 cancelled_quantity=0,
@@ -895,6 +1082,325 @@ def add_line(
             request.operation_id,
             fingerprint,
             before=before,
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _ticket_result(db: Session, ticket: models.FnbKitchenTicket) -> dict:
+    items = (
+        db.query(models.FnbKitchenTicketItem)
+        .filter(models.FnbKitchenTicketItem.ticket_id == ticket.id)
+        .order_by(models.FnbKitchenTicketItem.id)
+        .all()
+    )
+    session = db.get(models.FnbServiceSession, ticket.session_id)
+    tables = [row["name"] for row in serialize_session(db, session)["tables"]]
+    return {
+        "id": ticket.id,
+        "shop_id": ticket.shop_id,
+        "session_id": ticket.session_id,
+        "station": ticket.station,
+        "sequence": int(ticket.sequence),
+        "status": ticket.status,
+        "state_version": int(ticket.state_version or 0),
+        "out_of_stock_reason": ticket.out_of_stock_reason,
+        "created_at": ticket.created_at.isoformat() + "Z",
+        "tables": tables,
+        "items": [
+            {
+                "id": item.id,
+                "line_id": item.session_line_id,
+                "product_name": item.product_name,
+                "quantity": int(item.quantity) - int(item.cancelled_quantity or 0),
+                "original_quantity": int(item.quantity),
+                "cancelled_quantity": int(item.cancelled_quantity or 0),
+                "note": item.note,
+            }
+            for item in items
+            if int(item.quantity) > int(item.cancelled_quantity or 0)
+        ],
+    }
+
+
+def send_session(
+    db: Session,
+    current_user: models.User,
+    session_id: int,
+    request: FnbSessionSend,
+) -> dict:
+    action = "FNB_SESSION_SEND"
+    fingerprint = operation_fingerprint(action, _payload(request, session_id=session_id))
+    try:
+        session = _session_for_access(db, current_user, session_id)
+        shop_id = int(session.shop_id)
+        _prepare_locked_shop(db, shop_id)
+        session = _session_for_access(db, current_user, session_id)
+        shop = require_fnb_access(db, shop_id, current_user, PERMISSION_FNB_SERVICE)
+        existing = _existing_operation(db, shop_id, request.operation_id, fingerprint)
+        if existing is not None:
+            db.rollback()
+            return existing
+        if not bool(shop.fnb_enabled):
+            raise fnb_error(409, "FNB_DISABLED", "Cửa hàng chưa bật bán tại bàn")
+        _require_open(session)
+        require_session_revision(db, session, request.expected_revision)
+        lines = (
+            db.query(models.FnbSessionLine)
+            .filter(models.FnbSessionLine.session_id == session.id)
+            .order_by(models.FnbSessionLine.id)
+            .all()
+        )
+        pending = []
+        wanted: dict[int, int] = {}
+        products: dict[int, models.Product] = {}
+        for line in lines:
+            quantity = (
+                int(line.quantity)
+                - int(line.sent_quantity or 0)
+                - int(line.cancelled_quantity or 0)
+                + int(line.sent_cancelled_quantity or 0)
+            )
+            if quantity <= 0:
+                continue
+            product = (
+                db.query(models.Product)
+                .filter(
+                    models.Product.id == line.product_id,
+                    models.Product.shop_id == shop_id,
+                )
+                .first()
+            )
+            if product is None:
+                raise fnb_error(409, "FNB_PRODUCT_MISSING", "Món nguồn không còn tồn tại")
+            pending.append((line, product, quantity))
+            products[product.id] = product
+            wanted[product.id] = wanted.get(product.id, 0) + quantity
+        if not pending:
+            raise fnb_error(409, "FNB_NOTHING_TO_SEND", "Không có món mới để gửi")
+        for product_id, quantity in wanted.items():
+            available = inventory_service.ton_kha_dung(db, products[product_id])
+            if available < quantity:
+                raise fnb_error(
+                    409,
+                    "FNB_STOCK_SHORTAGE",
+                    "Món không đủ tồn kho để gửi",
+                    product_id=product_id,
+                    product_name=products[product_id].name,
+                    requested=quantity,
+                    available=available,
+                )
+
+        before = serialize_session(db, session)
+        ticket_by_station: dict[str, models.FnbKitchenTicket] = {}
+        for station in sorted({line.station for line, _, _ in pending} & {"KITCHEN", "BAR"}):
+            sequence = int(
+                db.query(func.max(models.FnbKitchenTicket.sequence))
+                .filter(
+                    models.FnbKitchenTicket.shop_id == shop_id,
+                    models.FnbKitchenTicket.station == station,
+                )
+                .scalar()
+                or 0
+            ) + 1
+            ticket = models.FnbKitchenTicket(
+                shop_id=shop_id,
+                session_id=session.id,
+                station=station,
+                sequence=sequence,
+                status="NEW",
+                operation_id=request.operation_id,
+                created_by_user_id=current_user.id,
+            )
+            db.add(ticket)
+            db.flush()
+            ticket_by_station[station] = ticket
+
+        for line, product, quantity in pending:
+            ticket_item = None
+            ticket = ticket_by_station.get(line.station)
+            if ticket is not None:
+                ticket_item = models.FnbKitchenTicketItem(
+                    ticket_id=ticket.id,
+                    session_line_id=line.id,
+                    quantity=quantity,
+                    product_name=line.product_name,
+                    note=line.note,
+                )
+                db.add(ticket_item)
+                db.flush()
+            allocations = inventory_service.deduct_stock(db, [(product, quantity)])[product.id]
+            for allocation in allocations:
+                db.add(
+                    models.FnbStockAllocation(
+                        shop_id=shop_id,
+                        session_id=session.id,
+                        session_line_id=line.id,
+                        ticket_item_id=ticket_item.id if ticket_item else None,
+                        product_id=product.id,
+                        batch_id=allocation.batch.id if allocation.batch else None,
+                        quantity=allocation.quantity,
+                        cost_known_qty=allocation.known_qty,
+                        cost_unknown_qty=allocation.unknown_qty,
+                        cost_basis_vnd=allocation.cost_basis_vnd,
+                        state="CONSUMED",
+                        operation_id=request.operation_id,
+                    )
+                )
+            line.sent_quantity = int(line.sent_quantity or 0) + quantity
+            line.state_version = int(line.state_version or 0) + 1
+
+        session.revision = int(session.revision or 0) + 1
+        shop.fnb_revision = int(shop.fnb_revision or 0) + 1
+        db.flush()
+        result = serialize_session(db, session)
+        result["tickets"] = [
+            _ticket_result(db, ticket) for ticket in ticket_by_station.values()
+        ]
+        return _finish(
+            db,
+            current_user,
+            action,
+            request.operation_id,
+            fingerprint,
+            result,
+            session_id=session.id,
+            before=before,
+            after=result,
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+
+def get_station_tickets(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    station: str,
+    after_revision: int | None = None,
+) -> dict:
+    station = station.upper()
+    permission = {
+        "KITCHEN": PERMISSION_FNB_KITCHEN,
+        "BAR": PERMISSION_FNB_BAR,
+    }.get(station)
+    if permission is None:
+        raise fnb_error(400, "FNB_STATION_INVALID", "Khu chế biến không hợp lệ")
+    shop = require_fnb_access(db, shop_id, current_user, permission)
+    if not bool(shop.fnb_enabled):
+        raise fnb_error(409, "FNB_DISABLED", "Cửa hàng chưa bật bán tại bàn")
+    revision = int(shop.fnb_revision or 0)
+    if after_revision is not None and int(after_revision) == revision:
+        return {"changed": False, "station": station, "revision": revision}
+    tickets = (
+        db.query(models.FnbKitchenTicket)
+        .filter(
+            models.FnbKitchenTicket.shop_id == shop_id,
+            models.FnbKitchenTicket.station == station,
+            models.FnbKitchenTicket.status.in_(("NEW", "IN_PROGRESS")),
+        )
+        .order_by(models.FnbKitchenTicket.sequence)
+        .all()
+    )
+    return {
+        "changed": True,
+        "shop_id": shop_id,
+        "station": station,
+        "revision": revision,
+        "tickets": [_ticket_result(db, ticket) for ticket in tickets],
+    }
+
+
+def transition_ticket(
+    db: Session,
+    current_user: models.User,
+    ticket_id: int,
+    transition: str,
+    request: FnbTicketTransition,
+) -> dict:
+    transitions = {
+        "start": ("FNB_TICKET_START", "NEW", "IN_PROGRESS"),
+        "done": ("FNB_TICKET_DONE", "IN_PROGRESS", "DONE"),
+        "out-of-stock": ("FNB_TICKET_OUT_OF_STOCK", None, None),
+    }
+    if transition not in transitions:
+        raise fnb_error(400, "FNB_TICKET_ACTION_INVALID", "Thao tác phiếu không hợp lệ")
+    action, required_status, next_status = transitions[transition]
+    fingerprint = operation_fingerprint(
+        action, _payload(request, ticket_id=ticket_id)
+    )
+    try:
+        ticket = db.get(models.FnbKitchenTicket, ticket_id)
+        if ticket is None:
+            raise fnb_error(404, "FNB_TICKET_NOT_FOUND", "Không tìm thấy phiếu")
+        shop_id = int(ticket.shop_id)
+        permission = (
+            PERMISSION_FNB_KITCHEN
+            if ticket.station == "KITCHEN"
+            else PERMISSION_FNB_BAR
+        )
+        require_fnb_access(db, shop_id, current_user, permission)
+        _prepare_locked_shop(db, shop_id)
+        shop = require_fnb_access(db, shop_id, current_user, permission)
+        existing = _existing_operation(db, shop_id, request.operation_id, fingerprint)
+        if existing is not None:
+            db.rollback()
+            return existing
+        ticket = (
+            db.query(models.FnbKitchenTicket)
+            .filter(
+                models.FnbKitchenTicket.id == ticket_id,
+                models.FnbKitchenTicket.shop_id == shop_id,
+            )
+            .first()
+        )
+        if ticket is None:
+            raise fnb_error(404, "FNB_TICKET_NOT_FOUND", "Không tìm thấy phiếu")
+        if int(ticket.state_version or 0) != request.expected_state_version:
+            raise fnb_error(
+                409,
+                "FNB_TICKET_CHANGED",
+                "Phiếu vừa được cập nhật",
+                state_version=int(ticket.state_version or 0),
+                snapshot=_ticket_result(db, ticket),
+            )
+        if transition == "out-of-stock":
+            reason = _normalize_note(request.reason)
+            if not reason:
+                raise fnb_error(400, "FNB_REASON_REQUIRED", "Cần nhập lý do hết món")
+            if ticket.status not in ("NEW", "IN_PROGRESS"):
+                raise fnb_error(409, "FNB_TICKET_CLOSED", "Phiếu đã hoàn tất")
+            ticket.out_of_stock_reason = reason
+        else:
+            if request.reason is not None:
+                raise fnb_error(400, "FNB_REASON_NOT_ALLOWED", "Thao tác này không cần lý do")
+            if ticket.status != required_status:
+                raise fnb_error(409, "FNB_TICKET_STATE_INVALID", "Trạng thái phiếu không phù hợp")
+            ticket.status = next_status
+            now = datetime.datetime.utcnow()
+            if transition == "start":
+                ticket.started_by_user_id = current_user.id
+                ticket.started_at = now
+            else:
+                ticket.done_by_user_id = current_user.id
+                ticket.done_at = now
+        ticket.state_version = int(ticket.state_version or 0) + 1
+        shop.fnb_revision = int(shop.fnb_revision or 0) + 1
+        db.flush()
+        result = _ticket_result(db, ticket)
+        result["revision"] = int(shop.fnb_revision or 0)
+        return _finish(
+            db,
+            current_user,
+            action,
+            request.operation_id,
+            fingerprint,
+            result,
+            session_id=ticket.session_id,
+            after=result,
+            reason=ticket.out_of_stock_reason if transition == "out-of-stock" else None,
         )
     except Exception:
         db.rollback()
@@ -931,6 +1437,8 @@ def update_line(
                 state_version=int(line.state_version or 0),
                 snapshot=serialize_session(db, session),
             )
+        if int(line.sent_quantity or 0) > 0:
+            raise fnb_error(409, "FNB_LINE_ALREADY_SENT", "Món đã gửi không thể sửa")
         if request.quantity < int(line.cancelled_quantity or 0):
             raise fnb_error(
                 409, "FNB_QUANTITY_CANCELLED", "Số lượng thấp hơn phần đã hủy"
@@ -953,6 +1461,129 @@ def update_line(
     except Exception:
         db.rollback()
         raise
+
+
+def _sent_allocation_parts(
+    db: Session, line_id: int, quantity: int
+) -> list[tuple[models.FnbStockAllocation, int]]:
+    rows = (
+        db.query(models.FnbStockAllocation)
+        .filter(
+            models.FnbStockAllocation.session_line_id == line_id,
+            models.FnbStockAllocation.state == "CONSUMED",
+        )
+        .order_by(models.FnbStockAllocation.id)
+        .all()
+    )
+    parts = []
+    remaining = quantity
+    for row in rows:
+        take = min(remaining, int(row.quantity))
+        if take:
+            parts.append((row, take))
+            remaining -= take
+        if not remaining:
+            break
+    if remaining:
+        raise fnb_error(409, "FNB_ALLOCATION_MISMATCH", "Phân bổ tồn món bị lệch")
+    return parts
+
+
+def _approval_for_sent_cancel(
+    db: Session,
+    current_user: models.User,
+    session: models.FnbServiceSession,
+    token: str | None,
+) -> models.FnbManagerApproval:
+    if not token:
+        raise fnb_error(403, "FNB_APPROVAL_REQUIRED", "Cần PIN quản lý để hủy món đang làm")
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    approval = (
+        db.query(models.FnbManagerApproval)
+        .filter(
+            models.FnbManagerApproval.token_hash == token_hash,
+            models.FnbManagerApproval.shop_id == session.shop_id,
+            models.FnbManagerApproval.actor_user_id == current_user.id,
+            models.FnbManagerApproval.action == "CANCEL_SENT_LINE",
+            models.FnbManagerApproval.entity_type == "SESSION",
+            models.FnbManagerApproval.entity_id == session.id,
+            models.FnbManagerApproval.revision == session.revision,
+            models.FnbManagerApproval.used_at.is_(None),
+            models.FnbManagerApproval.expires_at > datetime.datetime.utcnow(),
+        )
+        .first()
+    )
+    if approval is None:
+        raise fnb_error(403, "FNB_APPROVAL_INVALID", "Lượt duyệt không còn hợp lệ")
+    approval.used_at = datetime.datetime.utcnow()
+    return approval
+
+
+def _resolve_sent_allocations(
+    db: Session,
+    parts: list[tuple[models.FnbStockAllocation, int]],
+    resolution: str,
+    reason: str | None,
+    operation_id: str,
+) -> None:
+    now = datetime.datetime.utcnow()
+    allocation_state = "RESTOCKED" if resolution == "RESTOCK" else resolution
+    for row, take in parts:
+        unknown_take = min(take, int(row.cost_unknown_qty or 0))
+        known_take = take - unknown_take
+        basis_take = (
+            cumulative_basis(
+                int(row.cost_basis_vnd or 0),
+                int(row.cost_known_qty or 0),
+                known_take,
+            )
+            if known_take
+            else 0
+        )
+        terminal = row
+        if take < int(row.quantity):
+            row.quantity = int(row.quantity) - take
+            row.cost_known_qty = int(row.cost_known_qty or 0) - known_take
+            row.cost_unknown_qty = int(row.cost_unknown_qty or 0) - unknown_take
+            row.cost_basis_vnd = int(row.cost_basis_vnd or 0) - basis_take
+            terminal = models.FnbStockAllocation(
+                shop_id=row.shop_id,
+                session_id=row.session_id,
+                session_line_id=row.session_line_id,
+                ticket_item_id=row.ticket_item_id,
+                product_id=row.product_id,
+                batch_id=row.batch_id,
+                quantity=take,
+                cost_known_qty=known_take,
+                cost_unknown_qty=unknown_take,
+                cost_basis_vnd=basis_take,
+                operation_id=operation_id,
+            )
+            db.add(terminal)
+        terminal.state = allocation_state
+        terminal.resolved_at = now
+        terminal.resolution_reason = reason
+        if row.ticket_item_id is not None:
+            item = db.get(models.FnbKitchenTicketItem, row.ticket_item_id)
+            item.cancelled_quantity = int(item.cancelled_quantity or 0) + take
+        if resolution != "RESTOCK":
+            continue
+        product = db.get(models.Product, row.product_id)
+        if product is None or product.shop_id != row.shop_id:
+            raise fnb_error(409, "FNB_PRODUCT_MISSING", "Món nguồn không còn tồn tại")
+        if int(product.stock or 0) > MAX_SAFE_QUANTITY - take:
+            raise fnb_error(409, "FNB_STOCK_OVERFLOW", "Tồn kho sau hoàn vượt giới hạn")
+        source = product
+        if row.batch_id is not None:
+            source = db.get(models.ProductBatch, row.batch_id)
+            if source is None or source.product_id != product.id:
+                raise fnb_error(409, "FNB_BATCH_MISSING", "Lô nguồn không còn tồn tại")
+            if int(source.quantity or 0) > MAX_SAFE_QUANTITY - take:
+                raise fnb_error(409, "FNB_STOCK_OVERFLOW", "Tồn lô sau hoàn vượt giới hạn")
+        inventory_service.restore_cost_pool(source, known_take, unknown_take, basis_take)
+        if row.batch_id is not None:
+            source.quantity = int(source.quantity or 0) + take
+        product.stock = int(product.stock or 0) + take
 
 
 def cancel_line(
@@ -1001,18 +1632,71 @@ def cancel_line(
                 409, "FNB_CANCEL_EXCEEDS_QUANTITY", "Số lượng hủy vượt phần còn lại"
             )
         before = serialize_session(db, session)
+        unsent = (
+            int(line.quantity)
+            - int(line.sent_quantity or 0)
+            - int(line.cancelled_quantity or 0)
+            + int(line.sent_cancelled_quantity or 0)
+        )
+        sent_to_cancel = max(0, int(request.quantity) - max(0, unsent))
+        approval = None
+        reason = _normalize_note(request.reason)
+        if sent_to_cancel:
+            parts = _sent_allocation_parts(db, line.id, sent_to_cancel)
+            item_ids = [row.ticket_item_id for row, _ in parts if row.ticket_item_id]
+            progressed = False
+            if item_ids:
+                progressed = (
+                    db.query(models.FnbKitchenTicket.id)
+                    .join(
+                        models.FnbKitchenTicketItem,
+                        models.FnbKitchenTicketItem.ticket_id == models.FnbKitchenTicket.id,
+                    )
+                    .filter(
+                        models.FnbKitchenTicketItem.id.in_(item_ids),
+                        models.FnbKitchenTicket.status.in_(("IN_PROGRESS", "DONE")),
+                    )
+                    .first()
+                    is not None
+                )
+            if progressed:
+                if request.resolution not in ("RESTOCK", "WASTE") or not reason:
+                    raise fnb_error(
+                        400,
+                        "FNB_CANCELLATION_DECISION_REQUIRED",
+                        "Cần chọn hoàn tồn hoặc hao hụt và nhập lý do",
+                    )
+                approval = _approval_for_sent_cancel(
+                    db, current_user, session, request.approval_token
+                )
+                resolution = request.resolution
+            else:
+                resolution = "RESTOCK"
+            _resolve_sent_allocations(
+                db, parts, resolution, reason, request.operation_id
+            )
         line.cancelled_quantity = int(line.cancelled_quantity or 0) + request.quantity
+        line.sent_cancelled_quantity = (
+            int(line.sent_cancelled_quantity or 0) + sent_to_cancel
+        )
         line.state_version = int(line.state_version or 0) + 1
         session.revision = int(session.revision or 0) + 1
         shop.fnb_revision = int(shop.fnb_revision or 0) + 1
-        return _session_result_finish(
+        db.flush()
+        result = serialize_session(db, session)
+        if approval is not None:
+            result["manager_approval_id"] = approval.id
+        return _finish(
             db,
             current_user,
-            session,
             action,
             request.operation_id,
             fingerprint,
+            result,
+            session_id=session.id,
             before=before,
+            after=result,
+            reason=reason,
         )
     except Exception:
         db.rollback()

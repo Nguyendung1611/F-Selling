@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -76,12 +76,46 @@ class FnbLineUpdate(FnbRequest):
     operation_id: OperationId = Field(min_length=8, max_length=128)
 
 
+class FnbStationUpdate(FnbRequest):
+    station: Literal["KITCHEN", "BAR", "DIRECT"]
+    expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    operation_id: OperationId = Field(min_length=8, max_length=128)
+
+
+class FnbSessionSend(FnbRequest):
+    expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    operation_id: OperationId = Field(min_length=8, max_length=128)
+
+
+class FnbTicketTransition(FnbRequest):
+    expected_state_version: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    operation_id: OperationId = Field(min_length=8, max_length=128)
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
 class FnbLineCancel(FnbRequest):
     line_id: int
     quantity: int = Field(gt=0, le=MAX_SAFE_QUANTITY)
     expected_line_version: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
     expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
     operation_id: OperationId = Field(min_length=8, max_length=128)
+    resolution: Optional[Literal["RESTOCK", "WASTE"]] = None
+    reason: Optional[str] = Field(default=None, max_length=500)
+    approval_token: Optional[str] = Field(default=None, min_length=32, max_length=256)
+
+
+class FnbManagerPinSet(FnbRequest):
+    pin: str = Field(pattern=r"^\d{4,6}$")
+
+
+class FnbManagerApprovalCreate(FnbRequest):
+    shop_id: int
+    approver_username: str = Field(min_length=1, max_length=100)
+    pin: str = Field(pattern=r"^\d{4,6}$")
+    action: Literal["CANCEL_SENT_LINE"]
+    entity_type: Literal["SESSION"]
+    entity_id: int
+    revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
 
 
 class FnbMoveTable(FnbRequest):

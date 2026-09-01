@@ -66,6 +66,8 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
             navigateToPage('/pos?tour=sale');
         } else if (data.role === 'STAFF' && data.staff_role === 'CASHIER') {
             navigateToPage('/pos');
+        } else if (data.role === 'STAFF' && ['KITCHEN', 'BAR'].includes(data.staff_role)) {
+            navigateToPage(`/fnb/station/${data.staff_role.toLowerCase()}`);
         } else {
             navigateToPage('/seller');
         }

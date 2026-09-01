@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#ffffff">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="apple-touch-icon" href="/img/icon-192.png">
+    <title>Bếp / Bar | F-Selling</title>
+    <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
+    <link rel="stylesheet" href="/css/fnb-r1a.css?v=20260901-r1b">
+    <link rel="stylesheet" href="/css/fnb-station-r1b.css?v=20260901-r1b">
+</head>
+<body class="fnb-page fnb-station-page">
+    <header class="fnb-header">
+        <a class="fnb-back" href="/fnb">Sơ đồ bàn</a>
+        <h1 id="fnbStationTitle">Bếp đang chờ</h1>
+        <label class="fnb-shop-field" for="fnbStationShop"><span>Cửa hàng</span><select id="fnbStationShop" aria-label="Cửa hàng"></select></label>
+    </header>
+    <main class="fnb-station-main">
+        <div class="fnb-station-heading">
+            <div><p class="eyebrow">Phiếu chế biến</p><h2>Làm theo thứ tự gửi món</h2></div>
+            <p id="fnbStationStatus" role="status" aria-live="polite"></p>
+        </div>
+        <div id="fnbStationTickets" class="fnb-ticket-grid" aria-live="polite"></div>
+    </main>
+    <script src="/js/api.js?v=20260901-fnb-r1b&amp;g=20260813-i09-g2h2"></script>
+    <script src="/js/fnb-station-r1b.js?v=20260901-r1b2"></script>
+    <script src="/js/pwa.js?v=20260806-pwa"></script>
+</body>
+</html>

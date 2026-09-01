@@ -35,6 +35,11 @@ def get_fnb() -> FileResponse:
     return FileResponse("static/fnb.html")
 
 
+@router.get("/fnb/station/{station}", response_class=FileResponse)
+def get_fnb_station(station: str) -> FileResponse:
+    return FileResponse("static/fnb-station.html")
+
+
 @router.get("/register", response_class=FileResponse)
 def get_register() -> FileResponse:
     return FileResponse("static/register.html")

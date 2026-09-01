@@ -1,0 +1,20 @@
+.fnb-station-page { background: #eef2f6; }
+.fnb-station-main { padding: clamp(16px, 3vw, 32px); }
+.fnb-station-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
+.fnb-station-heading h2 { margin: 3px 0 0; font-size: clamp(1.2rem, 2vw, 1.55rem); }
+#fnbStationStatus { min-height: 22px; margin: 0; color: var(--fnb-muted); font-weight: 700; }
+.fnb-ticket-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 16px; align-items: start; }
+.fnb-ticket-card { border: 1px solid #cbd5e1; border-top: 6px solid var(--primary); border-radius: 10px; background: #fff; box-shadow: 0 3px 0 #cbd5e1; overflow: hidden; }
+.fnb-ticket-card > header { display: flex; justify-content: space-between; gap: 12px; padding: 15px; border-bottom: 1px solid var(--fnb-line); }
+.fnb-ticket-card h2 { margin: 3px 0 0; font-size: 1.25rem; overflow-wrap: anywhere; }
+.fnb-ticket-number { color: var(--fnb-muted); font-size: .8rem; font-weight: 850; }
+.fnb-ticket-status { align-self: start; padding: 4px 8px; border-radius: 999px; background: #fff7ed; color: #9a3412; font-size: .78rem; font-weight: 850; }
+.fnb-ticket-card ul { display: grid; gap: 12px; margin: 0; padding: 16px 18px 16px 38px; }
+.fnb-ticket-card li strong, .fnb-ticket-card li span { display: block; overflow-wrap: anywhere; }
+.fnb-ticket-card li span { margin-top: 2px; color: var(--fnb-muted); }
+.fnb-ticket-card footer { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px; border-top: 1px solid var(--fnb-line); }
+.fnb-ticket-warning { margin: 0 14px 14px; padding: 10px; border: 1px solid #fdba74; border-radius: 8px; background: #fff7ed; color: #9a3412; font-weight: 750; }
+@media (max-width: 560px) {
+    .fnb-station-heading { align-items: start; flex-direction: column; }
+    .fnb-ticket-grid { grid-template-columns: 1fr; }
+}

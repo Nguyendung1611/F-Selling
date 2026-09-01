@@ -100,14 +100,15 @@ def test_all_touched_static_files_have_i09_g2h_cache_buster():
     html_files = sorted((ROOT / "static").glob("*.html"))
     api_consumers = [path for path in html_files if '/js/api.js?v=' in path.read_text(encoding="utf-8")]
     assert {path.name for path in api_consumers} == {
-        "admin.html", "fnb.html", "index.html", "pos.html", "register.html", "seller.html", "verify.html"
+        "admin.html", "fnb-station.html", "fnb.html", "index.html", "pos.html",
+        "register.html", "seller.html", "verify.html"
     }
     for path in api_consumers:
         assert 'g=20260813-i09-g2h2' in path.read_text(encoding="utf-8")
 
     index = _read("static/index.html")
     pos = _read("static/pos.html")
-    assert '/js/auth.js?v=20260828-landing-r11-demo1' in index
+    assert '/js/auth.js?v=20260901-fnb-r1b' in index
     assert '/js/offline-ban.js?v=20260813-i09-f3&g=20260813-i09-g2h6' 
     assert '/js/pos.js?v=20260824-r14-production2' in pos
 

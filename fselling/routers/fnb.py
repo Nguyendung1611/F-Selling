@@ -10,10 +10,15 @@ from ..schemas.fnb import (
     FnbLineCreate,
     FnbLineUpdate,
     FnbMergeTable,
+    FnbManagerApprovalCreate,
+    FnbManagerPinSet,
     FnbMoveTable,
     FnbSessionCancel,
     FnbSessionOpen,
+    FnbSessionSend,
     FnbSettingsUpdate,
+    FnbStationUpdate,
+    FnbTicketTransition,
     FnbTableCreate,
     FnbTableUpdate,
 )
@@ -30,6 +35,25 @@ def patch_settings(
     current_user: models.User = Depends(get_current_user),
 ):
     return fnb_service.update_fnb_settings(db, current_user, shop_id, request)
+
+
+@router.patch("/shops/{shop_id}/manager-pin")
+def patch_manager_pin(
+    shop_id: int,
+    request: FnbManagerPinSet,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.set_manager_pin(db, current_user, shop_id, request)
+
+
+@router.post("/manager-approvals")
+def post_manager_approval(
+    request: FnbManagerApprovalCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.create_manager_approval(db, current_user, request)
 
 
 @router.get("/floor")
@@ -92,6 +116,16 @@ def post_session(
     return fnb_service.open_session(db, current_user, request)
 
 
+@router.patch("/menu-items/{product_id}/station")
+def patch_station(
+    product_id: int,
+    request: FnbStationUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.update_product_station(db, current_user, product_id, request)
+
+
 @router.get("/sessions/{session_id}")
 def get_session(
     session_id: int,
@@ -109,6 +143,65 @@ def post_line(
     current_user: models.User = Depends(get_current_user),
 ):
     return fnb_service.add_line(db, current_user, session_id, request)
+
+
+@router.post("/sessions/{session_id}/send")
+def post_send(
+    session_id: int,
+    request: FnbSessionSend,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.send_session(db, current_user, session_id, request)
+
+
+@router.get("/stations/{station}/tickets")
+def get_station_tickets(
+    station: str,
+    shop_id: int,
+    after_revision: int | None = Query(None, ge=0),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.get_station_tickets(
+        db, current_user, shop_id, station, after_revision
+    )
+
+
+@router.post("/tickets/{ticket_id}/start")
+def post_ticket_start(
+    ticket_id: int,
+    request: FnbTicketTransition,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.transition_ticket(
+        db, current_user, ticket_id, "start", request
+    )
+
+
+@router.post("/tickets/{ticket_id}/done")
+def post_ticket_done(
+    ticket_id: int,
+    request: FnbTicketTransition,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.transition_ticket(
+        db, current_user, ticket_id, "done", request
+    )
+
+
+@router.post("/tickets/{ticket_id}/out-of-stock")
+def post_ticket_out_of_stock(
+    ticket_id: int,
+    request: FnbTicketTransition,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.transition_ticket(
+        db, current_user, ticket_id, "out-of-stock", request
+    )
 
 
 @router.patch("/lines/{line_id}")

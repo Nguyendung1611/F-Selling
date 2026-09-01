@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { createController, escapeHtml } = require('../../static/js/fnb-r1a.js');
+const { createController, escapeHtml, partitionLines } = require('../../static/js/fnb-r1a.js');
 
 function floor(revision = 2) {
     return {
@@ -117,6 +117,11 @@ async function testSessionAnnouncementsOnlyFollowMutations() {
     assert.equal(deps.renders.at(-1).saved, false);
 
     deps.request = async endpoint => endpoint.startsWith('/fnb/floor') ? floor() : session(4);
+    await controller.openTable(20);
+    const openedSession = deps.renders.findLast(event => event.type === 'session');
+    assert.equal(openedSession.saved, false);
+
+    controller.seedSession(session(4));
     await controller.addLine({ product_id: 7, quantity: 1, note: '' });
     const savedSession = deps.renders.findLast(event => event.type === 'session');
     assert.equal(savedSession.saved, true);
@@ -240,6 +245,28 @@ async function testLatestRevisionBodies() {
     controller.seedSession(session(30));
     await controller.cancelSession('Khách đổi ý');
     assert.equal(calls.at(-1).body.expected_revision, 30);
+
+    controller.seedSession(session(31));
+    await controller.sendSession();
+    assert.equal(calls.at(-1).endpoint, '/fnb/sessions/30/send');
+    assert.equal(calls.at(-1).body.expected_revision, 31);
+}
+
+async function testStationUpdateUsesCurrentFloorRevision() {
+    const calls = [];
+    const deps = makeDeps({
+        request: async (endpoint, method, body) => {
+            calls.push({ endpoint, method, body });
+            if (endpoint.startsWith('/fnb/floor')) return floor(16);
+            return { id: 7, station: 'BAR', fnb_revision: 17 };
+        },
+    });
+    const controller = createController(deps);
+    await controller.selectShop(1);
+    await controller.updateProductStation(7, 'BAR');
+    assert.equal(calls[1].endpoint, '/fnb/menu-items/7/station');
+    assert.equal(calls[1].body.station, 'BAR');
+    assert.equal(calls[1].body.expected_revision, 16);
 }
 
 async function testSetupMutationsAndAccess() {
@@ -294,6 +321,13 @@ assert.equal(
     '&lt;img src=x onerror=alert(1)&gt;',
 );
 assert.equal(escapeHtml(`&"'`), '&amp;&quot;&#39;');
+const buckets = partitionLines([
+    { id: 1, unsent_quantity: 2, active_sent_quantity: 0 },
+    { id: 2, unsent_quantity: 0, active_sent_quantity: 3 },
+    { id: 3, unsent_quantity: 1, active_sent_quantity: 2 },
+]);
+assert.deepEqual(buckets.draft.map(line => line.id), [1, 3]);
+assert.deepEqual(buckets.sent.map(line => line.id), [2, 3]);
 
 Promise.resolve()
     .then(testLateFloorResponseIsIgnoredAfterShopChange)
@@ -302,5 +336,6 @@ Promise.resolve()
     .then(testConflictKeepsDraftAndUsesAuthoritativeSnapshot)
     .then(testSingleFlightRetryAndDefinitiveFailure)
     .then(testLatestRevisionBodies)
+    .then(testStationUpdateUsesCurrentFloorRevision)
     .then(testSetupMutationsAndAccess)
     .then(() => process.stdout.write('fnb-r1a controller ok\n'));

@@ -248,6 +248,14 @@ ROUTES_BO_SUNG = {
     ("POST", "/api/fnb/sessions/{session_id}/move-table"),
     ("POST", "/api/fnb/sessions/{session_id}/merge-table"),
     ("POST", "/api/fnb/sessions/{session_id}/cancel"),
+    ("PATCH", "/api/fnb/menu-items/{product_id}/station"),
+    ("POST", "/api/fnb/sessions/{session_id}/send"),
+    ("GET", "/api/fnb/stations/{station}/tickets"),
+    ("POST", "/api/fnb/tickets/{ticket_id}/start"),
+    ("POST", "/api/fnb/tickets/{ticket_id}/done"),
+    ("POST", "/api/fnb/tickets/{ticket_id}/out-of-stock"),
+    ("PATCH", "/api/fnb/shops/{shop_id}/manager-pin"),
+    ("POST", "/api/fnb/manager-approvals"),
 }
 
 
@@ -385,6 +393,8 @@ def test_danh_sach_san_pham_giu_nguyen_cac_truong(client):
         # `name` như trước vẫn đúng - `name` đã là tên đầy đủ kèm biến thể.
         "variant_group",
         "variant_name",
+        # R1B: nơi chế biến mặc định, dùng lại cùng catalog cho màn phục vụ.
+        "fnb_station",
     }
 
 

@@ -24,7 +24,8 @@ I09E = "0006_i09e_offline_receipt_items"
 I10A = "0007_i10a_qr_payment_domain"
 PO = "0008_purchase_orders"
 FNB = "0009_fnb_table_service_r1a"
-HEAD_PATH = [I04, I05, I09, I09C, I09E, I10A, PO, FNB]
+R1B = "0010_fnb_kitchen_stock_r1b"
+HEAD_PATH = [I04, I05, I09, I09C, I09E, I10A, PO, FNB, R1B]
 
 RELEASED_0001_TO_0006 = {
     ROOT: "5bdcb5e297ba9eba83474c5415371129c9c3d1498280ee481e37c27fd37e7a5c",
@@ -66,7 +67,7 @@ def _module(coordinator: MigrationCoordinator):
 def _at_0006(path: Path, **kwargs) -> MigrationCoordinator:
     coordinator = _coordinator(path, **kwargs)
     assert coordinator.init() == [ROOT]
-    assert coordinator.upgrade(I09E) == HEAD_PATH[:-3]
+    assert coordinator.upgrade(I09E) == HEAD_PATH[:5]
     return coordinator
 
 
@@ -450,8 +451,8 @@ def test_fresh_0001_to_0007_restart_exact_shape_and_no_raw_body(tmp_path):
     database = tmp_path / "fresh.db"
     coordinator = _at_head(database)
     report = coordinator.verify()
-    assert report.current_revision == report.head_revision == FNB
-    assert report.revision_count == 9
+    assert report.current_revision == report.head_revision == R1B
+    assert report.revision_count == 10
     assert coordinator.upgrade("head") == []
     assert coordinator.verify().database_uuid == report.database_uuid
 
@@ -506,7 +507,7 @@ def test_0006_to_0007_is_ddl_only_and_never_synthesizes_legacy_v0(tmp_path):
                JOIN order_payments p ON p.order_id=o.id WHERE o.id=1"""
         ).fetchone()
 
-    assert coordinator.upgrade("head") == [I10A, PO, FNB]
+    assert coordinator.upgrade("head") == [I10A, PO, FNB, R1B]
     with _connect(database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM qr_payment_intents").fetchone() == (0,)
         assert connection.execute("SELECT COUNT(*) FROM bank_webhook_events").fetchone() == (0,)

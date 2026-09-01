@@ -14,9 +14,13 @@ from .expense import ExpenseCategory, ExpenseTemplate, OperatingExpense
 from .fnb import (
     FnbActionLog,
     FnbArea,
+    FnbKitchenTicket,
+    FnbKitchenTicketItem,
+    FnbManagerApproval,
     FnbServiceSession,
     FnbSessionLine,
     FnbSessionTable,
+    FnbStockAllocation,
     FnbTable,
 )
 from .loyalty import LoyaltyPointEntry, LoyaltyProgram
@@ -96,6 +100,10 @@ __all__ = [
     "FnbSessionTable",
     "FnbSessionLine",
     "FnbActionLog",
+    "FnbKitchenTicket",
+    "FnbKitchenTicketItem",
+    "FnbStockAllocation",
+    "FnbManagerApproval",
     "LoyaltyProgram",
     "OfflineLease",
     "OfflineRecoveryAction",
