@@ -1937,6 +1937,21 @@ def delete_product(db: Session, current_user: models.User, product_id: int) -> D
                 "Hãy bấm Ẩn để giữ đúng lịch sử chứng từ."
             ),
         )
+    has_fnb_history = (
+        db.query(models.FnbSessionLine.id)
+        .filter(models.FnbSessionLine.product_id == product_id)
+        .first()
+        is not None
+    )
+    if has_fnb_history:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Sản phẩm đã nằm trong lịch sử bán tại bàn nên không thể xóa. "
+                "Hãy bấm Ẩn để giữ đúng lịch sử."
+            ),
+        )
     name, code = prod.name, prod.code
     db.delete(prod)
     db.commit()

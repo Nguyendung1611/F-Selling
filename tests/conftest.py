@@ -291,3 +291,68 @@ def new_staff(client, owner_ctx: dict, staff_role: str = "MANAGER") -> tuple:
     assert res.status_code == 200, res.text
     token = login(client, username, STAFF_PASSWORD)
     return username, token
+
+
+def enable_fnb(client, ctx: dict) -> dict:
+    response = client.patch(
+        f"/api/fnb/shops/{ctx['shop_id']}/settings",
+        json={
+            "enabled": True,
+            "expected_revision": 0,
+            "operation_id": f"enable-{uuid.uuid4().hex}",
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def create_fnb_area(
+    client, ctx: dict, name: str = "Khu A", sort_order: int = 0
+) -> dict:
+    floor = client.get(
+        "/api/fnb/floor",
+        params={"shop_id": ctx["shop_id"]},
+        headers=auth(ctx["token"]),
+    ).json()
+    response = client.post(
+        "/api/fnb/areas",
+        json={
+            "shop_id": ctx["shop_id"],
+            "name": name,
+            "sort_order": sort_order,
+            "expected_revision": floor["fnb_revision"],
+            "operation_id": f"area-{uuid.uuid4().hex}",
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def create_fnb_table(
+    client,
+    ctx: dict,
+    area_id: int,
+    name: str = "Bàn 1",
+    sort_order: int = 0,
+) -> dict:
+    floor = client.get(
+        "/api/fnb/floor",
+        params={"shop_id": ctx["shop_id"]},
+        headers=auth(ctx["token"]),
+    ).json()
+    response = client.post(
+        "/api/fnb/tables",
+        json={
+            "shop_id": ctx["shop_id"],
+            "area_id": area_id,
+            "name": name,
+            "sort_order": sort_order,
+            "expected_revision": floor["fnb_revision"],
+            "operation_id": f"table-{uuid.uuid4().hex}",
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert response.status_code == 200, response.text
+    return response.json()

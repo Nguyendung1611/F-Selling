@@ -622,7 +622,7 @@ def create_fnb_table(client, ctx: dict, area_id: int, name="Bàn 1", sort_order=
 Run:
 
 ```powershell
-python -m pytest tests/test_fnb_r1a_setup.py tests/test_authorization.py tests/test_staff_roles.py tests/test_staff_access.py tests/test_shops.py tests/test_orders.py -q
+python -m pytest tests/test_fnb_r1a_setup.py tests/test_authorization.py tests/test_staff_roles.py tests/test_staff_access.py tests/test_shifts.py tests/test_orders.py -q
 ```
 
 Expected: all pass; disabled feature is fail-closed, tenant/permission boundaries hold, and retail role presets retain all existing permissions.

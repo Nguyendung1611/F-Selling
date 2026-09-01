@@ -328,6 +328,21 @@ def _has_subscription_history(db: Session, shop_id: int) -> bool:
     )
 
 
+def _has_fnb_data(db: Session, shop_id: int) -> bool:
+    return any(
+        query.first() is not None
+        for query in (
+            db.query(models.FnbArea.id).filter(models.FnbArea.shop_id == shop_id),
+            db.query(models.FnbServiceSession.id).filter(
+                models.FnbServiceSession.shop_id == shop_id
+            ),
+            db.query(models.FnbActionLog.id).filter(
+                models.FnbActionLog.shop_id == shop_id
+            ),
+        )
+    )
+
+
 def delete_shop(db: Session, current_user: models.User, shop_id: int) -> Dict[str, str]:
     # Lấy lock trước lần đọc quyết định. Điều kiện owner_id giữ nguyên hành vi
     # 404 cho người không phải chủ mà không cần mở một read transaction trước.
@@ -359,6 +374,15 @@ def delete_shop(db: Session, current_user: models.User, shop_id: int) -> Dict[st
             detail=tr(
                 "Cửa hàng đã có lịch sử gói cước hoặc thanh toán nên không thể "
                 "xóa. Hãy bấm nút Khóa để giữ nguyên chứng từ."
+            ),
+        )
+    if _has_fnb_data(db, shop_id):
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Cửa hàng đã có cấu hình hoặc lịch sử bán tại bàn nên không "
+                "thể xóa. Hãy bấm nút Khóa để ngừng sử dụng và giữ lịch sử."
             ),
         )
     shop_name = db_shop.name
