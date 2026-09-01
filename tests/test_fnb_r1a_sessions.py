@@ -505,3 +505,34 @@ def test_session_ids_are_tenant_scoped(client, fnb_ctx):
         f"/api/fnb/sessions/{session['id']}", headers=auth(other["token"])
     )
     assert hidden.status_code == 404
+
+
+def test_line_ids_do_not_leak_across_tenants(client, fnb_ctx):
+    session = open_session(client, fnb_ctx, fnb_ctx["table_1"]).json()
+    session = add_line(
+        client, fnb_ctx, session, fnb_ctx["product_1"], "tenant-line-0001"
+    )
+    line = session["lines"][0]
+    other = seller_with_shop(client)
+    payload = {
+        "quantity": 1,
+        "note": None,
+        "expected_line_version": line["state_version"],
+        "expected_revision": session["revision"],
+        "operation_id": "hidden-line-0001",
+    }
+
+    foreign = client.patch(
+        f"/api/fnb/lines/{line['id']}",
+        json=payload,
+        headers=auth(other["token"]),
+    )
+    missing = client.patch(
+        "/api/fnb/lines/999999999",
+        json=payload,
+        headers=auth(other["token"]),
+    )
+
+    assert foreign.status_code == missing.status_code == 404
+    assert foreign.json()["detail"]["code"] == "FNB_LINE_NOT_FOUND"
+    assert foreign.json()["detail"] == missing.json()["detail"]

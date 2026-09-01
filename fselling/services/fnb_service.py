@@ -713,9 +713,11 @@ def _line_for_access(
     db: Session, current_user: models.User, line_id: int
 ) -> tuple[models.FnbSessionLine, models.FnbServiceSession]:
     line = db.get(models.FnbSessionLine, line_id)
-    if line is None:
+    session = db.get(models.FnbServiceSession, line.session_id) if line else None
+    shop = db.get(models.Shop, session.shop_id) if session else None
+    if line is None or shop is None or not has_shop_operator_access(shop, current_user):
         raise fnb_error(404, "FNB_LINE_NOT_FOUND", "Không tìm thấy món")
-    session = _session_for_access(db, current_user, line.session_id)
+    require_staff_permission(current_user, PERMISSION_FNB_SERVICE)
     return line, session
 
 
