@@ -2124,6 +2124,14 @@
                         <label data-i18n="seller.shops.account_name">Tên chủ tài khoản</label>
                         <div class="input-wrapper input-wrapper-shop"><i class="ph ph-user"></i><input type="text" id="bankAccName" placeholder="VD: NGUYEN VAN A" data-i18n-placeholder="seller.shops.account_name_placeholder"></div>
                     </div>
+
+                    <div id="shopFnbSetting" class="form-group" hidden>
+                        <label class="fnb-setting-label" for="shopFnbEnabled">
+                            <input id="shopFnbEnabled" type="checkbox" onchange="updateFnbSetting(this)" disabled>
+                            <span data-i18n="seller.shops.fnb_label">Bán tại bàn</span>
+                        </label>
+                        <small data-i18n="seller.shops.fnb_hint">Bật sơ đồ bàn và phục vụ tại bàn; POS bán tại quầy vẫn giữ nguyên.</small>
+                    </div>
                     
                     <button id="btnSaveShop" onclick="saveShop()" style="width: 100%; margin-top: 1.5rem; font-size: 1.05rem;">
                         <i class="ph ph-check-circle"></i> <span data-seller-action-label="shop-save">Lưu Cài Đặt Cửa Hàng</span>
@@ -2626,16 +2634,16 @@
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260825-assistant-guided-tasks-r1-1&amp;onboarding=20260828-r2-1&amp;uat=20260829-p1"></script>
+    <script src="/js/locales/seller.js?v=20260825-assistant-guided-tasks-r1-1&amp;onboarding=20260828-r2-1&amp;uat=20260829-p1&amp;fnb=20260901-r1a"></script>
     <script src="/js/locales/subscriptions.js?v=20260807-goi-cuoc-f3"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
-<script src="/js/api.js?v=20260812-i09-f1-c1&g=20260813-i09-g2h2"></script>
+<script src="/js/api.js?v=20260812-i09-f1-c1&g=20260813-i09-g2h2&fnb=20260901-r1a"></script>
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
     <script src="/js/onboarding-r2.js?v=20260828-r2-1&amp;uat=20260829-p1"></script>
-    <script src="/js/seller.js?v=20260825-assistant-guided-tasks-r1-1&amp;onboarding=20260828-r2-1"></script>
+    <script src="/js/seller.js?v=20260825-assistant-guided-tasks-r1-1&amp;onboarding=20260828-r2-1&amp;fnb=20260901-r1a"></script>
     <script src="/js/purchasing.js?v=20260822-order-actions-a11y-r2"></script>
     <!-- Nạp SAU seller.js: expenses.js dùng apiCall/showToast/showCustomConfirm
          và các helper định dạng tiền của trang. -->

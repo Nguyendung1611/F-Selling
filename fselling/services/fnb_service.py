@@ -1288,29 +1288,26 @@ def get_floor(
     current_user: models.User,
     shop_id: int,
     after_revision: int | None = None,
+    include_inactive: bool = False,
 ) -> dict:
-    shop = require_fnb_shop(db, shop_id, current_user)
+    if include_inactive:
+        shop = require_fnb_access(
+            db, shop_id, current_user, PERMISSION_FNB_MANAGE
+        )
+        if not bool(shop.fnb_enabled):
+            raise fnb_error(409, "FNB_DISABLED", "Cửa hàng chưa bật bán tại bàn")
+    else:
+        shop = require_fnb_shop(db, shop_id, current_user)
     revision = int(shop.fnb_revision or 0)
     if after_revision == revision:
         return {"changed": False, "fnb_revision": revision}
-    areas = (
-        db.query(models.FnbArea)
-        .filter(
-            models.FnbArea.shop_id == shop_id,
-            models.FnbArea.active.is_(True),
-        )
-        .order_by(models.FnbArea.sort_order, models.FnbArea.id)
-        .all()
-    )
-    tables = (
-        db.query(models.FnbTable)
-        .filter(
-            models.FnbTable.shop_id == shop_id,
-            models.FnbTable.active.is_(True),
-        )
-        .order_by(models.FnbTable.sort_order, models.FnbTable.id)
-        .all()
-    )
+    area_query = db.query(models.FnbArea).filter(models.FnbArea.shop_id == shop_id)
+    table_query = db.query(models.FnbTable).filter(models.FnbTable.shop_id == shop_id)
+    if not include_inactive:
+        area_query = area_query.filter(models.FnbArea.active.is_(True))
+        table_query = table_query.filter(models.FnbTable.active.is_(True))
+    areas = area_query.order_by(models.FnbArea.sort_order, models.FnbArea.id).all()
+    tables = table_query.order_by(models.FnbTable.sort_order, models.FnbTable.id).all()
     by_area: dict[int, list[models.FnbTable]] = {}
     for table in tables:
         by_area.setdefault(table.area_id, []).append(table)
@@ -1351,10 +1348,17 @@ def get_floor(
                 "id": area.id,
                 "name": area.name,
                 "sort_order": int(area.sort_order),
+                **({"active": bool(area.active)} if include_inactive else {}),
                 "tables": [
                     {
                         "id": table.id,
                         "name": table.name,
+                        **({"active": bool(table.active)} if include_inactive else {}),
+                        **(
+                            {"sort_order": int(table.sort_order)}
+                            if include_inactive
+                            else {}
+                        ),
                         "state_version": int(table.state_version or 0),
                         "state": "SERVING" if table.id in occupied else "EMPTY",
                         "session": (

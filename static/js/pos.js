@@ -497,6 +497,18 @@ function updateTransferCapability() {
     setTransferCapability(currentShopHasTransferAccount());
 }
 
+function updateFnbCapability() {
+    const shop = allShops.find(item => Number(item.id) === Number(currentShopId));
+    const button = document.getElementById('btnTableService');
+    if (button) button.hidden = !Boolean(shop?.fnb_enabled);
+}
+
+function openTableService() {
+    if (!currentShopId) return;
+    localStorage.setItem('currentShopId', String(currentShopId));
+    navigateToPage('/fnb');
+}
+
 async function loadShop() {
     try {
         const res = await apiCall('/shops');
@@ -527,6 +539,7 @@ async function loadShop() {
             sel.value = currentShopId;
         }
         updateTransferCapability();
+        updateFnbCapability();
         // Capability is independent from catalog success: a warm POS shell must
         // know whether a legacy receipt may be persisted before it can go offline.
         await taiChinhSachOfflinePOS();
@@ -559,6 +572,7 @@ async function changeShopPOS() {
     localStorage.setItem('currentShopId', currentShopId);
     resetPOS();
     updateTransferCapability();
+    updateFnbCapability();
     loyaltyProgram = null;
     await taiChinhSachOfflinePOS();
     await Promise.all([
@@ -568,6 +582,8 @@ async function changeShopPOS() {
         loadLoyaltyProgram()
     ]);
 }
+
+document.getElementById('btnTableService')?.addEventListener('click', openTableService);
 
 async function loadProducts() {
     if(!currentShopId) return;

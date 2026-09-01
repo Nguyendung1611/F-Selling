@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#ffffff">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="apple-touch-icon" href="/img/icon-192.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="F-Selling">
+    <title data-i18n="fnb.page_title">Bán tại bàn | F-Selling</title>
+    <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
+    <link rel="stylesheet" href="/css/fnb-r1a.css?v=20260901-r1a">
+</head>
+<body class="fnb-page">
+    <header class="fnb-header">
+        <a class="fnb-back" href="/pos" data-i18n="fnb.back_to_counter">Bán tại quầy</a>
+        <h1 data-i18n="fnb.title">Bán tại bàn</h1>
+        <label class="fnb-shop-field" for="fnbShopSelect">
+            <span data-i18n="fnb.shop.label">Cửa hàng</span>
+            <select id="fnbShopSelect" aria-label="Cửa hàng" data-i18n-aria-label="fnb.shop.label"></select>
+        </label>
+        <label class="fnb-language-field">
+            <span class="sr-only" data-i18n="common.language">Ngôn ngữ</span>
+            <select data-language-selector data-i18n-aria-label="common.language" aria-label="Ngôn ngữ">
+                <option value="vi" data-i18n="common.language.vi">Tiếng Việt</option>
+                <option value="en" data-i18n="common.language.en">English</option>
+            </select>
+        </label>
+    </header>
+
+    <main class="fnb-shell">
+        <section class="fnb-floor-column" aria-labelledby="fnbFloorTitle">
+            <div class="fnb-floor-heading">
+                <div>
+                    <p class="eyebrow" data-i18n="fnb.floor.eyebrow">Sơ đồ phục vụ</p>
+                    <h2 id="fnbFloorTitle" data-i18n="fnb.floor.title">Chọn bàn để bắt đầu</h2>
+                </div>
+                <div class="fnb-heading-actions">
+                    <span id="fnbRefreshNote" class="fnb-refresh-note" hidden></span>
+                    <button id="fnbSetupOpen" class="fnb-secondary" type="button" hidden data-i18n="fnb.setup.open">Thiết lập bàn</button>
+                    <button id="fnbRetry" class="fnb-secondary" type="button" hidden data-i18n="common.retry">Thử lại</button>
+                </div>
+            </div>
+            <nav id="fnbAreaTabs" class="fnb-area-tabs" aria-label="Khu vực" data-i18n-aria-label="fnb.area.label"></nav>
+            <div id="fnbFloor" class="fnb-floor-grid" aria-live="polite"></div>
+            <p id="fnbLiveStatus" class="sr-only" role="status" aria-live="polite"></p>
+        </section>
+
+        <div id="fnbSessionBackdrop" class="fnb-session-backdrop" hidden></div>
+        <aside id="fnbSessionPanel" class="fnb-session-panel" aria-labelledby="fnbSessionTitle" hidden inert>
+            <header>
+                <div>
+                    <p class="eyebrow" data-i18n="fnb.session.eyebrow">Phiên phục vụ</p>
+                    <h2 id="fnbSessionTitle"></h2>
+                </div>
+                <button id="fnbSessionClose" class="fnb-icon-button" type="button" aria-label="Đóng" data-i18n-aria-label="common.close">×</button>
+            </header>
+            <label for="fnbProductSearch" data-i18n="fnb.menu.search_label">Tìm món</label>
+            <input id="fnbProductSearch" type="search" autocomplete="off" data-i18n-placeholder="fnb.menu.search_placeholder" placeholder="Nhập tên món">
+            <div id="fnbProductGrid" class="fnb-product-grid"></div>
+            <section aria-labelledby="fnbDraftTitle">
+                <h3 id="fnbDraftTitle" data-i18n="fnb.draft.title">Món chưa gửi</h3>
+                <div id="fnbDraftLines" class="fnb-draft-lines"></div>
+            </section>
+            <div id="fnbConflict" class="fnb-conflict" hidden></div>
+            <section id="fnbTableActions" class="fnb-table-actions" hidden>
+                <h3 data-i18n="fnb.table_actions.title">Chuyển hoặc gộp bàn</h3>
+                <label for="fnbTargetTable" data-i18n="fnb.table_actions.target">Chọn bàn đích</label>
+                <select id="fnbTargetTable"></select>
+                <div>
+                    <button type="button" class="fnb-secondary" data-action="move-table" data-i18n="fnb.table_actions.move">Chuyển bàn</button>
+                    <button type="button" class="fnb-secondary" data-action="merge-table" data-i18n="fnb.table_actions.merge">Gộp bàn</button>
+                </div>
+            </section>
+            <p id="fnbSessionStatus" role="status" aria-live="polite"></p>
+            <footer>
+                <strong id="fnbSubtotal"></strong>
+                <button id="fnbCancelSession" type="button" class="fnb-secondary" data-i18n="fnb.session.cancel">Hủy phiên trống</button>
+                <button id="fnbFutureSend" type="button" disabled data-i18n="fnb.send.r1b">Gửi Bếp/Bar — có ở R1B</button>
+            </footer>
+        </aside>
+    </main>
+
+    <dialog id="fnbSetupDialog" aria-labelledby="fnbSetupTitle">
+        <div class="fnb-dialog-heading">
+            <div><p class="eyebrow" data-i18n="fnb.setup.eyebrow">Sắp xếp khu phục vụ</p><h2 id="fnbSetupTitle" data-i18n="fnb.setup.title">Khu vực và bàn</h2></div>
+            <form method="dialog"><button class="fnb-icon-button" value="cancel" aria-label="Đóng" data-i18n-aria-label="common.close">×</button></form>
+        </div>
+        <div id="fnbSetupAreas" class="fnb-setup-list"></div>
+        <div class="fnb-setup-forms">
+            <form id="fnbAreaForm">
+                <h3 data-i18n="fnb.setup.new_area">Thêm khu vực</h3>
+                <label for="fnbAreaName" data-i18n="fnb.setup.area_name">Tên khu vực</label>
+                <input id="fnbAreaName" maxlength="100" required>
+                <button type="submit" data-i18n="fnb.setup.add_area">Thêm khu vực</button>
+            </form>
+            <form id="fnbTableForm">
+                <h3 data-i18n="fnb.setup.new_table">Thêm bàn</h3>
+                <label for="fnbTableArea" data-i18n="fnb.setup.area">Khu vực</label>
+                <select id="fnbTableArea" required></select>
+                <label for="fnbTableName" data-i18n="fnb.setup.table_name">Tên bàn</label>
+                <input id="fnbTableName" maxlength="100" required>
+                <button type="submit" data-i18n="fnb.setup.add_table">Thêm bàn</button>
+            </form>
+        </div>
+        <p id="fnbSetupStatus" role="status" aria-live="polite"></p>
+    </dialog>
+
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
+    <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
+    <script src="/js/locales/fnb.js?v=20260901-r1a"></script>
+    <script src="/js/i18n.js?v=20260731-i18n4"></script>
+    <script src="/js/api.js?v=20260901-fnb-r1a&amp;g=20260813-i09-g2h2"></script>
+    <script src="/js/fnb-r1a.js?v=20260901-r1a"></script>
+    <script src="/js/pwa.js?v=20260806-pwa"></script>
+</body>
+</html>

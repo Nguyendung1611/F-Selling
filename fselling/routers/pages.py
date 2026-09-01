@@ -30,6 +30,11 @@ def get_pos() -> FileResponse:
     return FileResponse("static/pos.html")
 
 
+@router.get("/fnb", response_class=FileResponse)
+def get_fnb() -> FileResponse:
+    return FileResponse("static/fnb.html")
+
+
 @router.get("/register", response_class=FileResponse)
 def get_register() -> FileResponse:
     return FileResponse("static/register.html")
@@ -54,6 +59,11 @@ def redirect_admin() -> RedirectResponse:
 @router.get("/pos.html")
 def redirect_pos() -> RedirectResponse:
     return _redirect("/pos")
+
+
+@router.get("/fnb.html")
+def redirect_fnb() -> RedirectResponse:
+    return _redirect("/fnb")
 
 
 @router.get("/register.html")

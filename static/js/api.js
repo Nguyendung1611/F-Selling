@@ -261,6 +261,7 @@ async function apiCall(endpoint, method = 'GET', body = null) {
         }
         const error = new Error(msg);
         error.status = res.status;
+        error.detail = (data && typeof data.detail === 'object') ? data.detail : null;
         // Stable API codes are intentionally separate from localized text.  The
         // offline queue needs them to choose a durable, safe local state.
         error.code = typeof data?.detail?.code === 'string' ? data.detail.code : null;

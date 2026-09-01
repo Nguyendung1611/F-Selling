@@ -51,6 +51,7 @@ const BANKS = [
 let allShops = [];
 let currentShopId = null;
 let editShopId = null; // null = create mode, id = edit mode
+const fnbSettingOperations = new Map();
 let dashboardShopId = null;
 let chartInstance = null;
 let pieChartInstance = null;
@@ -1842,6 +1843,11 @@ function deleteShop(id) {
 function openCreateShopForm() {
     if(allShops.length >= 3) return showToast(t('seller.shops.limit_reached'));
     editShopId = null;
+    const shopFnbEnabled = document.getElementById('shopFnbEnabled');
+    const shopFnbSetting = document.getElementById('shopFnbSetting');
+    shopFnbEnabled.checked = false;
+    shopFnbEnabled.disabled = true;
+    shopFnbSetting.hidden = true;
     document.getElementById('formTitle').innerHTML = `<i class="ph ph-storefront" style="color: var(--primary);"></i> <span data-seller-action-label="shop-form-title">${escapeHtml(t('seller.shops.create_title'))}</span>`;
     document.getElementById('btnSaveShop').innerHTML = `<i class="ph ph-plus-circle"></i> <span data-seller-action-label="shop-save">${escapeHtml(t('seller.shops.create_confirm'))}</span>`;
     
@@ -1865,6 +1871,11 @@ function openCreateShopForm() {
 function openEditShopForm(id) {
     editShopId = id;
     const shop = allShops.find(s => s.id === id);
+    const shopFnbEnabled = document.getElementById('shopFnbEnabled');
+    const shopFnbSetting = document.getElementById('shopFnbSetting');
+    shopFnbEnabled.checked = Boolean(shop.fnb_enabled);
+    shopFnbEnabled.disabled = MY_ROLE !== 'SELLER';
+    shopFnbSetting.hidden = MY_ROLE !== 'SELLER';
     document.getElementById('formTitle').innerHTML = `<i class="ph ph-storefront" style="color: var(--primary);"></i> <span data-seller-action-label="shop-form-title">${escapeHtml(t('seller.shops.edit_title', { name: shop.name }))}</span>`;
     document.getElementById('btnSaveShop').innerHTML = `<i class="ph ph-check-circle"></i> <span data-seller-action-label="shop-save">${escapeHtml(t('seller.shops.save_update'))}</span>`;
     
@@ -2012,6 +2023,42 @@ function mucBaoCaoTroLy(yDinh) {
     if (target.ownerOnly && MY_ROLE !== 'SELLER') return null;
     if (target.needsCost && !XEM_DUOC_GIA_VON) return null;
     return target;
+}
+
+async function updateFnbSetting(input) {
+    if (!editShopId || input.disabled) return;
+    const shopId = Number(editShopId);
+    const previous = !input.checked;
+    input.disabled = true;
+    const operationId = fnbSettingOperations.get(shopId)
+        || `fnb-setting-${crypto.randomUUID()}`;
+    fnbSettingOperations.set(shopId, operationId);
+    try {
+        const result = await apiCall(`/fnb/shops/${shopId}/settings`, 'PATCH', {
+            enabled: input.checked,
+            expected_revision: Number(
+                allShops.find(row => row.id === shopId)?.fnb_revision || 0
+            ),
+            operation_id: operationId,
+        });
+        const shop = allShops.find(row => row.id === shopId);
+        if (shop) {
+            shop.fnb_enabled = result.fnb_enabled;
+            shop.fnb_revision = result.fnb_revision;
+        }
+        fnbSettingOperations.delete(shopId);
+        if (Number(editShopId) === shopId) {
+            showToast(t(result.fnb_enabled ? 'seller.shops.fnb_enabled' : 'seller.shops.fnb_disabled'));
+        }
+    } catch (error) {
+        if (Number(editShopId) === shopId) input.checked = previous;
+        if (Number(error.status) >= 400 && Number(error.status) < 500) {
+            fnbSettingOperations.delete(shopId);
+        }
+        if (Number(editShopId) === shopId) showToast(error.message);
+    } finally {
+        if (Number(editShopId) === shopId) input.disabled = false;
+    }
 }
 
 function moBaoCaoTroLy(yDinh) {

@@ -36,10 +36,13 @@ def patch_settings(
 def floor(
     shop_id: int,
     after_revision: int | None = Query(None, ge=0),
+    include_inactive: bool = False,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    return fnb_service.get_floor(db, current_user, shop_id, after_revision)
+    return fnb_service.get_floor(
+        db, current_user, shop_id, after_revision, include_inactive
+    )
 
 
 @router.post("/areas")
