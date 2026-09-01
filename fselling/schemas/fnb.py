@@ -50,3 +50,60 @@ class FnbTableUpdate(FnbRequest):
     expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
     expected_state_version: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
     operation_id: OperationId = Field(min_length=8, max_length=128)
+
+
+class FnbSessionOpen(FnbRequest):
+    shop_id: int
+    table_id: int
+    expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    expected_table_version: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    operation_id: OperationId = Field(min_length=8, max_length=128)
+
+
+class FnbLineCreate(FnbRequest):
+    product_id: int
+    quantity: int = Field(gt=0, le=MAX_SAFE_QUANTITY)
+    note: Optional[str] = Field(default=None, max_length=500)
+    expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    operation_id: OperationId = Field(min_length=8, max_length=128)
+
+
+class FnbLineUpdate(FnbRequest):
+    quantity: int = Field(gt=0, le=MAX_SAFE_QUANTITY)
+    note: Optional[str] = Field(default=None, max_length=500)
+    expected_line_version: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    operation_id: OperationId = Field(min_length=8, max_length=128)
+
+
+class FnbLineCancel(FnbRequest):
+    line_id: int
+    quantity: int = Field(gt=0, le=MAX_SAFE_QUANTITY)
+    expected_line_version: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    operation_id: OperationId = Field(min_length=8, max_length=128)
+
+
+class FnbMoveTable(FnbRequest):
+    from_table_id: int
+    to_table_id: int
+    expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    expected_from_state_version: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    expected_to_state_version: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    operation_id: OperationId = Field(min_length=8, max_length=128)
+
+
+class FnbMergeTable(FnbRequest):
+    target_table_id: int
+    expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    expected_target_session_revision: Optional[int] = Field(
+        default=None, ge=0, le=MAX_SAFE_QUANTITY
+    )
+    expected_target_table_version: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    operation_id: OperationId = Field(min_length=8, max_length=128)
+
+
+class FnbSessionCancel(FnbRequest):
+    expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    reason: Optional[str] = Field(default=None, max_length=500)
+    operation_id: OperationId = Field(min_length=8, max_length=128)

@@ -233,14 +233,21 @@ ROUTES_BO_SUNG = {
     # Action Center R1: một GET read-only tổng hợp các nguồn sự thật hiện có;
     # không notification table, background job hay mutation tự động.
     ("GET", "/api/action-center/{shop_id}"),
-    # F&B R1A: owner bật chế độ, manager cấu hình khu vực/bàn; floor là read
-    # model có revision. Lifecycle phiên phục vụ thuộc Task 3, chưa mở ở đây.
+    # F&B R1A: setup/floor và lifecycle phiên phục vụ nháp revision-safe.
     ("PATCH", "/api/fnb/shops/{shop_id}/settings"),
     ("POST", "/api/fnb/areas"),
     ("PATCH", "/api/fnb/areas/{area_id}"),
     ("POST", "/api/fnb/tables"),
     ("PATCH", "/api/fnb/tables/{table_id}"),
     ("GET", "/api/fnb/floor"),
+    ("POST", "/api/fnb/sessions"),
+    ("GET", "/api/fnb/sessions/{session_id}"),
+    ("POST", "/api/fnb/sessions/{session_id}/lines"),
+    ("PATCH", "/api/fnb/lines/{line_id}"),
+    ("POST", "/api/fnb/sessions/{session_id}/cancel-line"),
+    ("POST", "/api/fnb/sessions/{session_id}/move-table"),
+    ("POST", "/api/fnb/sessions/{session_id}/merge-table"),
+    ("POST", "/api/fnb/sessions/{session_id}/cancel"),
 }
 
 
