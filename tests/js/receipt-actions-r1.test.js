@@ -124,6 +124,13 @@ function order(overrides = {}) {
     assert.doesNotMatch(text, /0774867057/);
     assert.match(
         context.buildReceipt(order({
+            fnb_table_names: ['Bàn 1', 'Bàn 2'],
+            fnb_check_label: 'Khách 2'
+        })),
+        /Bàn: Bàn 1 \+ Bàn 2\nBill: Khách 2/
+    );
+    assert.match(
+        context.buildReceipt(order({
             payment_method: 'debt',
             cash_paid_amount: 0,
             cash_tendered_amount: null

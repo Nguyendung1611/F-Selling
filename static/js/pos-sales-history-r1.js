@@ -194,11 +194,14 @@
 
     function renderOrderCard(order, ui) {
         const name = order.customer_name || ui.t('pos.sales_history.guest');
+        const fnb = (order.fnb_table_names || []).length
+            ? `${order.fnb_table_names.join(' + ')}${order.fnb_check_label ? ` · ${order.fnb_check_label}` : ''}`
+            : '';
         const status = `pos.sales_history.${String(order.status).toLowerCase()}`;
         const payment = `pos.sales_history.${String(order.payment_method).toLowerCase()}`;
         return `<button type="button" class="sales-history-order" data-order-id="${Number(order.id)}">
             <span><strong>#${Number(order.id)}</strong><small>${ui.escapeHtml(ui.dateTime(order.created_at))}</small><em>${ui.escapeHtml(ui.t(status))}</em></span>
-            <span><strong>${ui.escapeHtml(name)}</strong><small>${ui.escapeHtml(order.customer_phone_masked || '')}</small></span>
+            <span><strong>${ui.escapeHtml(name)}</strong><small>${ui.escapeHtml(fnb || order.customer_phone_masked || '')}</small></span>
             <span><strong>${ui.escapeHtml(ui.money(order.total_amount))}</strong><small>${ui.escapeHtml(ui.t(payment))}</small></span>
         </button>`;
     }

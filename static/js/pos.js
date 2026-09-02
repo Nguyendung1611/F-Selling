@@ -550,6 +550,11 @@ async function loadShop() {
             loadLoyaltyProgram()
         ]);
         phucHoiCheckoutDangDo();
+        const query = new URLSearchParams(window.location.search);
+        const receiptId = Number(query.get('receipt'));
+        if (!pendingCheckoutState && Number.isSafeInteger(receiptId) && receiptId > 0) {
+            await hienHoaDon(receiptId, null, true);
+        }
     } catch(e) {
         showToast(e.message || dich('pos.order.load_shops_error'));
     }
@@ -3515,7 +3520,7 @@ function stopPaymentPolling() {
  * vẽ sau thì tờ hóa đơn vừa tạo mới không bị dọn mất. Quầy cũng sẵn sàng cho
  * khách tiếp theo ngay trong lúc hóa đơn còn hiển thị.
  */
-async function hienHoaDon(orderId, ketQuaDiemMoiNhat = null) {
+async function hienHoaDon(orderId, ketQuaDiemMoiNhat = null, receiptCopy = false) {
     if (!orderId) return resetPOS();
     let d = null;
     try {
@@ -3540,6 +3545,11 @@ async function hienHoaDon(orderId, ketQuaDiemMoiNhat = null) {
             message: e.message
         }));
     }
+    if (receiptCopy && !['PAID', 'DEBT'].includes(d.status)) {
+        resetPOS();
+        return showToast(dich('pos.sales_history.detail_not_finalized'));
+    }
+    d.receipt_copy = receiptCopy;
     resetPOS();
     duLieuHoaDonHienTai = d;
     veHoaDon(d);
@@ -3620,6 +3630,8 @@ function taoNoiDungHoaDonChiaSe(d) {
         `Thanh toán: ${pttt}`
     ];
 
+    if (d.fnb_table_names?.length) lines.push(`Bàn: ${d.fnb_table_names.join(' + ')}`);
+    if (d.fnb_check_label) lines.push(`Bill: ${d.fnb_check_label}`);
     if (d.customer?.name) lines.push(`Khách hàng: ${d.customer.name}`);
     lines.push('------------------------------');
     (d.items || []).forEach(item => {
@@ -3884,6 +3896,11 @@ function veHoaDon(d) {
     const coTienMat = Number(d.cash_paid_amount || 0) > 0;
     const coTienKhachDua = d.cash_tendered_amount !== null
         && d.cash_tendered_amount !== undefined;
+    const fnbContext = `${d.fnb_table_names?.length
+        ? `<div><b>Bàn:</b> ${escapeHtml(d.fnb_table_names.join(' + '))}</div>`
+        : ''}${d.fnb_check_label
+        ? `<div><b>Bill:</b> ${escapeHtml(d.fnb_check_label)}</div>`
+        : ''}`;
     // Hóa đơn chỉ dùng con số server đã ghi vào đơn. Không tính lại theo cấu
     // hình hiện tại vì chủ shop có thể đổi chương trình sau lúc bán.
     const giamBangDiem = Math.max(
@@ -3967,6 +3984,7 @@ function veHoaDon(d) {
             <div><b>Thời gian:</b> ${dinhDangNgayGioHoaDon(d.created_at)}</div>
             <div><b>Nhân viên:</b> ${escapeHtml(nhanVien)}</div>
             <div><b>Thanh toán:</b> ${pttt}</div>
+            ${fnbContext}
             ${d.customer?.name ? `<div><b>Khách hàng:</b> ${escapeHtml(d.customer.name)}</div>` : ''}
         </div>
         <table style="width:100%; border-collapse:collapse; font-size:0.88rem; border-top:1px dashed #94A3B8; border-bottom:1px dashed #94A3B8;">

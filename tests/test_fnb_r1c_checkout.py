@@ -207,3 +207,47 @@ def test_split_checks_pay_once_each_and_conserve_stock_provenance(client, db):
     assert len({row.order_item_id for row in transfers}) == 2
     assert db.get(models.Product, ctx["product"]["id"]).stock == 7
     assert db.query(models.Order).filter(models.Order.id.in_(order_ids)).count() == 2
+
+
+def test_paid_fnb_order_reuses_receipt_history_and_cash_shift(client):
+    ctx, headers, session = sent_session(client, 1)
+    opened = client.post(
+        f"/api/shifts/{ctx['shop_id']}/open",
+        json={"opening_cash_amount": 50_000, "note": "Đầu ca F&B"},
+        headers=headers,
+    )
+    assert opened.status_code == 200, opened.text
+    primary = client.get(
+        f"/api/fnb/sessions/{session['id']}/checks", headers=headers
+    ).json()["checks"][0]
+    paid = client.post(
+        f"/api/fnb/checks/{primary['id']}/pay",
+        json={
+            "payment_method": "cash",
+            "expected_revision": primary["revision"],
+            "expected_session_revision": session["revision"],
+            "operation_id": op("receipt-shift"),
+        },
+        headers=headers,
+    )
+    assert paid.status_code == 200, paid.text
+    order_id = paid.json()["order"]["id"]
+
+    detail = client.get(f"/api/orders/{order_id}/detail", headers=headers).json()
+    assert detail["fnb_table_names"] == ["Bàn 1"]
+    assert detail["fnb_check_label"] == "Bill chính"
+
+    history = client.get(
+        f"/api/orders/{ctx['shop_id']}/history",
+        params={"q": "Bàn 1"},
+        headers=headers,
+    )
+    assert history.status_code == 200, history.text
+    assert history.json()["orders"][0]["id"] == order_id
+    assert history.json()["orders"][0]["fnb_table_names"] == ["Bàn 1"]
+
+    shift = client.get(
+        f"/api/shifts/current/{ctx['shop_id']}", headers=headers
+    ).json()["shift"]
+    assert shift["cash_payment_in_amount"] == 100_000
+    assert shift["expected_cash_amount"] == 150_000

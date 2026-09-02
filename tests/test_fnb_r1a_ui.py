@@ -48,7 +48,7 @@ def test_fnb_page_and_assets_are_wired(client):
         assert f'id="{element_id}"' in html
     assert "/css/fnb-r1a.css?" in html
     assert "/js/locales/fnb.js?" in html
-    assert "/js/fnb-r1a.js?v=20260902-r1c2" in html
+    assert "/js/fnb-r1a.js?v=20260902-r1d" in html
     assert client.get("/fnb.html", follow_redirects=False).headers["location"] == "/fnb"
     api_source = (ROOT / "static/js/api.js").read_text(encoding="utf-8")
     assert "error.detail =" in api_source
@@ -85,6 +85,15 @@ def test_pos_entry_is_hidden_until_shop_capability_is_known():
     assert "function updateFnbCapability()" in source
     assert "localStorage.setItem('currentShopId'" in source
     assert "navigateToPage('/fnb')" in source
+
+
+def test_final_fnb_receipt_reuses_pos_receipt_route():
+    fnb_source = (ROOT / "static/js/fnb-r1a.js").read_text(encoding="utf-8")
+    pos_source = (ROOT / "static/js/pos.js").read_text(encoding="utf-8")
+    assert "['PAID', 'DEBT'].includes(check.status)" in fnb_source
+    assert "`/pos?receipt=${Number(check.order_id)}`" in fnb_source
+    assert "query.get('receipt')" in pos_source
+    assert "hienHoaDon(receiptId, null, true)" in pos_source
 
 
 def test_owner_edit_switch_and_bilingual_contracts():

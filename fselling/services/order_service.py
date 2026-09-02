@@ -1696,6 +1696,25 @@ def list_sales_history(
     if query_text:
         escaped = _escape_like(query_text)
         matches = [models.Customer.name.ilike(f"%{escaped}%", escape="\\")]
+        matches.append(
+            db.query(models.FnbServiceCheck.id)
+            .outerjoin(
+                models.FnbSessionTable,
+                models.FnbSessionTable.session_id == models.FnbServiceCheck.session_id,
+            )
+            .outerjoin(
+                models.FnbTable,
+                models.FnbTable.id == models.FnbSessionTable.table_id,
+            )
+            .filter(
+                models.FnbServiceCheck.order_id == models.Order.id,
+                or_(
+                    models.FnbServiceCheck.label.ilike(f"%{escaped}%", escape="\\"),
+                    models.FnbTable.name.ilike(f"%{escaped}%", escape="\\"),
+                ),
+            )
+            .exists()
+        )
         phone_digits = "".join(ch for ch in query_text if ch.isdigit())
         if phone_digits:
             normalized_phone = models.Customer.phone
@@ -1720,6 +1739,7 @@ def list_sales_history(
     )
     has_more = len(rows) > HISTORY_PAGE_SIZE
     rows = rows[:HISTORY_PAGE_SIZE]
+    fnb_contexts = _fnb_receipt_contexts(db, [row.id for row in rows])
     return {
         "orders": [{
             "id": row.id,
@@ -1731,12 +1751,41 @@ def list_sales_history(
             "customer_phone_masked": _mask_customer_phone(
                 row.customer.phone if row.customer else None
             ),
+            **fnb_contexts.get(row.id, {"fnb_table_names": [], "fnb_check_label": None}),
         } for row in rows],
         "page": page,
         "per_page": HISTORY_PAGE_SIZE,
         "has_more": has_more,
         "searching_all_history": bool(query_text),
     }
+
+
+def _fnb_receipt_contexts(db: Session, order_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    if not order_ids:
+        return {}
+    rows = (
+        db.query(
+            models.FnbServiceCheck.order_id,
+            models.FnbServiceCheck.label,
+            models.FnbTable.name,
+        )
+        .outerjoin(
+            models.FnbSessionTable,
+            models.FnbSessionTable.session_id == models.FnbServiceCheck.session_id,
+        )
+        .outerjoin(models.FnbTable, models.FnbTable.id == models.FnbSessionTable.table_id)
+        .filter(models.FnbServiceCheck.order_id.in_(order_ids))
+        .order_by(models.FnbSessionTable.id)
+        .all()
+    )
+    result: Dict[int, Dict[str, Any]] = {}
+    for order_id, label, table_name in rows:
+        context = result.setdefault(
+            int(order_id), {"fnb_table_names": [], "fnb_check_label": label}
+        )
+        if table_name and table_name not in context["fnb_table_names"]:
+            context["fnb_table_names"].append(table_name)
+    return result
 
 
 def get_order_detail(db: Session, current_user: models.User, order_id: int) -> Dict[str, Any]:
@@ -1800,6 +1849,9 @@ def get_order_detail(db: Session, current_user: models.User, order_id: int) -> D
         ),
         "total_amount": order.total_amount,
         "customer": customer,
+        **_fnb_receipt_contexts(db, [order.id]).get(
+            order.id, {"fnb_table_names": [], "fnb_check_label": None}
+        ),
         "subtotal": sum((i.price or 0) * (i.quantity or 0) for i in items),
         "items": [
             {
