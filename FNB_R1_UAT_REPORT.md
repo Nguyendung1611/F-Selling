@@ -1,8 +1,8 @@
 # F&B R1 Exit Gate / UAT
 
 Ngày kiểm tra: 2026-09-02  
-Baseline: `9a9ab7a` (`Complete F&B final receipt integration R1D`)  
-Kết luận hiện tại: **READY FOR FULL REPO GATE**
+Baseline: `0cb1d67` (`Complete F&B R1 exit gate`)
+Kết luận hiện tại: **PASS**
 
 ## Kết quả chính
 
@@ -61,12 +61,15 @@ Các test khóa rủi ro tiền/tồn/quyền nằm tại:
   tin cậy. Kiểm tra 320px (khắt khe hơn về chiều ngang) đã pass; nên kiểm tra
   thủ công Ctrl+`+` trước deploy.
 
-## Gate còn lại
+## Manual UAT - ca hoàn chỉnh
 
-Chạy full repo gate và chỉ commit nếu script kết thúc 100% với exit code 0:
-
-```powershell
-cd "C:\Users\nguye\OneDrive\Desktop\FSellingV2\F-Selling-main\F-Selling-main\F-Selling-master-main\python_app"
-.\test-commit.ps1 "Complete F&B R1 exit gate"
-```
-
+- Dùng ca local #2 đang mở; không tạo hoặc kết ca đang được dùng.
+- Bàn 02 gọi ba món đại diện KITCHEN/BAR/DIRECT, tổng 153.000đ; gửi món,
+  Bếp và Bar nhận làm rồi hoàn tất; hàng đợi trở về trống.
+- Tách thành Bill chính 68.000đ và `Khách 2` 85.000đ; thanh toán tiền mặt độc
+  lập, tạo order #96 và #97 trạng thái `PAID`.
+- Hai hóa đơn cuối giữ đúng bàn, tên bill, món và tổng tiền; Bàn 02 trở về
+  `Trống`; tồn ba món giảm đúng mỗi món một đơn vị.
+- Ledger ca #2 nhận đúng hai `CASH_TOPUP` tổng 153.000đ. Tiền theo sổ là
+  1.208.000đ = đầu ca 1.000.000đ + đơn cũ #95 55.000đ + UAT 153.000đ.
+- Console F&B, hóa đơn và POS không có warning/error.
