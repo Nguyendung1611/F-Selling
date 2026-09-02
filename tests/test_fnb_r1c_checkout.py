@@ -2,6 +2,7 @@ import uuid
 
 from conftest import auth
 from fselling import models
+from fselling.services import loyalty_service
 
 from test_fnb_r1c_checks import op, sent_session
 
@@ -251,3 +252,114 @@ def test_paid_fnb_order_reuses_receipt_history_and_cash_shift(client):
     ).json()["shift"]
     assert shift["cash_payment_in_amount"] == 100_000
     assert shift["expected_cash_amount"] == 150_000
+
+
+def test_fnb_checkout_reuses_voucher_and_loyalty_contract_once(client, db):
+    ctx, headers, session = sent_session(client, 2)
+    program = client.put(
+        f"/api/loyalty/{ctx['shop_id']}",
+        json={
+            "enabled": True,
+            "earn_amount": 1_000_000,
+            "earn_points": 1,
+            "redeem_points": 1,
+            "redeem_amount": 1_000,
+            "min_redeem_points": 1,
+            "max_redeem_percent": 100,
+            "expiry_days": None,
+        },
+        headers=headers,
+    )
+    assert program.status_code == 200, program.text
+    customer = client.post(
+        f"/api/customers/{ctx['shop_id']}",
+        json={"name": "Khách F&B", "phone": f"09{uuid.uuid4().int % 10**8:08d}"},
+        headers=headers,
+    ).json()
+    loyalty_service.add_entry(
+        db,
+        ctx["shop_id"],
+        customer["id"],
+        loyalty_service.ENTRY_EARN,
+        10,
+        op("seed-points"),
+        created_by_user_id=None,
+    )
+    db.commit()
+    voucher_code = f"FNB{uuid.uuid4().hex[:8].upper()}"
+    voucher = client.post(
+        "/api/vouchers",
+        params={"shop_id": ctx["shop_id"]},
+        json={
+            "code": voucher_code,
+            "discount_type": "flat",
+            "discount_value": 10_000,
+            "min_order_value": 0,
+            "usage_limit": 1,
+            "expires_at": None,
+        },
+        headers=headers,
+    )
+    assert voucher.status_code == 200, voucher.text
+
+    primary = client.get(
+        f"/api/fnb/sessions/{session['id']}/checks", headers=headers
+    ).json()["checks"][0]
+    adjusted = client.patch(
+        f"/api/fnb/checks/{primary['id']}/adjustments",
+        json={
+            "discount_kind": "FLAT",
+            "discount_value": 10_000,
+            "service_charge_kind": "FLAT",
+            "service_charge_value": 5_000,
+            "expected_revision": primary["revision"],
+            "expected_session_revision": session["revision"],
+            "operation_id": op("manual-adjustment"),
+        },
+        headers=headers,
+    )
+    assert adjusted.status_code == 200, adjusted.text
+    primary = adjusted.json()["checks"][0]
+    payload = {
+        "payment_method": "cash",
+        "customer_id": customer["id"],
+        "voucher_code": voucher_code,
+        "loyalty_points_to_use": 1,
+        "cash_tendered_vnd": 200_000,
+        "expected_revision": primary["revision"],
+        "expected_session_revision": adjusted.json()["session_revision"],
+        "operation_id": op("voucher-points-pay"),
+    }
+    paid = client.post(
+        f"/api/fnb/checks/{primary['id']}/pay", json=payload, headers=headers
+    )
+    assert paid.status_code == 200, paid.text
+    result = paid.json()
+    assert result["check"]["total_vnd"] == 184_000
+    assert result["order"]["total_vnd"] == 184_000
+    assert result["order"]["cash_change_vnd"] == 16_000
+
+    retry = client.post(
+        f"/api/fnb/checks/{primary['id']}/pay", json=payload, headers=headers
+    )
+    assert retry.status_code == 200
+    assert retry.json() == result
+    db.expire_all()
+    order = db.get(models.Order, result["order"]["id"])
+    assert order.voucher_code == voucher_code
+    assert order.discount_amount == 20_000
+    assert order.loyalty_points_redeemed == 1
+    assert order.loyalty_discount_amount == 1_000
+    assert db.get(models.Voucher, voucher.json()["id"]).usage_count == 1
+    assert all(
+        item.cost_known_qty + item.cost_unknown_qty == item.quantity
+        and item.price * item.quantity
+        - item.discount_vnd
+        - item.loyalty_discount_vnd
+        == item.net_amount_vnd
+        for item in order.items
+    )
+    assert sum(item.net_amount_vnd for item in order.items) == 184_000
+    assert loyalty_service.balance_for_customer(
+        db, customer["id"], shop_id=ctx["shop_id"]
+    ) == 9

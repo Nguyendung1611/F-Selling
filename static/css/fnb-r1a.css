@@ -207,7 +207,7 @@ body.fnb-page {
 .fnb-pay-form fieldset input { width: 20px; height: 20px; }
 .fnb-pay-form > label { display: grid; gap: 5px; }
 .fnb-pay-form > label[hidden] { display: none; }
-.fnb-pay-actions { display: grid; grid-template-columns: 1fr 1.25fr; gap: 8px; align-items: end; }
+.fnb-pay-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1.25fr; gap: 8px; align-items: end; }
 .fnb-close-table { width: 100%; min-height: 50px; margin-top: 12px; background: var(--fnb-ink); }
 .fnb-payment-result { margin-top: 14px; padding: 12px; text-align: center; background: #fff7ed; border: 1px solid #fdba74; border-radius: 9px; }
 .fnb-payment-result img { display: block; width: min(220px, 100%); margin: 10px auto 0; }

@@ -59,7 +59,14 @@ from ..schemas.fnb import (
     FnbTableUpdate,
     FnbTicketTransition,
 )
-from . import inventory_service, loyalty_service, order_service, payment_service, qr_sales_service
+from . import (
+    inventory_service,
+    loyalty_service,
+    order_service,
+    payment_service,
+    qr_sales_service,
+    voucher_service,
+)
 
 _ACTIVE_SESSION_STATUSES = ("OPEN", "PARTIALLY_SETTLED", "PAYMENT_PENDING")
 
@@ -951,6 +958,15 @@ def _recalculate_check(db: Session, check: models.FnbServiceCheck) -> None:
 
 def _serialize_check(db: Session, check: models.FnbServiceCheck) -> dict:
     _recalculate_check(db, check)
+    discount_vnd = int(check.discount_vnd or 0)
+    total_vnd = int(check.total_vnd or 0)
+    if check.order_id is not None:
+        order = db.get(models.Order, check.order_id)
+        if order is not None:
+            discount_vnd = int(order.discount_amount or 0) + int(
+                order.loyalty_discount_amount or 0
+            )
+            total_vnd = int(order.total_amount or 0)
     rows = (
         db.query(models.FnbCheckLine, models.FnbSessionLine)
         .join(
@@ -973,9 +989,9 @@ def _serialize_check(db: Session, check: models.FnbServiceCheck) -> dict:
         "service_charge_kind": check.service_charge_kind,
         "service_charge_value": int(check.service_charge_value or 0),
         "subtotal_vnd": int(check.subtotal_vnd or 0),
-        "discount_vnd": int(check.discount_vnd or 0),
+        "discount_vnd": discount_vnd,
         "service_charge_vnd": int(check.service_charge_vnd or 0),
-        "total_vnd": int(check.total_vnd or 0),
+        "total_vnd": total_vnd,
         "lines": [
             {
                 "id": row.id,
@@ -1501,7 +1517,40 @@ def pay_check(
         if not check_lines:
             raise fnb_error(409, "FNB_CHECK_EMPTY", "Bill chưa có món để thanh toán")
         customer = _checkout_customer(db, shop_id, request.customer_id)
-        total = int(check.total_vnd or 0)
+        manual_discount = int(check.discount_vnd or 0)
+        service_charge = int(check.service_charge_vnd or 0)
+        before_promotions = int(check.total_vnd or 0)
+        voucher_code = (request.voucher_code or "").strip().upper() or None
+        applied_voucher, voucher_discount = voucher_service.resolve_for_order(
+            db, shop_id, voucher_code, before_promotions
+        )
+        amount_after_voucher = max(before_promotions - voucher_discount, 0)
+        program = loyalty_service.get_program_model(db, shop_id)
+        loyalty_event_at = datetime.datetime.utcnow()
+        loyalty_points = 0
+        loyalty_discount = 0
+        if request.loyalty_points_to_use > 0:
+            if customer is None:
+                raise fnb_error(
+                    400,
+                    "FNB_LOYALTY_CUSTOMER_REQUIRED",
+                    "Phải chọn khách hàng trước khi dùng điểm",
+                )
+            balance = loyalty_service.balance_for_customer(
+                db,
+                customer.id,
+                as_of=loyalty_event_at,
+                shop_id=shop_id,
+            )
+            redeemed = loyalty_service.calculate_redeem(
+                program,
+                balance,
+                int(request.loyalty_points_to_use),
+                amount_after_voucher,
+            )
+            loyalty_points = int(redeemed["applied_points"])
+            loyalty_discount = int(redeemed["discount"])
+        total = checked_vnd(max(amount_after_voucher - loyalty_discount, 0))
         if request.payment_method == order_service.PAYMENT_METHOD_TRANSFER:
             payment_service.require_transfer_account(shop)
         if request.payment_method == order_service.PAYMENT_METHOD_DEBT:
@@ -1525,7 +1574,6 @@ def pay_check(
                 required_for_cashier=True,
                 lock_for_cash_write=True,
             )
-        program = loyalty_service.get_program_model(db, shop_id)
         paid_now = total == 0 or request.payment_method == order_service.PAYMENT_METHOD_CASH
         status = (
             order_service.STATUS_PAID
@@ -1543,19 +1591,41 @@ def pay_check(
             operation_id=f"fnb:{hashlib.sha256(request.operation_id.encode()).hexdigest()}",
             operation_fingerprint=fingerprint,
             total_amount=total,
-            discount_amount=int(check.discount_vnd or 0),
+            discount_amount=manual_discount + voucher_discount,
+            loyalty_points_redeemed=loyalty_points,
+            loyalty_discount_amount=loyalty_discount,
             payment_method=request.payment_method,
             customer_id=customer.id if customer else None,
+            voucher_code=voucher_code,
             status=status,
             cash_paid_amount=(total if paid_now and total > 0 else 0),
             cash_tendered_amount=(tendered if request.payment_method == "cash" else None),
             cash_change_amount=(tendered - total if request.payment_method == "cash" else None),
-            loyalty_earn_amount_step=(program.earn_amount if program and program.enabled else None),
-            loyalty_earn_points_step=(program.earn_points if program and program.enabled else None),
-            loyalty_expiry_days_snapshot=(program.expiry_days if program and program.enabled else None),
+            loyalty_earn_amount_step=(
+                program.earn_amount if customer and program and program.enabled else None
+            ),
+            loyalty_earn_points_step=(
+                program.earn_points if customer and program and program.enabled else None
+            ),
+            loyalty_expiry_days_snapshot=(
+                program.expiry_days if customer and program and program.enabled else None
+            ),
         )
         db.add(order)
         db.flush()
+        if loyalty_points > 0:
+            loyalty_service.add_entry(
+                db,
+                shop_id,
+                customer.id,
+                loyalty_service.ENTRY_REDEEM,
+                -loyalty_points,
+                f"redeem:order:{order.id}",
+                order_id=order.id,
+                created_by_user_id=current_user.id,
+                note=f"Giữ điểm để dùng cho đơn #{order.id}",
+                created_at=loyalty_event_at,
+            )
         created: list[tuple[models.OrderItem, int]] = []
         for check_line, line in check_lines:
             gross = checked_multiply(int(check_line.quantity), int(line.unit_price_vnd))
@@ -1571,31 +1641,43 @@ def pay_check(
             db.flush()
             _transfer_line_provenance(db, check, check_line, order_item)
             created.append((order_item, gross))
+        if service_charge > 0:
+            charge_item = models.OrderItem(
+                order_id=order.id,
+                product_id=None,
+                product_name="Phụ thu",
+                price=service_charge,
+                quantity=1,
+                cost_known_qty=1,
+                cost_unknown_qty=0,
+                cost_basis_vnd=0,
+            )
+            db.add(charge_item)
+            db.flush()
+            created.append((charge_item, service_charge))
         discounts = dict(
             largest_remainder_allocate(
-                int(check.discount_vnd or 0),
+                manual_discount + voucher_discount,
                 [(item.id, gross, item.id) for item, gross in created],
             )
         )
+        after_discount = [
+            (item.id, gross - discounts[item.id], item.id)
+            for item, gross in created
+        ]
+        loyalty_discounts = dict(
+            largest_remainder_allocate(loyalty_discount, after_discount)
+        )
         for item, gross in created:
             item.discount_vnd = discounts[item.id]
-            item.net_amount_vnd = gross - item.discount_vnd
-        if int(check.service_charge_vnd or 0) > 0:
-            db.add(
-                models.OrderItem(
-                    order_id=order.id,
-                    product_id=None,
-                    product_name="Phụ thu",
-                    price=int(check.service_charge_vnd),
-                    quantity=1,
-                    net_amount_vnd=int(check.service_charge_vnd),
-                    cost_known_qty=0,
-                    cost_unknown_qty=0,
-                    cost_basis_vnd=0,
-                )
+            item.loyalty_discount_vnd = loyalty_discounts[item.id]
+            item.net_amount_vnd = (
+                gross - item.discount_vnd - item.loyalty_discount_vnd
             )
-        if sum(int(item.net_amount_vnd or 0) for item, _ in created) + int(check.service_charge_vnd or 0) != total:
+        if sum(int(item.net_amount_vnd or 0) for item, _ in created) != total:
             raise fnb_error(409, "FNB_ORDER_TOTAL_MISMATCH", "Tổng chứng từ không khớp bill")
+        if applied_voucher is not None:
+            applied_voucher.usage_count = int(applied_voucher.usage_count or 0) + 1
         if request.payment_method == order_service.PAYMENT_METHOD_CASH and total > 0:
             db.add(
                 models.OrderPayment(

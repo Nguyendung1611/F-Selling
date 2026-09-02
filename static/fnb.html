@@ -130,7 +130,9 @@
                 <label><input type="radio" name="fnbPaymentMethod" value="debt"><span data-i18n="fnb.checkout.debt">Ghi nợ</span></label>
             </fieldset>
             <label id="fnbCashTenderedField" for="fnbCashTendered"><span data-i18n="fnb.checkout.cash_tendered">Tiền khách đưa</span><input id="fnbCashTendered" type="number" min="0" inputmode="numeric"></label>
-            <label id="fnbCustomerField" for="fnbCustomer" hidden><span data-i18n="fnb.checkout.customer">Khách ghi nợ</span><select id="fnbCustomer"></select></label>
+            <label id="fnbCustomerField" for="fnbCustomer"><span data-i18n="fnb.checkout.customer">Khách hàng (nếu dùng điểm hoặc ghi nợ)</span><select id="fnbCustomer"></select></label>
+            <label for="fnbVoucherCode"><span data-i18n="fnb.checkout.voucher">Mã giảm giá</span><input id="fnbVoucherCode" maxlength="100" autocomplete="off" data-i18n-placeholder="fnb.checkout.voucher_placeholder" placeholder="Nếu có"></label>
+            <label for="fnbLoyaltyPoints"><span data-i18n="fnb.checkout.loyalty_points">Điểm muốn dùng</span><input id="fnbLoyaltyPoints" type="number" min="0" value="0" inputmode="numeric"></label>
             <div class="fnb-pay-actions">
                 <button id="fnbPrintProvisional" type="button" class="fnb-secondary" data-i18n="fnb.checkout.provisional">In tạm tính</button>
                 <button id="fnbPayButton" type="submit" data-i18n="fnb.checkout.pay">Xác nhận thanh toán</button>
@@ -197,10 +199,10 @@
     <div id="toast" role="status" aria-live="polite"></div>
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260901-fnb-r1b"></script>
-    <script src="/js/locales/fnb.js?v=20260902-r1d"></script>
+    <script src="/js/locales/fnb.js?v=20260902-r1e"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260901-fnb-r1a&amp;g=20260813-i09-g2h2"></script>
-    <script src="/js/fnb-r1a.js?v=20260902-r1d"></script>
+    <script src="/js/fnb-r1a.js?v=20260902-r1e2"></script>
     <script src="/js/pwa.js?v=20260806-pwa"></script>
 </body>
 </html>

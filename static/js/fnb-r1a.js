@@ -120,6 +120,8 @@
                     state.floorRevision = Number(result.fnb_revision);
                     deps.render({ type: 'floor', value: result });
                     await refreshOpenSessionFromFloor();
+                } else {
+                    deps.render({ type: 'floor-synced' });
                 }
             } catch (error) {
                 if (!state.disposed && epoch === state.requestEpoch && shopId === state.shopId) {
@@ -576,7 +578,8 @@
             'fnbSplitButton', 'fnbAdjustmentPanel', 'fnbAdjustmentForm', 'fnbDiscountKind',
             'fnbDiscountValue', 'fnbServiceKind', 'fnbServiceValue', 'fnbAdjustmentButton',
             'fnbPayForm', 'fnbCashTenderedField', 'fnbCashTendered', 'fnbCustomerField',
-            'fnbCustomer', 'fnbPayButton', 'fnbPrintProvisional', 'fnbClosePaidSession',
+            'fnbCustomer', 'fnbVoucherCode', 'fnbLoyaltyPoints', 'fnbPayButton',
+            'fnbPrintProvisional', 'fnbClosePaidSession',
             'fnbReceiptPrint'
         ].map(id => [id, document.getElementById(id)]));
         let shops = [];
@@ -801,6 +804,10 @@
                 skeletons();
             } else if (event.type === 'floor') {
                 renderFloor(event.value);
+            } else if (event.type === 'floor-synced') {
+                elements.fnbRetry.hidden = true;
+                elements.fnbRefreshNote.hidden = true;
+                live('');
             } else if (event.type === 'floor-error') {
                 if (Number(event.error?.status) === 403) {
                     controller.dispose();
@@ -914,7 +921,6 @@
         function togglePaymentFields() {
             const method = paymentMethod();
             elements.fnbCashTenderedField.hidden = method !== 'cash';
-            elements.fnbCustomerField.hidden = method !== 'debt';
         }
 
         async function printProvisionalReceipt() {
@@ -1102,12 +1108,17 @@
             if (!check || !navigator.onLine) return checkoutStatus(t('fnb.checkout.offline'));
             const method = paymentMethod();
             const values = { payment_method: method };
+            const customerId = Number(elements.fnbCustomer.value) || null;
+            const voucherCode = elements.fnbVoucherCode.value.trim();
+            const loyaltyPoints = Number(elements.fnbLoyaltyPoints.value) || 0;
             if (method === 'cash' && elements.fnbCashTendered.value !== '') {
                 values.cash_tendered_vnd = Number(elements.fnbCashTendered.value);
             }
-            if (method === 'debt') {
-                values.customer_id = Number(elements.fnbCustomer.value) || null;
-                if (!values.customer_id) return checkoutStatus(t('fnb.checkout.customer_required'));
+            if (customerId) values.customer_id = customerId;
+            if (voucherCode) values.voucher_code = voucherCode;
+            if (loyaltyPoints > 0) values.loyalty_points_to_use = loyaltyPoints;
+            if ((method === 'debt' || loyaltyPoints > 0) && !customerId) {
+                return checkoutStatus(t('fnb.checkout.customer_required'));
             }
             controller.payCheck(check.id, values).catch(error => checkoutStatus(error.message));
         });

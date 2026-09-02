@@ -42,13 +42,18 @@ def test_fnb_page_and_assets_are_wired(client):
         "fnbCheckoutOpen",
         "fnbCheckoutDialog",
         "fnbCheckList",
+        "fnbVoucherCode",
+        "fnbLoyaltyPoints",
         "fnbPayButton",
         "fnbClosePaidSession",
     ):
         assert f'id="{element_id}"' in html
     assert "/css/fnb-r1a.css?" in html
     assert "/js/locales/fnb.js?" in html
-    assert "/js/fnb-r1a.js?v=20260902-r1d" in html
+    assert "/js/fnb-r1a.js?v=20260902-r1e2" in html
+    source = (ROOT / "static/js/fnb-r1a.js").read_text(encoding="utf-8")
+    assert "values.voucher_code = voucherCode" in source
+    assert "values.loyalty_points_to_use = loyaltyPoints" in source
     assert client.get("/fnb.html", follow_redirects=False).headers["location"] == "/fnb"
     api_source = (ROOT / "static/js/api.js").read_text(encoding="utf-8")
     assert "error.detail =" in api_source

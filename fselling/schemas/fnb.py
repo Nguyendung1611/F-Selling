@@ -173,6 +173,8 @@ class FnbCheckAdjustments(FnbRequest):
 class FnbCheckPay(FnbRequest):
     payment_method: Literal["cash", "transfer", "debt"]
     customer_id: Optional[int] = None
+    voucher_code: Optional[str] = Field(default=None, max_length=100)
+    loyalty_points_to_use: int = Field(default=0, ge=0, le=MAX_SAFE_QUANTITY)
     cash_tendered_vnd: Optional[ExactVND] = Field(default=None, ge=0, le=MAX_SAFE_VND)
     expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
     expected_session_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)

@@ -101,6 +101,7 @@ async function testPollingAndLifecycle() {
     await controller.loadFloor(false);
     assert.match(endpoints[1], /after_revision=4/);
     assert.equal(deps.renders.filter(event => event.type === 'floor').length, floorRenders);
+    assert.equal(deps.renders.at(-1).type, 'floor-synced');
     assert.equal(deps.timers.at(-1).delay, 2_000);
     controller.dispose();
     assert.ok(deps.cleared.length > 0);
