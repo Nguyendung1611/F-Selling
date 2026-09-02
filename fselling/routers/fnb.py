@@ -6,6 +6,10 @@ from ..dependencies import get_current_user, get_db
 from ..schemas.fnb import (
     FnbAreaCreate,
     FnbAreaUpdate,
+    FnbCheckAdjustments,
+    FnbCheckPay,
+    FnbCheckSplit,
+    FnbCheckSplitPreview,
     FnbLineCancel,
     FnbLineCreate,
     FnbLineUpdate,
@@ -14,6 +18,7 @@ from ..schemas.fnb import (
     FnbManagerPinSet,
     FnbMoveTable,
     FnbSessionCancel,
+    FnbSessionClose,
     FnbSessionOpen,
     FnbSessionSend,
     FnbSettingsUpdate,
@@ -133,6 +138,74 @@ def get_session(
     current_user: models.User = Depends(get_current_user),
 ):
     return fnb_service.get_session(db, current_user, session_id)
+
+
+@router.get("/sessions/{session_id}/checks")
+def get_checks(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.get_checks(db, current_user, session_id)
+
+
+@router.post("/checks/{check_id}/split-preview")
+def post_split_preview(
+    check_id: int,
+    request: FnbCheckSplitPreview,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.preview_split(db, current_user, check_id, request)
+
+
+@router.post("/checks/{check_id}/split")
+def post_split(
+    check_id: int,
+    request: FnbCheckSplit,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.split_check(db, current_user, check_id, request)
+
+
+@router.patch("/checks/{check_id}/adjustments")
+def patch_check_adjustments(
+    check_id: int,
+    request: FnbCheckAdjustments,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.update_check_adjustments(db, current_user, check_id, request)
+
+
+@router.get("/checks/{check_id}/provisional-receipt")
+def get_provisional_receipt(
+    check_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.get_provisional_receipt(db, current_user, check_id)
+
+
+@router.post("/checks/{check_id}/pay")
+def post_check_pay(
+    check_id: int,
+    request: FnbCheckPay,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.pay_check(db, current_user, check_id, request)
+
+
+@router.post("/sessions/{session_id}/close")
+def post_session_close(
+    session_id: int,
+    request: FnbSessionClose,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    return fnb_service.close_session(db, current_user, session_id, request)
 
 
 @router.post("/sessions/{session_id}/lines")

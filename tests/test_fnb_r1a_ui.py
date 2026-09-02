@@ -39,11 +39,16 @@ def test_fnb_page_and_assets_are_wired(client):
         "fnbLiveStatus",
         "fnbSetupOpen",
         "fnbSetupDialog",
+        "fnbCheckoutOpen",
+        "fnbCheckoutDialog",
+        "fnbCheckList",
+        "fnbPayButton",
+        "fnbClosePaidSession",
     ):
         assert f'id="{element_id}"' in html
     assert "/css/fnb-r1a.css?" in html
     assert "/js/locales/fnb.js?" in html
-    assert "/js/fnb-r1a.js?v=20260901-r1b2" in html
+    assert "/js/fnb-r1a.js?v=20260902-r1c2" in html
     assert client.get("/fnb.html", follow_redirects=False).headers["location"] == "/fnb"
     api_source = (ROOT / "static/js/api.js").read_text(encoding="utf-8")
     assert "error.detail =" in api_source
@@ -106,6 +111,11 @@ def test_owner_edit_switch_and_bilingual_contracts():
         "fnb.setup.open",
         "fnb.setup.inactive",
         "fnb.auth.feature_disabled",
+        "fnb.checkout.open",
+        "fnb.checkout.split",
+        "fnb.checkout.pay",
+        "fnb.checkout.close_table",
+        "fnb.checkout.offline",
     } <= vi_keys
 
     for path, keys in (

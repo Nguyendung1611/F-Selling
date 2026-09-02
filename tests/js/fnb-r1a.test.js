@@ -1,5 +1,8 @@
 const assert = require('node:assert/strict');
-const { createController, escapeHtml, partitionLines } = require('../../static/js/fnb-r1a.js');
+const {
+    createController, escapeHtml, partitionLines,
+    adjustmentValueForApi, adjustmentValueForForm,
+} = require('../../static/js/fnb-r1a.js');
 
 function floor(revision = 2) {
     return {
@@ -316,11 +319,53 @@ async function testSetupMutationsAndAccess() {
     }
 }
 
+async function testCheckoutUsesLatestCheckAndSessionRevisions() {
+    const calls = [];
+    const checks = {
+        shop_id: 1,
+        session_id: 30,
+        session_revision: 12,
+        checks: [{
+            id: 51, revision: 4, status: 'OPEN', is_primary: true,
+            lines: [{ line_id: 40, quantity: 2 }], total_vnd: 20000,
+        }],
+    };
+    const deps = makeDeps({
+        request: async (endpoint, method, body) => {
+            calls.push({ endpoint, method, body });
+            if (endpoint.startsWith('/fnb/floor')) return floor();
+            if (method === 'GET') return checks;
+            if (endpoint.endsWith('/pay')) {
+                return {
+                    session_revision: 14,
+                    session_status: 'PARTIALLY_SETTLED',
+                    check: { ...checks.checks[0], revision: 5, status: 'PAID' },
+                    order: { id: 90, status: 'PAID' },
+                };
+            }
+            return { ...checks, session_revision: 13 };
+        },
+    });
+    const controller = createController(deps);
+    await controller.selectShop(1);
+    controller.seedSession(session(12));
+    await controller.loadChecks();
+    await controller.splitCheck(51, [{ line_id: 40, quantity: 1 }], 'Khách 2');
+    assert.equal(calls.at(-2).endpoint, '/fnb/checks/51/split');
+    assert.equal(calls.at(-2).body.expected_revision, 4);
+    assert.equal(calls.at(-2).body.expected_session_revision, 12);
+    await controller.payCheck(51, { payment_method: 'cash', cash_tendered_vnd: 20000 });
+    assert.equal(calls.at(-2).endpoint, '/fnb/checks/51/pay');
+    assert.equal(calls.at(-2).body.expected_session_revision, 13);
+}
+
 assert.equal(
     escapeHtml('<img src=x onerror=alert(1)>'),
     '&lt;img src=x onerror=alert(1)&gt;',
 );
 assert.equal(escapeHtml(`&"'`), '&amp;&quot;&#39;');
+assert.equal(adjustmentValueForApi('PERCENT', 10), 1000);
+assert.equal(adjustmentValueForForm('PERCENT', 1000), 10);
 const buckets = partitionLines([
     { id: 1, unsent_quantity: 2, active_sent_quantity: 0 },
     { id: 2, unsent_quantity: 0, active_sent_quantity: 3 },
@@ -338,4 +383,5 @@ Promise.resolve()
     .then(testLatestRevisionBodies)
     .then(testStationUpdateUsesCurrentFloorRevision)
     .then(testSetupMutationsAndAccess)
+    .then(testCheckoutUsesLatestCheckAndSessionRevisions)
     .then(() => process.stdout.write('fnb-r1a controller ok\n'));

@@ -2,7 +2,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..core.numeric_limits import MAX_SAFE_QUANTITY
+from ..core.numeric_limits import MAX_SAFE_QUANTITY, MAX_SAFE_VND
+from .money import ExactVND
 
 OperationId = str
 
@@ -140,4 +141,44 @@ class FnbMergeTable(FnbRequest):
 class FnbSessionCancel(FnbRequest):
     expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
     reason: Optional[str] = Field(default=None, max_length=500)
+    operation_id: OperationId = Field(min_length=8, max_length=128)
+
+
+class FnbCheckLineSelection(FnbRequest):
+    line_id: int
+    quantity: int = Field(gt=0, le=MAX_SAFE_QUANTITY)
+
+
+class FnbCheckSplitPreview(FnbRequest):
+    lines: list[FnbCheckLineSelection] = Field(min_length=1)
+
+
+class FnbCheckSplit(FnbCheckSplitPreview):
+    label: str = Field(min_length=1, max_length=100)
+    expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    expected_session_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    operation_id: OperationId = Field(min_length=8, max_length=128)
+
+
+class FnbCheckAdjustments(FnbRequest):
+    discount_kind: Literal["NONE", "FLAT", "PERCENT"] = "NONE"
+    discount_value: int = Field(default=0, ge=0, le=MAX_SAFE_VND)
+    service_charge_kind: Literal["NONE", "FLAT", "PERCENT"] = "NONE"
+    service_charge_value: int = Field(default=0, ge=0, le=MAX_SAFE_VND)
+    expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    expected_session_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    operation_id: OperationId = Field(min_length=8, max_length=128)
+
+
+class FnbCheckPay(FnbRequest):
+    payment_method: Literal["cash", "transfer", "debt"]
+    customer_id: Optional[int] = None
+    cash_tendered_vnd: Optional[ExactVND] = Field(default=None, ge=0, le=MAX_SAFE_VND)
+    expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    expected_session_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
+    operation_id: OperationId = Field(min_length=8, max_length=128)
+
+
+class FnbSessionClose(FnbRequest):
+    expected_revision: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
     operation_id: OperationId = Field(min_length=8, max_length=128)

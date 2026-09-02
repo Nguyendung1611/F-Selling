@@ -50,6 +50,11 @@
       "down_revision": "0009_fnb_table_service_r1a",
       "path": "versions/0010_fnb_kitchen_stock_r1b.py",
       "sha256": "42a1683dfc73fbb6f286b52bdd7ba25e58fdf4f63ed9e24f9d6f2f4b35ba4502"
+    },
+    "0011_fnb_checkout_r1c": {
+      "down_revision": "0010_fnb_kitchen_stock_r1b",
+      "path": "versions/0011_fnb_checkout_r1c.py",
+      "sha256": "0a5d51ab2e6c57fb40a79a177c2d99626b639937ca511670cb09c41d0ba06498"
     }
   }
 }

@@ -29,6 +29,7 @@ I10A = "0007_i10a_qr_payment_domain"
 PO = "0008_purchase_orders"
 FNB = "0009_fnb_table_service_r1a"
 R1B = "0010_fnb_kitchen_stock_r1b"
+R1C = "0011_fnb_checkout_r1c"
 
 
 def _i05_module(coordinator: MigrationCoordinator):
@@ -153,15 +154,15 @@ def test_fresh_0001_0002_0003_and_i04_upgrade_are_linear(tmp_path):
     assert coordinator.init() == [ROOT]
     assert coordinator.upgrade(I04) == [I04]
     assert coordinator.status().current_revision == I04
-    assert coordinator.upgrade("head") == [I05, I09, I09C, I09E, I10A, PO, FNB, R1B]
+    assert coordinator.upgrade("head") == [I05, I09, I09C, I09E, I10A, PO, FNB, R1B, R1C]
     report = coordinator.verify()
-    assert report.current_revision == report.head_revision == R1B
-    assert report.revision_count == 10
+    assert report.current_revision == report.head_revision == R1C
+    assert report.revision_count == 11
     assert coordinator.upgrade("head") == []
 
     connection = _connect(database)
     try:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (R1B,)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (R1C,)
         assert connection.execute(
             "SELECT type FROM pragma_table_info('orders') WHERE name='total_vnd'"
         ).fetchone() == ("INTEGER",)
@@ -205,7 +206,7 @@ def test_exact_legacy_conversion_allocation_and_unknown_cost(tmp_path):
     finally:
         connection.close()
 
-    assert coordinator.upgrade() == [I05, I09, I09C, I09E, I10A, PO, FNB, R1B]
+    assert coordinator.upgrade() == [I05, I09, I09C, I09E, I10A, PO, FNB, R1B, R1C]
     coordinator.verify()
     connection = _connect(database)
     try:
@@ -251,7 +252,7 @@ def test_i04_tracked_ton_am_gap_migrates_with_exact_durable_evidence(
     finally:
         connection.close()
 
-    assert coordinator.upgrade() == [I05, I09, I09C, I09E, I10A, PO, FNB, R1B]
+    assert coordinator.upgrade() == [I05, I09, I09C, I09E, I10A, PO, FNB, R1B, R1C]
     coordinator.verify()
     connection = _connect(database)
     try:
@@ -617,7 +618,7 @@ def test_nonempty_positive_ledgers_backfill_and_required_triggers_are_durable(tm
         connection.close()
 
 
-    assert coordinator.upgrade() == [I05, I09, I09C, I09E, I10A, PO, FNB, R1B]
+    assert coordinator.upgrade() == [I05, I09, I09C, I09E, I10A, PO, FNB, R1B, R1C]
     coordinator.verify()
     connection = _connect(database)
     try:

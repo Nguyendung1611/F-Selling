@@ -203,3 +203,88 @@ class FnbManagerApproval(Base):
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+
+
+class FnbServiceCheck(Base):
+    __tablename__ = "fnb_service_checks"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('OPEN','PAYING','PAYMENT_PENDING','PAID','DEBT','CANCELLED')",
+            name="ck_fnb_checks_status",
+        ),
+        CheckConstraint(
+            "discount_kind IN ('NONE','FLAT','PERCENT') AND "
+            "service_charge_kind IN ('NONE','FLAT','PERCENT')",
+            name="ck_fnb_checks_adjustment_kinds",
+        ),
+        Index("ux_fnb_checks_order_id", "order_id", unique=True),
+        Index(
+            "ux_fnb_checks_primary_session",
+            "session_id",
+            unique=True,
+            sqlite_where="is_primary = 1",
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    session_id = Column(
+        Integer, ForeignKey("fnb_service_sessions.id"), nullable=False, index=True
+    )
+    label = Column(String(100), nullable=False)
+    is_primary = Column(Boolean, nullable=False, default=False)
+    status = Column(String(24), nullable=False, default="OPEN")
+    revision = Column(Integer, nullable=False, default=0)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
+    discount_kind = Column(String(16), nullable=False, default="NONE")
+    discount_value = Column(Integer, nullable=False, default=0)
+    service_charge_kind = Column(String(16), nullable=False, default="NONE")
+    service_charge_value = Column(Integer, nullable=False, default=0)
+    subtotal_vnd = Column(Integer, nullable=False, default=0)
+    discount_vnd = Column(Integer, nullable=False, default=0)
+    service_charge_vnd = Column(Integer, nullable=False, default=0)
+    total_vnd = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+    settled_at = Column(DateTime, nullable=True)
+
+
+class FnbCheckLine(Base):
+    __tablename__ = "fnb_check_lines"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_fnb_check_lines_quantity"),
+        Index(
+            "ux_fnb_check_line",
+            "check_id",
+            "session_line_id",
+            unique=True,
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    check_id = Column(Integer, ForeignKey("fnb_service_checks.id"), nullable=False)
+    session_line_id = Column(Integer, ForeignKey("fnb_session_lines.id"), nullable=False)
+    quantity = Column(Integer, nullable=False)
+
+
+class FnbAllocationTransfer(Base):
+    __tablename__ = "fnb_allocation_transfers"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_fnb_transfer_quantity"),
+        CheckConstraint(
+            "cost_known_qty >= 0 AND cost_unknown_qty >= 0 AND "
+            "cost_known_qty + cost_unknown_qty = quantity AND cost_basis_vnd >= 0",
+            name="ck_fnb_transfer_cost",
+        ),
+        Index(
+            "ux_fnb_transfer_allocation_order_item",
+            "allocation_id",
+            "order_item_id",
+            unique=True,
+        ),
+    )
+    id = Column(Integer, primary_key=True)
+    allocation_id = Column(Integer, ForeignKey("fnb_stock_allocations.id"), nullable=False)
+    check_id = Column(Integer, ForeignKey("fnb_service_checks.id"), nullable=False)
+    order_item_id = Column(Integer, ForeignKey("order_items.id"), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    cost_known_qty = Column(Integer, nullable=False, default=0)
+    cost_unknown_qty = Column(Integer, nullable=False, default=0)
+    cost_basis_vnd = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)

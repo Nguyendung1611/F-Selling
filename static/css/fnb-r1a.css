@@ -173,6 +173,46 @@ body.fnb-page {
 #fnbApprovalForm input, #fnbApprovalForm select { width: 100%; padding: 9px 10px; border: 1px solid var(--fnb-line); border-radius: 8px; }
 #fnbApprovalStatus { min-height: 22px; margin: 0; color: #9a3412; }
 
+#fnbCheckoutDialog { width: min(960px, calc(100vw - 24px)); max-height: 94dvh; padding: 22px; border: 1px solid var(--fnb-line); border-radius: 14px; color: var(--fnb-ink); background: #f8fafc; }
+#fnbCheckoutDialog::backdrop { background: rgb(15 23 42 / .62); }
+#fnbCheckoutDialog input:not([type="radio"]):not([type="checkbox"]), #fnbCheckoutDialog select { width: 100%; padding: 8px 10px; color: var(--fnb-ink); background: #fff; border: 1px solid var(--fnb-line); border-radius: 8px; }
+.fnb-checkout-status { min-height: 24px; margin: -8px 0 12px; color: #9a3412; font-weight: 700; }
+.fnb-checkout-layout { display: grid; grid-template-columns: minmax(190px, 240px) minmax(0, 1fr); gap: 14px; }
+.fnb-check-list { display: grid; gap: 9px; align-content: start; }
+.fnb-check-tab { min-height: 78px; padding: 11px 13px; display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; text-align: left; color: var(--fnb-ink); background: #fff; border: 1px solid var(--fnb-line); border-left: 5px solid #cbd5e1; }
+.fnb-check-tab small { grid-column: 1 / -1; color: var(--fnb-muted); }
+.fnb-check-tab.is-selected { border-left-color: #ea580c; box-shadow: 0 0 0 2px rgb(234 88 12 / .13); }
+.fnb-check-detail { min-height: 230px; padding: 18px; background: #fff; border: 1px solid var(--fnb-line); border-radius: 10px; box-shadow: 0 6px 20px rgb(15 23 42 / .05); }
+.fnb-receipt-head { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 2px dashed #cbd5e1; }
+.fnb-receipt-head span { color: #9a3412; font-size: .78rem; font-weight: 900; letter-spacing: .04em; }
+.fnb-receipt-lines { display: grid; gap: 10px; padding: 14px 0; border-bottom: 1px dashed #cbd5e1; }
+.fnb-receipt-lines > div, .fnb-check-totals > div, .fnb-receipt-print > div { display: flex; justify-content: space-between; gap: 12px; }
+.fnb-check-totals { display: grid; gap: 7px; margin: 12px 0 0; }
+.fnb-check-totals > div { align-items: baseline; }
+.fnb-check-totals dt, .fnb-check-totals dd { margin: 0; }
+.fnb-check-totals .is-total { padding-top: 10px; border-top: 2px solid var(--fnb-ink); font-size: 1.2rem; font-weight: 900; }
+.fnb-checkout-tools { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+.fnb-checkout-tools details { padding: 12px; background: #fff; border: 1px solid var(--fnb-line); border-radius: 9px; }
+.fnb-checkout-tools summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 850; }
+.fnb-checkout-tools form { display: grid; gap: 9px; margin-top: 10px; }
+.fnb-split-line { min-height: 48px; display: grid; grid-template-columns: auto 1fr 72px; gap: 9px; align-items: center; padding: 6px 0; }
+.fnb-split-line input[type="checkbox"] { width: 22px; height: 22px; }
+.fnb-adjustment-grid { grid-template-columns: 1fr 1fr; }
+.fnb-adjustment-grid label { display: grid; gap: 5px; }
+.fnb-adjustment-grid button { grid-column: 1 / -1; }
+.fnb-pay-form { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(180px, 1fr); gap: 12px; margin-top: 14px; padding: 14px; background: #fff; border: 1px solid var(--fnb-line); border-radius: 10px; }
+.fnb-pay-form fieldset { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 0; padding: 0; border: 0; }
+.fnb-pay-form legend { margin-bottom: 8px; font-weight: 850; }
+.fnb-pay-form fieldset label { min-height: 48px; display: flex; gap: 8px; align-items: center; padding: 9px 12px; border: 1px solid var(--fnb-line); border-radius: 8px; font-weight: 750; }
+.fnb-pay-form fieldset input { width: 20px; height: 20px; }
+.fnb-pay-form > label { display: grid; gap: 5px; }
+.fnb-pay-form > label[hidden] { display: none; }
+.fnb-pay-actions { display: grid; grid-template-columns: 1fr 1.25fr; gap: 8px; align-items: end; }
+.fnb-close-table { width: 100%; min-height: 50px; margin-top: 12px; background: var(--fnb-ink); }
+.fnb-payment-result { margin-top: 14px; padding: 12px; text-align: center; background: #fff7ed; border: 1px solid #fdba74; border-radius: 9px; }
+.fnb-payment-result img { display: block; width: min(220px, 100%); margin: 10px auto 0; }
+.fnb-receipt-print { color: #000; background: #fff; }
+
 #toast { display: none; position: fixed; z-index: 10000; right: 16px; bottom: 16px; max-width: min(420px, calc(100vw - 32px)); padding: 12px 16px; border-radius: 8px; background: var(--fnb-ink); color: #fff; }
 .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 
@@ -198,6 +238,11 @@ body.fnb-page {
     .fnb-station-row button { grid-column: 1 / -1; }
     .fnb-pin-form { grid-template-columns: 1fr; }
     .fnb-setup-row button, .fnb-setup-row small { grid-column: auto; }
+    #fnbCheckoutDialog { padding: 14px; }
+    .fnb-checkout-layout, .fnb-checkout-tools, .fnb-pay-form { grid-template-columns: 1fr; }
+    .fnb-check-list { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+    .fnb-pay-form fieldset { grid-template-columns: 1fr; }
+    .fnb-pay-actions { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 360px) {
@@ -206,8 +251,17 @@ body.fnb-page {
     .fnb-table-card { min-height: 126px; padding: 13px 10px; }
     .fnb-shop-field > span, .fnb-language-field > span:not(.sr-only) { display: none; }
     #fnbSetupDialog { padding: 14px; }
+    .fnb-check-totals .is-total { display: grid; grid-template-columns: 1fr; font-size: 1.05rem; }
+    .fnb-check-totals .is-total dd { text-align: right; }
 }
 
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
+@media print {
+    body > * { display: none !important; }
+    #fnbCheckoutDialog[open] { display: block !important; position: static; width: auto; max-height: none; padding: 0; border: 0; }
+    #fnbCheckoutDialog > * { display: none !important; }
+    #fnbReceiptPrint { display: grid !important; gap: 8px; font: 14px/1.45 system-ui, sans-serif; }
 }

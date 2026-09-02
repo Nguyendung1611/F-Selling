@@ -132,6 +132,7 @@ def test_fresh_root_to_head_and_restart_noop(tmp_path):
         "0008_purchase_orders",
         "0009_fnb_table_service_r1a",
         "0010_fnb_kitchen_stock_r1b",
+        "0011_fnb_checkout_r1c",
     ]
     report = coordinator.verify()
     assert report.current_revision == report.head_revision
@@ -210,7 +211,7 @@ def test_startup_verify_ignores_runtime_expiry_of_open_checkouts(tmp_path):
     report = verify_database_for_startup(
         database, inventory_provider=StaticInventory()
     )
-    assert report.current_revision == "0010_fnb_kitchen_stock_r1b"
+    assert report.current_revision == "0011_fnb_checkout_r1c"
     connection = sqlite3.connect(database)
     try:
         assert connection.execute(
@@ -339,6 +340,7 @@ def test_exact_legacy_9cf7106_adoption_requires_backup_then_upgrades(tmp_path):
         "0008_purchase_orders",
         "0009_fnb_table_service_r1a",
         "0010_fnb_kitchen_stock_r1b",
+        "0011_fnb_checkout_r1c",
     ]
     coordinator.verify()
 
@@ -454,7 +456,7 @@ def test_revision_campaign_and_attempt_state_are_independent(tmp_path):
     connection = sqlite3.connect(database)
     try:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == (
-            "0010_fnb_kitchen_stock_r1b"
+            "0011_fnb_checkout_r1c"
         )
         assert connection.execute(
             "SELECT phase, phase_version FROM fs_migration_campaigns WHERE campaign_key='i04-test'"
@@ -492,9 +494,10 @@ def test_linear_graph_and_checksum_manifest(tmp_path):
         "0007_i10a_qr_payment_domain",
         "0008_purchase_orders",
         "0009_fnb_table_service_r1a",
+        "0010_fnb_kitchen_stock_r1b",
     ]
     assert graph.root.revision == "0001_legacy_9cf7106_baseline"
-    assert graph.head.revision == "0010_fnb_kitchen_stock_r1b"
+    assert graph.head.revision == "0011_fnb_checkout_r1c"
 
     copied = _copy_graph(tmp_path)
     revision = copied / "migrations/versions/0002_i04_operational_tables.py"
@@ -604,6 +607,7 @@ def test_crash_after_commit_before_cli_response_reruns_noop(tmp_path):
         "0008_purchase_orders",
         "0009_fnb_table_service_r1a",
         "0010_fnb_kitchen_stock_r1b",
+        "0011_fnb_checkout_r1c",
     ]
     coordinator.verify()
 
@@ -837,6 +841,7 @@ def test_real_alembic_receives_external_transaction_and_owns_version(tmp_path, m
         "0008_purchase_orders",
         "0009_fnb_table_service_r1a",
         "0010_fnb_kitchen_stock_r1b",
+        "0011_fnb_checkout_r1c",
     ]
     assert all(item[1] == "Connection" and item[2] and item[3] for item in observed)
     source = (PROJECT_ROOT / "fselling/migration/coordinator.py").read_text(encoding="utf-8")
@@ -1312,6 +1317,7 @@ def test_request_id_spans_multi_revision_and_errors_are_digest_only(tmp_path):
         "0008_purchase_orders",
         "0009_fnb_table_service_r1a",
         "0010_fnb_kitchen_stock_r1b",
+        "0011_fnb_checkout_r1c",
     ]
     assert coordinator.upgrade(request_id="multi-revision-request") == []
 
@@ -1333,6 +1339,7 @@ def test_request_id_spans_multi_revision_and_errors_are_digest_only(tmp_path):
             ("0008_purchase_orders", "multi-revision-request", "SUCCEEDED"),
             ("0009_fnb_table_service_r1a", "multi-revision-request", "SUCCEEDED"),
             ("0010_fnb_kitchen_stock_r1b", "multi-revision-request", "SUCCEEDED"),
+            ("0011_fnb_checkout_r1c", "multi-revision-request", "SUCCEEDED"),
         ]
         assert connection.execute(
             "SELECT state FROM fs_migration_requests WHERE request_id=?",
@@ -1368,6 +1375,7 @@ def test_request_id_spans_multi_revision_and_errors_are_digest_only(tmp_path):
         "0008_purchase_orders",
         "0009_fnb_table_service_r1a",
         "0010_fnb_kitchen_stock_r1b",
+        "0011_fnb_checkout_r1c",
     ]
 
     error_database = tmp_path / "sanitized-error.db"

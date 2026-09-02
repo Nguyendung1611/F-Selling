@@ -256,6 +256,14 @@ ROUTES_BO_SUNG = {
     ("POST", "/api/fnb/tickets/{ticket_id}/out-of-stock"),
     ("PATCH", "/api/fnb/shops/{shop_id}/manager-pin"),
     ("POST", "/api/fnb/manager-approvals"),
+    # F&B R1C: bill, split, provisional receipt, payment and safe table close.
+    ("GET", "/api/fnb/sessions/{session_id}/checks"),
+    ("POST", "/api/fnb/checks/{check_id}/split-preview"),
+    ("POST", "/api/fnb/checks/{check_id}/split"),
+    ("PATCH", "/api/fnb/checks/{check_id}/adjustments"),
+    ("GET", "/api/fnb/checks/{check_id}/provisional-receipt"),
+    ("POST", "/api/fnb/checks/{check_id}/pay"),
+    ("POST", "/api/fnb/sessions/{session_id}/close"),
 }
 
 

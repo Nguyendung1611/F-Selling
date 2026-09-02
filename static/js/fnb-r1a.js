@@ -20,6 +20,14 @@
         };
     }
 
+    function adjustmentValueForApi(kind, value) {
+        return kind === 'PERCENT' ? Math.round(Number(value || 0) * 100) : Number(value || 0);
+    }
+
+    function adjustmentValueForForm(kind, value) {
+        return kind === 'PERCENT' ? Number(value || 0) / 100 : Number(value || 0);
+    }
+
     function createController(deps) {
         const state = {
             shopId: null,
@@ -27,6 +35,7 @@
             floor: { areas: [] },
             setupFloor: { areas: [] },
             session: null,
+            checks: null,
             requestEpoch: 0,
             pendingMutation: null,
             recoverableDraft: null,
@@ -153,6 +162,18 @@
             }
         }
 
+        async function loadChecks() {
+            if (!state.session?.id) return;
+            const sessionId = Number(state.session.id);
+            const result = await deps.request(`/fnb/sessions/${sessionId}/checks`, 'GET');
+            if (!result || state.disposed || sessionId !== Number(state.session?.id)) return;
+            state.checks = result;
+            state.session.revision = Number(result.session_revision);
+            state.session.status = result.session_status;
+            deps.render({ type: 'checks', value: result });
+            return result;
+        }
+
         async function selectShop(shopId) {
             deps.clearTimeoutFn(state.pollTimer);
             state.requestEpoch += 1;
@@ -161,6 +182,7 @@
             state.floor = { areas: [] };
             state.setupFloor = { areas: [] };
             state.session = null;
+            state.checks = null;
             state.recoverableDraft = null;
             state.pendingMutation = null;
             pendingPromise = null;
@@ -205,6 +227,29 @@
                                 saved: ['add-line', 'update-line', 'cancel-line'].includes(mutation.action),
                             });
                         }
+                    } else if (mutation.scope === 'checks') {
+                        if (result?.checks) {
+                            state.checks = result;
+                        } else if (result?.check && state.checks) {
+                            state.checks = {
+                                ...state.checks,
+                                session_revision: Number(result.session_revision),
+                                session_status: result.session_status,
+                                checks: state.checks.checks.map(check =>
+                                    Number(check.id) === Number(result.check.id) ? result.check : check
+                                ),
+                            };
+                        }
+                        if (state.session && Number.isInteger(Number(result?.session_revision))) {
+                            state.session.revision = Number(result.session_revision);
+                            state.session.status = result.session_status;
+                        }
+                        deps.render({ type: 'checks', value: state.checks, result });
+                    } else if (mutation.scope === 'close-paid') {
+                        clearDraft();
+                        state.session = null;
+                        state.checks = null;
+                        deps.render({ type: 'session-closed', value: result });
                     } else {
                         if (Number.isInteger(Number(result?.fnb_revision))) {
                             state.floorRevision = Number(result.fnb_revision);
@@ -245,6 +290,8 @@
                             error,
                             value: clone(mutation.attempt),
                         });
+                    } else if (mutation.scope === 'checks' || mutation.scope === 'close-paid') {
+                        deps.render({ type: 'checkout-error', error });
                     } else {
                         state.recoverableDraft = clone(mutation.attempt);
                         saveDraft(state.recoverableDraft);
@@ -410,6 +457,45 @@
             }, attempt, 'session');
         }
 
+        function currentCheck(checkId) {
+            return state.checks?.checks?.find(check => Number(check.id) === Number(checkId));
+        }
+
+        function splitCheck(checkId, lines, label) {
+            const check = currentCheck(checkId);
+            const attempt = { check_id: Number(checkId), lines, label };
+            return startMutation('split-check', `/fnb/checks/${Number(checkId)}/split`, 'POST', {
+                lines,
+                label,
+                expected_revision: Number(check?.revision),
+                expected_session_revision: Number(state.checks?.session_revision ?? state.session?.revision),
+            }, attempt, 'checks');
+        }
+
+        function updateCheckAdjustments(checkId, values) {
+            const check = currentCheck(checkId);
+            return startMutation('adjust-check', `/fnb/checks/${Number(checkId)}/adjustments`, 'PATCH', {
+                ...values,
+                expected_revision: Number(check?.revision),
+                expected_session_revision: Number(state.checks?.session_revision ?? state.session?.revision),
+            }, { check_id: Number(checkId), ...values }, 'checks');
+        }
+
+        function payCheck(checkId, values) {
+            const check = currentCheck(checkId);
+            return startMutation('pay-check', `/fnb/checks/${Number(checkId)}/pay`, 'POST', {
+                ...values,
+                expected_revision: Number(check?.revision),
+                expected_session_revision: Number(state.checks?.session_revision ?? state.session?.revision),
+            }, { check_id: Number(checkId), ...values }, 'checks');
+        }
+
+        function closePaidSession() {
+            return startMutation('close-paid-session', `/fnb/sessions/${Number(state.session.id)}/close`, 'POST', {
+                expected_revision: Number(state.checks?.session_revision ?? state.session?.revision),
+            }, { session_id: Number(state.session.id) }, 'close-paid');
+        }
+
         function dispose() {
             state.disposed = true;
             deps.clearTimeoutFn(state.pollTimer);
@@ -420,6 +506,7 @@
             loadFloor,
             loadSetup,
             loadSession,
+            loadChecks,
             getState: () => clone(state),
             seedSession: sessionValue => { state.session = clone(sessionValue); },
             saveDraft,
@@ -439,10 +526,17 @@
             moveTable,
             mergeTable,
             cancelSession,
+            splitCheck,
+            updateCheckAdjustments,
+            payCheck,
+            closePaidSession,
         };
     }
 
-    const api = Object.freeze({ createController, escapeHtml, partitionLines });
+    const api = Object.freeze({
+        createController, escapeHtml, partitionLines,
+        adjustmentValueForApi, adjustmentValueForForm,
+    });
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     if (global) global.FnbR1A = api;
 
@@ -476,7 +570,14 @@
             'fnbConflict', 'fnbSessionStatus', 'fnbTableActions', 'fnbTargetTable',
             'fnbCancelSession', 'fnbSend', 'fnbStationList', 'fnbPinForm', 'fnbManagerPin',
             'fnbApprovalDialog', 'fnbApprovalForm', 'fnbApproverUsername', 'fnbApprovalPin',
-            'fnbCancelResolution', 'fnbCancelReason', 'fnbApprovalStatus'
+            'fnbCancelResolution', 'fnbCancelReason', 'fnbApprovalStatus',
+            'fnbCheckoutOpen', 'fnbCheckoutDialog', 'fnbCheckoutStatus', 'fnbCheckList',
+            'fnbCheckDetail', 'fnbSplitPanel', 'fnbSplitForm', 'fnbSplitLines', 'fnbSplitLabel',
+            'fnbSplitButton', 'fnbAdjustmentPanel', 'fnbAdjustmentForm', 'fnbDiscountKind',
+            'fnbDiscountValue', 'fnbServiceKind', 'fnbServiceValue', 'fnbAdjustmentButton',
+            'fnbPayForm', 'fnbCashTenderedField', 'fnbCashTendered', 'fnbCustomerField',
+            'fnbCustomer', 'fnbPayButton', 'fnbPrintProvisional', 'fnbClosePaidSession',
+            'fnbReceiptPrint'
         ].map(id => [id, document.getElementById(id)]));
         let shops = [];
         let products = [];
@@ -484,6 +585,9 @@
         let lastTableTrigger = null;
         let setupAllowed = false;
         let pendingCancelLineId = null;
+        let selectedCheckId = null;
+        let customers = [];
+        let lastPaymentResult = null;
 
         const storage = {
             get: key => sessionStorage.getItem(key),
@@ -506,6 +610,10 @@
 
         function sessionStatus(message) {
             elements.fnbSessionStatus.textContent = message || '';
+        }
+
+        function checkoutStatus(message) {
+            elements.fnbCheckoutStatus.textContent = message || '';
         }
 
         function skeletons() {
@@ -603,6 +711,9 @@
             elements.fnbTableActions.hidden = !setupAllowed;
             elements.fnbCancelSession.disabled = Number(value.subtotal_vnd || 0) > 0;
             elements.fnbSend.disabled = Number(value.unsent_quantity || 0) <= 0 || Boolean(pending);
+            const sentQuantity = buckets.sent.reduce((sum, line) => sum + Number(line.active_sent_quantity || 0), 0);
+            elements.fnbCheckoutOpen.disabled = sentQuantity <= 0 || Number(value.unsent_quantity || 0) > 0 || Boolean(pending);
+            elements.fnbCheckoutOpen.title = Number(value.unsent_quantity || 0) > 0 ? t('fnb.checkout.unsent_block') : '';
             renderTargets();
             renderProducts();
         }
@@ -613,6 +724,49 @@
             elements.fnbSessionBackdrop.hidden = true;
             elements.fnbConflict.hidden = true;
             lastTableTrigger?.focus();
+        }
+
+        function checkStatusKey(status) {
+            return `fnb.checkout.status.${String(status || 'OPEN').toLowerCase()}`;
+        }
+
+        function activeCheck() {
+            const checks = controller.getState().checks?.checks || [];
+            return checks.find(check => Number(check.id) === Number(selectedCheckId)) || checks[0];
+        }
+
+        function renderChecks(value) {
+            const checks = value?.checks || [];
+            if (!checks.length) {
+                elements.fnbCheckList.innerHTML = '';
+                elements.fnbCheckDetail.innerHTML = `<p>${escapeHtml(t('fnb.checkout.no_checks'))}</p>`;
+                return;
+            }
+            if (!checks.some(check => Number(check.id) === Number(selectedCheckId))) {
+                selectedCheckId = (checks.find(check => check.status === 'OPEN') || checks[0]).id;
+            }
+            const check = checks.find(row => Number(row.id) === Number(selectedCheckId));
+            const pending = Boolean(controller.getState().pendingMutation);
+            const editable = check.status === 'OPEN' && !pending;
+            elements.fnbCheckList.innerHTML = checks.map(row =>
+                `<button type="button" class="fnb-check-tab${Number(row.id) === Number(check.id) ? ' is-selected' : ''}" data-action="select-check" data-id="${Number(row.id)}" aria-pressed="${Number(row.id) === Number(check.id)}"><span>${escapeHtml(row.label)}</span><strong>${escapeHtml(money(row.total_vnd))}</strong><small>${escapeHtml(t(checkStatusKey(row.status)))}</small></button>`
+            ).join('');
+            const payment = lastPaymentResult?.check?.id === check.id ? lastPaymentResult.order : null;
+            const qr = payment?.qr_url
+                ? `<div class="fnb-payment-result"><strong>${escapeHtml(t('fnb.checkout.transfer_wait'))}</strong><img src="${escapeHtml(payment.qr_url)}" alt="VietQR"></div>` : '';
+            elements.fnbCheckDetail.innerHTML = `<div class="fnb-receipt-head"><span>${escapeHtml(t('fnb.checkout.provisional_label'))}</span><strong>${escapeHtml(check.label)}</strong></div><div class="fnb-receipt-lines">${check.lines.map(line => `<div><span>${escapeHtml(line.product_name)} × ${Number(line.quantity)}</span><strong>${escapeHtml(money(Number(line.unit_price_vnd) * Number(line.quantity)))}</strong></div>`).join('')}</div><dl class="fnb-check-totals"><div><dt>${escapeHtml(t('fnb.checkout.subtotal'))}</dt><dd>${escapeHtml(money(check.subtotal_vnd))}</dd></div>${Number(check.discount_vnd) ? `<div><dt>${escapeHtml(t('fnb.checkout.discount'))}</dt><dd>−${escapeHtml(money(check.discount_vnd))}</dd></div>` : ''}${Number(check.service_charge_vnd) ? `<div><dt>${escapeHtml(t('fnb.checkout.service_charge'))}</dt><dd>${escapeHtml(money(check.service_charge_vnd))}</dd></div>` : ''}<div class="is-total"><dt>${escapeHtml(t('fnb.checkout.total'))}</dt><dd>${escapeHtml(money(check.total_vnd))}</dd></div></dl>${qr}`;
+            elements.fnbSplitLines.innerHTML = check.lines.map(line => `<label class="fnb-split-line" data-line-id="${Number(line.line_id)}"><input type="checkbox" ${editable ? '' : 'disabled'}><span>${escapeHtml(line.product_name)} · ${Number(line.quantity)}</span><input type="number" min="1" max="${Number(line.quantity)}" value="1" inputmode="numeric" aria-label="${escapeHtml(t('fnb.draft.quantity'))}" ${editable ? '' : 'disabled'}></label>`).join('');
+            elements.fnbSplitLabel.disabled = !editable;
+            elements.fnbSplitButton.disabled = !editable || check.lines.length < 2 && Number(check.lines[0]?.quantity || 0) < 2;
+            elements.fnbDiscountKind.value = check.discount_kind;
+            elements.fnbDiscountValue.value = adjustmentValueForForm(check.discount_kind, check.discount_value);
+            elements.fnbServiceKind.value = check.service_charge_kind;
+            elements.fnbServiceValue.value = adjustmentValueForForm(check.service_charge_kind, check.service_charge_value);
+            elements.fnbAdjustmentForm.querySelectorAll('input, select, button').forEach(control => { control.disabled = !editable; });
+            elements.fnbPayForm.querySelectorAll('input, select, button').forEach(control => { control.disabled = !editable || !navigator.onLine; });
+            elements.fnbPrintProvisional.disabled = false;
+            elements.fnbClosePaidSession.disabled = pending || !checks.every(row => ['PAID', 'DEBT', 'CANCELLED'].includes(row.status));
+            if (!navigator.onLine) checkoutStatus(t('fnb.checkout.offline'));
         }
 
         function renderSetup(value) {
@@ -661,10 +815,21 @@
                 renderSession(event.value, event.draft);
                 sessionStatus(event.saved ? t('fnb.session.saved') : '');
             } else if (event.type === 'session-closed' || event.type === 'session-cancelled') {
+                if (elements.fnbCheckoutDialog.open) elements.fnbCheckoutDialog.close();
                 closeSession();
-                if (event.type === 'session-cancelled') showToast(t('fnb.session.cancelled'));
+                showToast(t(event.type === 'session-cancelled' ? 'fnb.session.cancelled' : 'fnb.checkout.close_done'));
+            } else if (event.type === 'checks') {
+                if (event.result?.order) lastPaymentResult = event.result;
+                renderChecks(event.value);
+                checkoutStatus(event.result?.order ? t(
+                    event.result.check.status === 'PAYMENT_PENDING' ? 'fnb.checkout.pay_pending' : 'fnb.checkout.paid'
+                ) : '');
             } else if (event.type === 'mutation-pending') {
                 sessionStatus(t('fnb.state.pending'));
+                if (['checks', 'close-paid'].includes(event.value.scope)) {
+                    checkoutStatus(t('fnb.state.pending'));
+                    if (controller.getState().checks) renderChecks(controller.getState().checks);
+                }
                 const mutation = event.value;
                 const affected = mutation.action === 'open-table'
                     ? document.querySelector(`[data-action="open-table"][data-id="${Number(mutation.attempt.table_id)}"]`)
@@ -678,6 +843,9 @@
             } else if (event.type === 'mutation-error') {
                 sessionStatus(`${t('fnb.state.unsynced')}. ${event.error?.message || t('fnb.action.retry')}`);
                 renderSession(controller.getState().session, event.draft);
+            } else if (event.type === 'checkout-error') {
+                checkoutStatus(event.error?.message || t('fnb.checkout.error'));
+                if (controller.getState().checks) renderChecks(controller.getState().checks);
             } else if (event.type === 'conflict') {
                 renderSession(event.value, event.draft);
                 elements.fnbConflict.hidden = false;
@@ -694,6 +862,7 @@
                 setupStatus(t(code === 'FNB_NAME_EXISTS' ? 'fnb.setup.duplicate' : code === 'FNB_FLOOR_CHANGED' ? 'fnb.setup.changed' : 'fnb.state.poll_error'));
             } else if (event.type === 'feature-disabled') {
                 elements.fnbFloor.innerHTML = '';
+                if (elements.fnbCheckoutDialog.open) elements.fnbCheckoutDialog.close();
                 closeSession();
                 nhanSangTrangSau(t('fnb.auth.feature_disabled'));
                 navigateToPage('/pos');
@@ -722,6 +891,39 @@
             } catch (error) {
                 products = [];
                 renderProducts();
+            }
+        }
+
+        async function loadCustomers() {
+            try {
+                customers = await apiCall(`/customers/${Number(elements.fnbShopSelect.value)}`) || [];
+            } catch (error) {
+                customers = [];
+            }
+            elements.fnbCustomer.innerHTML = `<option value="">${escapeHtml(t('fnb.checkout.customer_select'))}</option>${customers.map(customer => `<option value="${Number(customer.id)}">${escapeHtml(customer.name)} · ${escapeHtml(customer.phone || '')}</option>`).join('')}`;
+        }
+
+        function paymentMethod() {
+            return elements.fnbPayForm.querySelector('[name="fnbPaymentMethod"]:checked')?.value || 'cash';
+        }
+
+        function togglePaymentFields() {
+            const method = paymentMethod();
+            elements.fnbCashTenderedField.hidden = method !== 'cash';
+            elements.fnbCustomerField.hidden = method !== 'debt';
+        }
+
+        async function printProvisionalReceipt() {
+            const check = activeCheck();
+            if (!check) return;
+            try {
+                const receipt = await apiCall(`/fnb/checks/${Number(check.id)}/provisional-receipt`);
+                elements.fnbReceiptPrint.hidden = false;
+                elements.fnbReceiptPrint.innerHTML = `<h1>${escapeHtml(receipt.document_label)}</h1><p>${escapeHtml((receipt.tables || []).join(' + '))} · ${escapeHtml(receipt.check.label)}</p>${receipt.check.lines.map(line => `<div><span>${escapeHtml(line.product_name)} × ${Number(line.quantity)}</span><strong>${escapeHtml(money(Number(line.unit_price_vnd) * Number(line.quantity)))}</strong></div>`).join('')}<hr><div><strong>${escapeHtml(t('fnb.checkout.total'))}</strong><strong>${escapeHtml(money(receipt.check.total_vnd))}</strong></div>`;
+                global.print();
+                elements.fnbReceiptPrint.hidden = true;
+            } catch (error) {
+                checkoutStatus(error.message);
             }
         }
 
@@ -766,7 +968,11 @@
             } else if (action === 'open-table') {
                 lastTableTrigger = button;
                 sessionStatus(t('fnb.session.loading'));
-                controller.openTable(id).catch(error => sessionStatus(error.message));
+                controller.openTable(id).then(() => controller.loadChecks()).catch(error => sessionStatus(error.message));
+            } else if (action === 'select-check') {
+                selectedCheckId = id;
+                lastPaymentResult = null;
+                renderChecks(controller.getState().checks);
             } else if (action === 'open-setup') {
                 elements.fnbSetupDialog.showModal();
                 controller.loadSetup().catch(() => {});
@@ -841,8 +1047,69 @@
         elements.fnbShopSelect.addEventListener('change', event => chooseShop(Number(event.target.value)));
         elements.fnbCancelSession.addEventListener('click', () => controller.cancelSession().catch(error => sessionStatus(error.message)));
         elements.fnbSend.addEventListener('click', () => controller.sendSession()
+            .then(() => controller.loadChecks())
             .then(() => showToast(t('fnb.send.done')))
             .catch(error => sessionStatus(error.message)));
+        elements.fnbCheckoutOpen.addEventListener('click', async () => {
+            selectedCheckId = null;
+            lastPaymentResult = null;
+            checkoutStatus(t('fnb.checkout.loading'));
+            elements.fnbCheckoutDialog.showModal();
+            try {
+                await Promise.all([controller.loadChecks(), loadCustomers()]);
+                togglePaymentFields();
+            } catch (error) {
+                checkoutStatus(error.message);
+            }
+        });
+        elements.fnbCheckoutDialog.addEventListener('close', () => elements.fnbCheckoutOpen.focus());
+        elements.fnbPayForm.addEventListener('change', event => {
+            if (event.target.name === 'fnbPaymentMethod') togglePaymentFields();
+        });
+        elements.fnbSplitForm.addEventListener('submit', event => {
+            event.preventDefault();
+            const check = activeCheck();
+            const lines = Array.from(elements.fnbSplitLines.querySelectorAll('.fnb-split-line'))
+                .filter(row => row.querySelector('input[type="checkbox"]').checked)
+                .map(row => ({
+                    line_id: Number(row.dataset.lineId),
+                    quantity: Number(row.querySelector('input[type="number"]').value),
+                }));
+            if (!check || !lines.length) return checkoutStatus(t('fnb.checkout.split_required'));
+            controller.splitCheck(check.id, lines, elements.fnbSplitLabel.value.trim())
+                .then(() => { elements.fnbSplitLabel.value = ''; checkoutStatus(t('fnb.checkout.split_done')); })
+                .catch(error => checkoutStatus(error.message));
+        });
+        elements.fnbAdjustmentForm.addEventListener('submit', event => {
+            event.preventDefault();
+            const check = activeCheck();
+            if (!check) return;
+            controller.updateCheckAdjustments(check.id, {
+                discount_kind: elements.fnbDiscountKind.value,
+                discount_value: adjustmentValueForApi(elements.fnbDiscountKind.value, elements.fnbDiscountValue.value),
+                service_charge_kind: elements.fnbServiceKind.value,
+                service_charge_value: adjustmentValueForApi(elements.fnbServiceKind.value, elements.fnbServiceValue.value),
+            }).then(() => checkoutStatus(t('fnb.checkout.adjustments_done')))
+                .catch(error => checkoutStatus(error.message));
+        });
+        elements.fnbPayForm.addEventListener('submit', event => {
+            event.preventDefault();
+            const check = activeCheck();
+            if (!check || !navigator.onLine) return checkoutStatus(t('fnb.checkout.offline'));
+            const method = paymentMethod();
+            const values = { payment_method: method };
+            if (method === 'cash' && elements.fnbCashTendered.value !== '') {
+                values.cash_tendered_vnd = Number(elements.fnbCashTendered.value);
+            }
+            if (method === 'debt') {
+                values.customer_id = Number(elements.fnbCustomer.value) || null;
+                if (!values.customer_id) return checkoutStatus(t('fnb.checkout.customer_required'));
+            }
+            controller.payCheck(check.id, values).catch(error => checkoutStatus(error.message));
+        });
+        elements.fnbPrintProvisional.addEventListener('click', printProvisionalReceipt);
+        elements.fnbClosePaidSession.addEventListener('click', () => controller.closePaidSession()
+            .catch(error => checkoutStatus(error.message)));
         elements.fnbAreaForm.addEventListener('submit', event => {
             event.preventDefault();
             controller.createArea({ name: elements.fnbAreaName.value, sort_order: 0 })
@@ -905,12 +1172,19 @@
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) controller.loadFloor(false);
         });
-        global.addEventListener('offline', () => live('fnb.state.offline'));
-        global.addEventListener('online', () => controller.loadFloor(true));
+        global.addEventListener('offline', () => {
+            live('fnb.state.offline');
+            if (elements.fnbCheckoutDialog.open) renderChecks(controller.getState().checks);
+        });
+        global.addEventListener('online', () => {
+            controller.loadFloor(true);
+            if (elements.fnbCheckoutDialog.open) controller.loadChecks().catch(error => checkoutStatus(error.message));
+        });
         global.addEventListener('pagehide', () => controller.dispose(), { once: true });
         document.addEventListener('fselling:localechange', () => {
             renderFloor(controller.getState().floor);
             if (controller.getState().session) renderSession(controller.getState().session, controller.getDraft());
+            if (controller.getState().checks) renderChecks(controller.getState().checks);
         });
 
         skeletons();

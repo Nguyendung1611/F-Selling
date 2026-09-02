@@ -12,11 +12,14 @@ from .catalog import (
 from .customer import Customer
 from .expense import ExpenseCategory, ExpenseTemplate, OperatingExpense
 from .fnb import (
+    FnbAllocationTransfer,
     FnbActionLog,
     FnbArea,
+    FnbCheckLine,
     FnbKitchenTicket,
     FnbKitchenTicketItem,
     FnbManagerApproval,
+    FnbServiceCheck,
     FnbServiceSession,
     FnbSessionLine,
     FnbSessionTable,
@@ -95,6 +98,8 @@ __all__ = [
     "ExpenseTemplate",
     "OperatingExpense",
     "FnbArea",
+    "FnbAllocationTransfer",
+    "FnbCheckLine",
     "FnbTable",
     "FnbServiceSession",
     "FnbSessionTable",
@@ -104,6 +109,7 @@ __all__ = [
     "FnbKitchenTicketItem",
     "FnbStockAllocation",
     "FnbManagerApproval",
+    "FnbServiceCheck",
     "LoyaltyProgram",
     "OfflineLease",
     "OfflineRecoveryAction",

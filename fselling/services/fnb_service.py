@@ -12,12 +12,20 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..core.i18n import tr
-from ..core.money import checked_add, checked_multiply, checked_vnd, cumulative_basis
+from ..core.money import (
+    checked_add,
+    checked_multiply,
+    checked_vnd,
+    cumulative_basis,
+    largest_remainder_allocate,
+    round_percentage_vnd,
+)
 from ..core.numeric_limits import MAX_SAFE_QUANTITY
 from ..core.security import burn_password_time, hash_password, verify_password
 from ..dependencies import (
     PERMISSION_FNB_MANAGE,
     PERMISSION_FNB_BAR,
+    PERMISSION_FNB_CHECKOUT,
     PERMISSION_FNB_KITCHEN,
     PERMISSION_FNB_SERVICE,
     STAFF_ROLE_MANAGER,
@@ -30,6 +38,10 @@ from ..dependencies import (
 from ..schemas.fnb import (
     FnbAreaCreate,
     FnbAreaUpdate,
+    FnbCheckAdjustments,
+    FnbCheckPay,
+    FnbCheckSplit,
+    FnbCheckSplitPreview,
     FnbLineCancel,
     FnbLineCreate,
     FnbLineUpdate,
@@ -38,6 +50,7 @@ from ..schemas.fnb import (
     FnbMergeTable,
     FnbMoveTable,
     FnbSessionCancel,
+    FnbSessionClose,
     FnbSessionOpen,
     FnbSessionSend,
     FnbSettingsUpdate,
@@ -46,7 +59,7 @@ from ..schemas.fnb import (
     FnbTableUpdate,
     FnbTicketTransition,
 )
-from . import inventory_service
+from . import inventory_service, loyalty_service, order_service, payment_service, qr_sales_service
 
 _ACTIVE_SESSION_STATUSES = ("OPEN", "PARTIALLY_SETTLED", "PAYMENT_PENDING")
 
@@ -864,6 +877,847 @@ def serialize_session(db: Session, session: models.FnbServiceSession) -> dict:
     }
 
 
+def _primary_check(
+    db: Session, session: models.FnbServiceSession, *, create: bool = False
+) -> models.FnbServiceCheck | None:
+    check = (
+        db.query(models.FnbServiceCheck)
+        .filter(
+            models.FnbServiceCheck.session_id == session.id,
+            models.FnbServiceCheck.is_primary.is_(True),
+        )
+        .first()
+    )
+    if check is None and create:
+        check = models.FnbServiceCheck(
+            session_id=session.id,
+            label="Bill chính",
+            is_primary=True,
+            status="OPEN",
+        )
+        db.add(check)
+        db.flush()
+    return check
+
+
+def _adjustment_amount(kind: str, value: int, subtotal: int, *, discount: bool) -> int:
+    if kind == "NONE":
+        if value != 0:
+            raise fnb_error(400, "FNB_ADJUSTMENT_INVALID", "Giá trị phải bằng 0 khi không áp dụng")
+        return 0
+    if kind == "PERCENT":
+        if value > 10_000:
+            raise fnb_error(400, "FNB_ADJUSTMENT_INVALID", "Tỷ lệ phải từ 0 đến 100%")
+        amount = round_percentage_vnd(subtotal, value)
+    else:
+        amount = checked_vnd(value)
+    if discount and amount > subtotal:
+        raise fnb_error(400, "FNB_DISCOUNT_TOO_LARGE", "Giảm giá không được vượt tiền món")
+    return amount
+
+
+def _recalculate_check(db: Session, check: models.FnbServiceCheck) -> None:
+    rows = (
+        db.query(models.FnbCheckLine, models.FnbSessionLine)
+        .join(
+            models.FnbSessionLine,
+            models.FnbSessionLine.id == models.FnbCheckLine.session_line_id,
+        )
+        .filter(models.FnbCheckLine.check_id == check.id)
+        .order_by(models.FnbCheckLine.id)
+        .all()
+    )
+    try:
+        subtotal = checked_add(
+            *(checked_multiply(int(row.quantity), int(line.unit_price_vnd)) for row, line in rows)
+        )
+        discount = _adjustment_amount(
+            check.discount_kind, int(check.discount_value or 0), subtotal, discount=True
+        )
+        service_charge = _adjustment_amount(
+            check.service_charge_kind,
+            int(check.service_charge_value or 0),
+            subtotal,
+            discount=False,
+        )
+        total = checked_add(subtotal - discount, service_charge)
+    except ValueError as exc:
+        raise fnb_error(400, "FNB_AMOUNT_TOO_LARGE", "Tổng tiền vượt giới hạn hỗ trợ") from exc
+    check.subtotal_vnd = subtotal
+    check.discount_vnd = discount
+    check.service_charge_vnd = service_charge
+    check.total_vnd = total
+
+
+def _serialize_check(db: Session, check: models.FnbServiceCheck) -> dict:
+    _recalculate_check(db, check)
+    rows = (
+        db.query(models.FnbCheckLine, models.FnbSessionLine)
+        .join(
+            models.FnbSessionLine,
+            models.FnbSessionLine.id == models.FnbCheckLine.session_line_id,
+        )
+        .filter(models.FnbCheckLine.check_id == check.id)
+        .order_by(models.FnbCheckLine.id)
+        .all()
+    )
+    return {
+        "id": check.id,
+        "label": check.label,
+        "is_primary": bool(check.is_primary),
+        "status": check.status,
+        "revision": int(check.revision or 0),
+        "order_id": check.order_id,
+        "discount_kind": check.discount_kind,
+        "discount_value": int(check.discount_value or 0),
+        "service_charge_kind": check.service_charge_kind,
+        "service_charge_value": int(check.service_charge_value or 0),
+        "subtotal_vnd": int(check.subtotal_vnd or 0),
+        "discount_vnd": int(check.discount_vnd or 0),
+        "service_charge_vnd": int(check.service_charge_vnd or 0),
+        "total_vnd": int(check.total_vnd or 0),
+        "lines": [
+            {
+                "id": row.id,
+                "line_id": line.id,
+                "product_id": line.product_id,
+                "product_name": line.product_name,
+                "unit_price_vnd": int(line.unit_price_vnd),
+                "quantity": int(row.quantity),
+                "note": line.note,
+            }
+            for row, line in rows
+        ],
+    }
+
+
+def _checks_result(db: Session, session: models.FnbServiceSession) -> dict:
+    checks = (
+        db.query(models.FnbServiceCheck)
+        .filter(models.FnbServiceCheck.session_id == session.id)
+        .order_by(models.FnbServiceCheck.is_primary.desc(), models.FnbServiceCheck.id)
+        .all()
+    )
+    return {
+        "shop_id": session.shop_id,
+        "session_id": session.id,
+        "session_status": session.status,
+        "session_revision": int(session.revision or 0),
+        "checks": [_serialize_check(db, check) for check in checks],
+    }
+
+
+def _check_for_access(
+    db: Session, current_user: models.User, check_id: int
+) -> tuple[models.FnbServiceCheck, models.FnbServiceSession]:
+    check = db.get(models.FnbServiceCheck, check_id)
+    session = db.get(models.FnbServiceSession, check.session_id) if check else None
+    shop = db.get(models.Shop, session.shop_id) if session else None
+    if check is None or session is None or shop is None or not has_shop_operator_access(shop, current_user):
+        raise fnb_error(404, "FNB_CHECK_NOT_FOUND", "Không tìm thấy bill")
+    require_staff_permission(current_user, PERMISSION_FNB_CHECKOUT)
+    return check, session
+
+
+def _require_check_revision(check: models.FnbServiceCheck, expected: int) -> None:
+    if int(check.revision or 0) != int(expected):
+        raise fnb_error(
+            409,
+            "FNB_CHECK_CHANGED",
+            "Bill vừa được cập nhật trên thiết bị khác",
+            revision=int(check.revision or 0),
+        )
+
+
+def _split_selection(
+    db: Session,
+    check: models.FnbServiceCheck,
+    request: FnbCheckSplitPreview,
+) -> tuple[dict[int, tuple[models.FnbCheckLine, models.FnbSessionLine]], dict[int, int]]:
+    rows = (
+        db.query(models.FnbCheckLine, models.FnbSessionLine)
+        .join(
+            models.FnbSessionLine,
+            models.FnbSessionLine.id == models.FnbCheckLine.session_line_id,
+        )
+        .filter(models.FnbCheckLine.check_id == check.id)
+        .all()
+    )
+    available = {line.id: (row, line) for row, line in rows}
+    selected: dict[int, int] = {}
+    for item in request.lines:
+        if item.line_id in selected:
+            raise fnb_error(400, "FNB_SPLIT_DUPLICATE_LINE", "Một món chỉ được chọn một lần")
+        pair = available.get(item.line_id)
+        if pair is None or int(item.quantity) > int(pair[0].quantity):
+            raise fnb_error(409, "FNB_SPLIT_QUANTITY_CHANGED", "Số lượng món trên bill vừa thay đổi")
+        selected[item.line_id] = int(item.quantity)
+    remaining = sum(int(row.quantity) for row, _ in rows) - sum(selected.values())
+    if remaining <= 0:
+        raise fnb_error(400, "FNB_SPLIT_EMPTY_SOURCE", "Bill gốc phải còn ít nhất một món")
+    return available, selected
+
+
+def _split_amounts(
+    db: Session,
+    check: models.FnbServiceCheck,
+    available: dict[int, tuple[models.FnbCheckLine, models.FnbSessionLine]],
+    selected: dict[int, int],
+) -> dict:
+    _recalculate_check(db, check)
+    new_subtotal = checked_add(
+        *(
+            checked_multiply(quantity, int(available[line_id][1].unit_price_vnd))
+            for line_id, quantity in selected.items()
+        )
+    )
+    source_subtotal = int(check.subtotal_vnd) - new_subtotal
+    destinations = [(0, source_subtotal, "source"), (1, new_subtotal, "new")]
+    discounts = dict(largest_remainder_allocate(int(check.discount_vnd), destinations))
+    charges = dict(largest_remainder_allocate(int(check.service_charge_vnd), destinations))
+    return {
+        "source": {
+            "subtotal_vnd": source_subtotal,
+            "discount_vnd": discounts["source"],
+            "service_charge_vnd": charges["source"],
+            "total_vnd": source_subtotal - discounts["source"] + charges["source"],
+        },
+        "new_check": {
+            "subtotal_vnd": new_subtotal,
+            "discount_vnd": discounts["new"],
+            "service_charge_vnd": charges["new"],
+            "total_vnd": new_subtotal - discounts["new"] + charges["new"],
+        },
+    }
+
+
+def get_checks(db: Session, current_user: models.User, session_id: int) -> dict:
+    session = _session_for_access(db, current_user, session_id, PERMISSION_FNB_CHECKOUT)
+    require_fnb_shop(db, session.shop_id, current_user)
+    if _sync_check_payment_statuses(db, session):
+        db.commit()
+        db.refresh(session)
+    return _checks_result(db, session)
+
+
+def preview_split(
+    db: Session, current_user: models.User, check_id: int, request: FnbCheckSplitPreview
+) -> dict:
+    check, session = _check_for_access(db, current_user, check_id)
+    require_fnb_shop(db, session.shop_id, current_user)
+    if check.status != "OPEN":
+        raise fnb_error(409, "FNB_CHECK_NOT_OPEN", "Bill không còn mở để tách")
+    available, selected = _split_selection(db, check, request)
+    result = _split_amounts(db, check, available, selected)
+    result["session_revision"] = int(session.revision or 0)
+    result["check_revision"] = int(check.revision or 0)
+    return result
+
+
+def split_check(
+    db: Session, current_user: models.User, check_id: int, request: FnbCheckSplit
+) -> dict:
+    action = "FNB_CHECK_SPLIT"
+    fingerprint = operation_fingerprint(action, _payload(request, check_id=check_id))
+    try:
+        check, session = _check_for_access(db, current_user, check_id)
+        shop_id = int(session.shop_id)
+        _prepare_locked_shop(db, shop_id)
+        check, session = _check_for_access(db, current_user, check_id)
+        shop = require_fnb_access(db, shop_id, current_user, PERMISSION_FNB_CHECKOUT)
+        existing = _existing_operation(db, shop_id, request.operation_id, fingerprint)
+        if existing is not None:
+            db.rollback()
+            return existing
+        if not bool(shop.fnb_enabled):
+            raise fnb_error(409, "FNB_DISABLED", "Cửa hàng chưa bật bán tại bàn")
+        if check.status != "OPEN":
+            raise fnb_error(409, "FNB_CHECK_NOT_OPEN", "Bill không còn mở để tách")
+        require_session_revision(db, session, request.expected_session_revision)
+        _require_check_revision(check, request.expected_revision)
+        label, _ = normalize_name(request.label)
+        available, selected = _split_selection(db, check, request)
+        amounts = _split_amounts(db, check, available, selected)
+        before = _checks_result(db, session)
+        new_check = models.FnbServiceCheck(
+            session_id=session.id,
+            label=label,
+            is_primary=False,
+            status="OPEN",
+        )
+        db.add(new_check)
+        db.flush()
+        for line_id, quantity in selected.items():
+            source_row, _ = available[line_id]
+            if quantity == int(source_row.quantity):
+                db.delete(source_row)
+            else:
+                source_row.quantity = int(source_row.quantity) - quantity
+            db.add(
+                models.FnbCheckLine(
+                    check_id=new_check.id,
+                    session_line_id=line_id,
+                    quantity=quantity,
+                )
+            )
+        for target, values in ((check, amounts["source"]), (new_check, amounts["new_check"])):
+            target.discount_kind = "FLAT" if values["discount_vnd"] else "NONE"
+            target.discount_value = values["discount_vnd"]
+            target.service_charge_kind = "FLAT" if values["service_charge_vnd"] else "NONE"
+            target.service_charge_value = values["service_charge_vnd"]
+            _recalculate_check(db, target)
+        check.revision = int(check.revision or 0) + 1
+        session.revision = int(session.revision or 0) + 1
+        shop.fnb_revision = int(shop.fnb_revision or 0) + 1
+        db.flush()
+        result = _checks_result(db, session)
+        return _finish(
+            db,
+            current_user,
+            action,
+            request.operation_id,
+            fingerprint,
+            result,
+            session_id=session.id,
+            before=before,
+            after=result,
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+
+def update_check_adjustments(
+    db: Session,
+    current_user: models.User,
+    check_id: int,
+    request: FnbCheckAdjustments,
+) -> dict:
+    action = "FNB_CHECK_ADJUST"
+    fingerprint = operation_fingerprint(action, _payload(request, check_id=check_id))
+    try:
+        check, session = _check_for_access(db, current_user, check_id)
+        shop_id = int(session.shop_id)
+        _prepare_locked_shop(db, shop_id)
+        check, session = _check_for_access(db, current_user, check_id)
+        shop = require_fnb_access(db, shop_id, current_user, PERMISSION_FNB_CHECKOUT)
+        existing = _existing_operation(db, shop_id, request.operation_id, fingerprint)
+        if existing is not None:
+            db.rollback()
+            return existing
+        if check.status != "OPEN":
+            raise fnb_error(409, "FNB_CHECK_NOT_OPEN", "Bill không còn mở để điều chỉnh")
+        require_session_revision(db, session, request.expected_session_revision)
+        _require_check_revision(check, request.expected_revision)
+        before = _checks_result(db, session)
+        check.discount_kind = request.discount_kind
+        check.discount_value = int(request.discount_value)
+        check.service_charge_kind = request.service_charge_kind
+        check.service_charge_value = int(request.service_charge_value)
+        _recalculate_check(db, check)
+        check.revision = int(check.revision or 0) + 1
+        session.revision = int(session.revision or 0) + 1
+        shop.fnb_revision = int(shop.fnb_revision or 0) + 1
+        db.flush()
+        result = _checks_result(db, session)
+        return _finish(
+            db,
+            current_user,
+            action,
+            request.operation_id,
+            fingerprint,
+            result,
+            session_id=session.id,
+            before=before,
+            after=result,
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+
+def get_provisional_receipt(
+    db: Session, current_user: models.User, check_id: int
+) -> dict:
+    check, session = _check_for_access(db, current_user, check_id)
+    require_fnb_shop(db, session.shop_id, current_user)
+    tables = [table["name"] for table in serialize_session(db, session)["tables"]]
+    return {
+        "document_label": "TẠM TÍNH — CHƯA THANH TOÁN",
+        "shop_id": session.shop_id,
+        "session_id": session.id,
+        "tables": tables,
+        "check": _serialize_check(db, check),
+    }
+
+
+def _refresh_session_status(
+    db: Session, session: models.FnbServiceSession
+) -> None:
+    statuses = [
+        row[0]
+        for row in db.query(models.FnbServiceCheck.status)
+        .filter(models.FnbServiceCheck.session_id == session.id)
+        .all()
+    ]
+    if any(status in ("PAYING", "PAYMENT_PENDING") for status in statuses):
+        session.status = "PAYMENT_PENDING"
+    elif any(status in ("PAID", "DEBT", "CANCELLED") for status in statuses):
+        session.status = "PARTIALLY_SETTLED"
+    else:
+        session.status = "OPEN"
+
+
+def _sync_check_payment_statuses(
+    db: Session, session: models.FnbServiceSession
+) -> bool:
+    changed = False
+    checks = (
+        db.query(models.FnbServiceCheck)
+        .filter(
+            models.FnbServiceCheck.session_id == session.id,
+            models.FnbServiceCheck.order_id.is_not(None),
+        )
+        .all()
+    )
+    for check in checks:
+        order = db.get(models.Order, check.order_id)
+        if order is None:
+            raise fnb_error(409, "FNB_ORDER_MISSING", "Chứng từ thanh toán không còn tồn tại")
+        target = {
+            order_service.STATUS_PAID: "PAID",
+            order_service.STATUS_DEBT: "DEBT",
+            order_service.STATUS_CANCELLED: "CANCELLED",
+            order_service.STATUS_PENDING: "PAYMENT_PENDING",
+            order_service.STATUS_UNRECONCILED: "PAYMENT_PENDING",
+        }.get(order.status, "PAYMENT_PENDING")
+        if check.status != target:
+            check.status = target
+            check.revision = int(check.revision or 0) + 1
+            check.settled_at = (
+                datetime.datetime.utcnow()
+                if target in ("PAID", "DEBT", "CANCELLED")
+                else None
+            )
+            changed = True
+    if changed:
+        _refresh_session_status(db, session)
+        session.revision = int(session.revision or 0) + 1
+        shop = db.get(models.Shop, session.shop_id)
+        if shop is not None:
+            shop.fnb_revision = int(shop.fnb_revision or 0) + 1
+    return changed
+
+
+def _allocation_slice(
+    allocation: models.FnbStockAllocation, used: int, quantity: int
+) -> tuple[int, int, int]:
+    known_total = int(allocation.cost_known_qty or 0)
+    known_before = min(used, known_total)
+    known_after = min(used + quantity, known_total)
+    known = known_after - known_before
+    unknown = quantity - known
+    basis_before = cumulative_basis(
+        int(allocation.cost_basis_vnd or 0), known_total, known_before
+    )
+    basis_after = cumulative_basis(
+        int(allocation.cost_basis_vnd or 0), known_total, known_after
+    )
+    return known, unknown, basis_after - basis_before
+
+
+def _transfer_line_provenance(
+    db: Session,
+    check: models.FnbServiceCheck,
+    check_line: models.FnbCheckLine,
+    order_item: models.OrderItem,
+) -> None:
+    remaining = int(check_line.quantity)
+    allocations = (
+        db.query(models.FnbStockAllocation)
+        .filter(
+            models.FnbStockAllocation.session_line_id == check_line.session_line_id,
+            models.FnbStockAllocation.state.in_(("CONSUMED", "TRANSFERRED_TO_ORDER")),
+        )
+        .order_by(models.FnbStockAllocation.id)
+        .all()
+    )
+    total_known = total_unknown = total_basis = 0
+    for allocation in allocations:
+        used = int(
+            db.query(func.coalesce(func.sum(models.FnbAllocationTransfer.quantity), 0))
+            .filter(models.FnbAllocationTransfer.allocation_id == allocation.id)
+            .scalar()
+            or 0
+        )
+        available = int(allocation.quantity) - used
+        if available <= 0:
+            continue
+        take = min(available, remaining)
+        known, unknown, basis = _allocation_slice(allocation, used, take)
+        transfer = models.FnbAllocationTransfer(
+            allocation_id=allocation.id,
+            check_id=check.id,
+            order_item_id=order_item.id,
+            quantity=take,
+            cost_known_qty=known,
+            cost_unknown_qty=unknown,
+            cost_basis_vnd=basis,
+        )
+        db.add(transfer)
+        if allocation.batch_id is not None:
+            db.add(
+                models.OrderItemBatch(
+                    order_item_id=order_item.id,
+                    batch_id=allocation.batch_id,
+                    quantity=take,
+                    cost_known_qty=known,
+                    cost_unknown_qty=unknown,
+                    cost_basis_vnd=basis,
+                )
+            )
+        total_known += known
+        total_unknown += unknown
+        total_basis += basis
+        remaining -= take
+        if used + take == int(allocation.quantity):
+            allocation.state = "TRANSFERRED_TO_ORDER"
+            allocation.resolved_at = datetime.datetime.utcnow()
+            allocation.resolution_reason = f"FNB_CHECK:{check.id}:ORDER_ITEM:{order_item.id}"
+        if remaining == 0:
+            break
+    if remaining:
+        raise fnb_error(
+            409,
+            "FNB_ALLOCATION_MISSING",
+            "Không đủ dấu vết tồn kho để tạo chứng từ thanh toán",
+            line_id=check_line.session_line_id,
+            missing_quantity=remaining,
+        )
+    order_item.cost_known_qty = total_known
+    order_item.cost_unknown_qty = total_unknown
+    order_item.cost_basis_vnd = total_basis
+
+
+def _remove_cancelled_from_checks(
+    db: Session, session_id: int, line_id: int, quantity: int
+) -> None:
+    remaining = quantity
+    rows = (
+        db.query(models.FnbCheckLine, models.FnbServiceCheck)
+        .join(models.FnbServiceCheck, models.FnbServiceCheck.id == models.FnbCheckLine.check_id)
+        .filter(
+            models.FnbServiceCheck.session_id == session_id,
+            models.FnbServiceCheck.status == "OPEN",
+            models.FnbCheckLine.session_line_id == line_id,
+        )
+        .order_by(models.FnbServiceCheck.is_primary.desc(), models.FnbServiceCheck.id)
+        .all()
+    )
+    for check_line, check in rows:
+        take = min(int(check_line.quantity), remaining)
+        if take == int(check_line.quantity):
+            db.delete(check_line)
+        else:
+            check_line.quantity = int(check_line.quantity) - take
+        check.revision = int(check.revision or 0) + 1
+        db.flush()
+        _recalculate_check(db, check)
+        remaining -= take
+        if remaining == 0:
+            break
+    if remaining:
+        raise fnb_error(409, "FNB_CHECK_QUANTITY_MISSING", "Số lượng bill không khớp món đã gửi")
+
+
+def _checkout_customer(
+    db: Session, shop_id: int, customer_id: int | None
+) -> models.Customer | None:
+    if customer_id is None:
+        return None
+    customer = (
+        db.query(models.Customer)
+        .filter(models.Customer.id == customer_id, models.Customer.shop_id == shop_id)
+        .first()
+    )
+    if customer is None:
+        raise fnb_error(404, "FNB_CUSTOMER_NOT_FOUND", "Không tìm thấy khách hàng")
+    if not bool(customer.is_active):
+        raise fnb_error(409, "FNB_CUSTOMER_INACTIVE", "Khách hàng đã ngừng sử dụng")
+    return customer
+
+
+def _order_checkout_result(
+    db: Session, shop: models.Shop, order: models.Order
+) -> dict:
+    legacy = order_service._create_order_response(db, shop, order)
+    return {
+        "id": order.id,
+        "status": order.status,
+        "total_vnd": int(order.total_amount or 0),
+        "payment_method": order.payment_method,
+        "cash_tendered_vnd": order.cash_tendered_amount,
+        "cash_change_vnd": order.cash_change_amount,
+        "qr_url": legacy.get("qr_url"),
+        **({"qr_intent": legacy["qr_intent"]} if "qr_intent" in legacy else {}),
+    }
+
+
+def pay_check(
+    db: Session,
+    current_user: models.User,
+    check_id: int,
+    request: FnbCheckPay,
+) -> dict:
+    action = "FNB_CHECK_PAY"
+    fingerprint = operation_fingerprint(action, _payload(request, check_id=check_id))
+    try:
+        check, session = _check_for_access(db, current_user, check_id)
+        shop_id = int(session.shop_id)
+        _prepare_locked_shop(db, shop_id)
+        check, session = _check_for_access(db, current_user, check_id)
+        shop = require_fnb_access(db, shop_id, current_user, PERMISSION_FNB_CHECKOUT)
+        existing = _existing_operation(db, shop_id, request.operation_id, fingerprint)
+        if existing is not None:
+            db.rollback()
+            return existing
+        if not bool(shop.fnb_enabled):
+            raise fnb_error(409, "FNB_DISABLED", "Cửa hàng chưa bật bán tại bàn")
+        if check.status != "OPEN" or check.order_id is not None:
+            raise fnb_error(409, "FNB_CHECK_NOT_OPEN", "Bill không còn mở để thanh toán")
+        require_session_revision(db, session, request.expected_session_revision)
+        _require_check_revision(check, request.expected_revision)
+        _recalculate_check(db, check)
+        check_lines = (
+            db.query(models.FnbCheckLine, models.FnbSessionLine)
+            .join(
+                models.FnbSessionLine,
+                models.FnbSessionLine.id == models.FnbCheckLine.session_line_id,
+            )
+            .filter(models.FnbCheckLine.check_id == check.id)
+            .order_by(models.FnbCheckLine.id)
+            .all()
+        )
+        if not check_lines:
+            raise fnb_error(409, "FNB_CHECK_EMPTY", "Bill chưa có món để thanh toán")
+        customer = _checkout_customer(db, shop_id, request.customer_id)
+        total = int(check.total_vnd or 0)
+        if request.payment_method == order_service.PAYMENT_METHOD_TRANSFER:
+            payment_service.require_transfer_account(shop)
+        if request.payment_method == order_service.PAYMENT_METHOD_DEBT:
+            order_service._kiem_ban_ghi_no(db, customer, total)
+        if request.payment_method != order_service.PAYMENT_METHOD_CASH and request.cash_tendered_vnd is not None:
+            raise fnb_error(400, "FNB_CASH_TENDERED_INVALID", "Chỉ nhập tiền khách đưa khi thu tiền mặt")
+        tendered = total if request.cash_tendered_vnd is None else int(request.cash_tendered_vnd)
+        if request.payment_method == order_service.PAYMENT_METHOD_CASH and tendered < total:
+            raise fnb_error(
+                400,
+                "FNB_CASH_SHORT",
+                "Tiền khách đưa chưa đủ",
+                required=total,
+            )
+        shift = None
+        if request.payment_method == order_service.PAYMENT_METHOD_CASH and total > 0:
+            shift = order_service._current_cash_shift(
+                db,
+                current_user,
+                shop_id,
+                required_for_cashier=True,
+                lock_for_cash_write=True,
+            )
+        program = loyalty_service.get_program_model(db, shop_id)
+        paid_now = total == 0 or request.payment_method == order_service.PAYMENT_METHOD_CASH
+        status = (
+            order_service.STATUS_PAID
+            if paid_now
+            else (
+                order_service.STATUS_DEBT
+                if request.payment_method == order_service.PAYMENT_METHOD_DEBT
+                else order_service.STATUS_PENDING
+            )
+        )
+        order = models.Order(
+            shop_id=shop_id,
+            created_by_user_id=current_user.id,
+            shift_id=shift.id if shift else None,
+            operation_id=f"fnb:{hashlib.sha256(request.operation_id.encode()).hexdigest()}",
+            operation_fingerprint=fingerprint,
+            total_amount=total,
+            discount_amount=int(check.discount_vnd or 0),
+            payment_method=request.payment_method,
+            customer_id=customer.id if customer else None,
+            status=status,
+            cash_paid_amount=(total if paid_now and total > 0 else 0),
+            cash_tendered_amount=(tendered if request.payment_method == "cash" else None),
+            cash_change_amount=(tendered - total if request.payment_method == "cash" else None),
+            loyalty_earn_amount_step=(program.earn_amount if program and program.enabled else None),
+            loyalty_earn_points_step=(program.earn_points if program and program.enabled else None),
+            loyalty_expiry_days_snapshot=(program.expiry_days if program and program.enabled else None),
+        )
+        db.add(order)
+        db.flush()
+        created: list[tuple[models.OrderItem, int]] = []
+        for check_line, line in check_lines:
+            gross = checked_multiply(int(check_line.quantity), int(line.unit_price_vnd))
+            order_item = models.OrderItem(
+                order_id=order.id,
+                product_id=line.product_id,
+                product_name=line.product_name,
+                price=int(line.unit_price_vnd),
+                quantity=int(check_line.quantity),
+                net_amount_vnd=gross,
+            )
+            db.add(order_item)
+            db.flush()
+            _transfer_line_provenance(db, check, check_line, order_item)
+            created.append((order_item, gross))
+        discounts = dict(
+            largest_remainder_allocate(
+                int(check.discount_vnd or 0),
+                [(item.id, gross, item.id) for item, gross in created],
+            )
+        )
+        for item, gross in created:
+            item.discount_vnd = discounts[item.id]
+            item.net_amount_vnd = gross - item.discount_vnd
+        if int(check.service_charge_vnd or 0) > 0:
+            db.add(
+                models.OrderItem(
+                    order_id=order.id,
+                    product_id=None,
+                    product_name="Phụ thu",
+                    price=int(check.service_charge_vnd),
+                    quantity=1,
+                    net_amount_vnd=int(check.service_charge_vnd),
+                    cost_known_qty=0,
+                    cost_unknown_qty=0,
+                    cost_basis_vnd=0,
+                )
+            )
+        if sum(int(item.net_amount_vnd or 0) for item, _ in created) + int(check.service_charge_vnd or 0) != total:
+            raise fnb_error(409, "FNB_ORDER_TOTAL_MISMATCH", "Tổng chứng từ không khớp bill")
+        if request.payment_method == order_service.PAYMENT_METHOD_CASH and total > 0:
+            db.add(
+                models.OrderPayment(
+                    order_id=order.id,
+                    entry_type=order_service.ENTRY_CASH,
+                    amount=total,
+                    idempotency_key=f"fnb-cash:{check.id}",
+                    created_by_user_id=current_user.id,
+                    shift_id=shift.id if shift else None,
+                    note=f"Thu tiền mặt F&B check #{check.id}",
+                )
+            )
+        if paid_now:
+            order_service._award_loyalty_paid_order(db, order, current_user.id)
+        if request.payment_method == order_service.PAYMENT_METHOD_TRANSFER and total > 0:
+            qr_sales_service.issue_intent_if_enabled(db, order, shop)
+        check.order_id = order.id
+        check.status = (
+            "PAID"
+            if status == order_service.STATUS_PAID
+            else ("DEBT" if status == order_service.STATUS_DEBT else "PAYMENT_PENDING")
+        )
+        check.settled_at = datetime.datetime.utcnow() if check.status in ("PAID", "DEBT") else None
+        check.revision = int(check.revision or 0) + 1
+        _refresh_session_status(db, session)
+        session.revision = int(session.revision or 0) + 1
+        shop.fnb_revision = int(shop.fnb_revision or 0) + 1
+        db.flush()
+        result = {
+            "shop_id": shop_id,
+            "session_id": session.id,
+            "session_status": session.status,
+            "session_revision": int(session.revision or 0),
+            "check": _serialize_check(db, check),
+            "order": _order_checkout_result(db, shop, order),
+        }
+        return _finish(
+            db,
+            current_user,
+            action,
+            request.operation_id,
+            fingerprint,
+            result,
+            session_id=session.id,
+            after=result,
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+
+def close_session(
+    db: Session,
+    current_user: models.User,
+    session_id: int,
+    request: FnbSessionClose,
+) -> dict:
+    action = "FNB_SESSION_CLOSE"
+    fingerprint = operation_fingerprint(action, _payload(request, session_id=session_id))
+    try:
+        session = _session_for_access(db, current_user, session_id, PERMISSION_FNB_CHECKOUT)
+        shop_id = int(session.shop_id)
+        _prepare_locked_shop(db, shop_id)
+        session = _session_for_access(db, current_user, session_id, PERMISSION_FNB_CHECKOUT)
+        shop = require_fnb_access(db, shop_id, current_user, PERMISSION_FNB_CHECKOUT)
+        existing = _existing_operation(db, shop_id, request.operation_id, fingerprint)
+        if existing is not None:
+            db.rollback()
+            return existing
+        if session.status not in _ACTIVE_SESSION_STATUSES:
+            raise fnb_error(409, "FNB_SESSION_NOT_ACTIVE", "Phiên phục vụ không còn hoạt động")
+        _sync_check_payment_statuses(db, session)
+        require_session_revision(db, session, request.expected_revision)
+        checks = (
+            db.query(models.FnbServiceCheck)
+            .filter(models.FnbServiceCheck.session_id == session.id)
+            .all()
+        )
+        if not checks or any(check.status not in ("PAID", "DEBT", "CANCELLED") for check in checks):
+            raise fnb_error(409, "FNB_UNSETTLED_CHECKS", "Vẫn còn bill chưa thanh toán")
+        lines = db.query(models.FnbSessionLine).filter_by(session_id=session.id).all()
+        if any(
+            int(line.quantity) - int(line.sent_quantity or 0) - int(line.cancelled_quantity or 0)
+            + int(line.sent_cancelled_quantity or 0) > 0
+            for line in lines
+        ):
+            raise fnb_error(409, "FNB_UNSENT_LINES", "Vẫn còn món chưa gửi")
+        if db.query(models.FnbStockAllocation).filter_by(
+            session_id=session.id, state="CONSUMED"
+        ).first() is not None:
+            raise fnb_error(409, "FNB_ALLOCATION_UNSETTLED", "Vẫn còn tồn kho chưa gắn vào chứng từ")
+        now = datetime.datetime.utcnow()
+        before = serialize_session(db, session)
+        for link in _active_links(db, session.id):
+            link.released_at = now
+            table = db.get(models.FnbTable, link.table_id)
+            if table is not None:
+                table.state_version = int(table.state_version or 0) + 1
+                table.updated_at = now
+        session.status = "CLOSED"
+        session.closed_by_user_id = current_user.id
+        session.closed_at = now
+        session.revision = int(session.revision or 0) + 1
+        shop.fnb_revision = int(shop.fnb_revision or 0) + 1
+        db.flush()
+        result = serialize_session(db, session)
+        return _finish(
+            db,
+            current_user,
+            action,
+            request.operation_id,
+            fingerprint,
+            result,
+            session_id=session.id,
+            before=before,
+            after=result,
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+
 def require_session_revision(
     db: Session, session: models.FnbServiceSession, expected_revision: int
 ) -> None:
@@ -1000,6 +1854,7 @@ def open_session(
         )
         db.add(session)
         db.flush()
+        _primary_check(db, session, create=True)
         db.add(models.FnbSessionTable(session_id=session.id, table_id=table.id))
         table.state_version = int(table.state_version or 0) + 1
         table.updated_at = datetime.datetime.utcnow()
@@ -1250,6 +2105,26 @@ def send_session(
                 )
             line.sent_quantity = int(line.sent_quantity or 0) + quantity
             line.state_version = int(line.state_version or 0) + 1
+
+            primary = _primary_check(db, session, create=True)
+            check_line = (
+                db.query(models.FnbCheckLine)
+                .filter(
+                    models.FnbCheckLine.check_id == primary.id,
+                    models.FnbCheckLine.session_line_id == line.id,
+                )
+                .first()
+            )
+            if check_line is None:
+                db.add(
+                    models.FnbCheckLine(
+                        check_id=primary.id,
+                        session_line_id=line.id,
+                        quantity=quantity,
+                    )
+                )
+            else:
+                check_line.quantity = int(check_line.quantity) + quantity
 
         session.revision = int(session.revision or 0) + 1
         shop.fnb_revision = int(shop.fnb_revision or 0) + 1
@@ -1679,6 +2554,8 @@ def cancel_line(
         line.sent_cancelled_quantity = (
             int(line.sent_cancelled_quantity or 0) + sent_to_cancel
         )
+        if sent_to_cancel:
+            _remove_cancelled_from_checks(db, session.id, line.id, sent_to_cancel)
         line.state_version = int(line.state_version or 0) + 1
         session.revision = int(session.revision or 0) + 1
         shop.fnb_revision = int(shop.fnb_revision or 0) + 1

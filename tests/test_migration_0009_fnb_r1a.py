@@ -12,6 +12,7 @@ from fselling.migration.topology import StaticInventory
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FNB_R1A = "0009_fnb_table_service_r1a"
 FNB_R1B = "0010_fnb_kitchen_stock_r1b"
+FNB_R1C = "0011_fnb_checkout_r1c"
 EXPECTED_TABLES = {
     "fnb_areas",
     "fnb_tables",
@@ -85,7 +86,7 @@ def test_0008_to_0009_adds_schema_and_defaults_existing_shop_off(tmp_path):
             "INSERT INTO shops (id, name, bank_account_no, bank_code, is_active, owner_id) "
             "VALUES (1, 'FNB Shop', '', '', 1, 1)"
         )
-    assert runner.upgrade("head") == [FNB_R1A, FNB_R1B]
+    assert runner.upgrade("head") == [FNB_R1A, FNB_R1B, FNB_R1C]
     runner.verify()
     with sqlite3.connect(database) as connection:
         objects = {
