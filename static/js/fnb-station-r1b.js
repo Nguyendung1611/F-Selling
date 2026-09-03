@@ -5,6 +5,15 @@
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
     }[character]));
 
+    function ticketAgeMinutes(createdAt, now = Date.now()) {
+        const created = new Date(createdAt).getTime();
+        return Number.isFinite(created) ? Math.max(0, Math.floor((now - created) / 60_000)) : 0;
+    }
+
+    function ticketAgeClass(minutes) {
+        return minutes >= 10 ? 'is-late' : minutes >= 5 ? 'is-warn' : '';
+    }
+
     function createStationController(deps) {
         const state = { shopId: null, station: null, revision: null, tickets: [], pending: null, timer: null, disposed: false };
         let pendingPromise = null;
@@ -94,7 +103,7 @@
         return { start, load, transition, dispose, getState: () => ({ ...state, tickets: [...state.tickets] }) };
     }
 
-    const api = Object.freeze({ createStationController, escapeHtml });
+    const api = Object.freeze({ createStationController, escapeHtml, ticketAgeMinutes, ticketAgeClass });
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     if (global) global.FnbStationR1B = api;
     if (!global?.document) return;
@@ -112,20 +121,52 @@
         const list = document.getElementById('fnbStationTickets');
         const status = document.getElementById('fnbStationStatus');
         const shopSelect = document.getElementById('fnbStationShop');
+        const retry = document.getElementById('fnbStationRetry');
+        const stockDialog = document.getElementById('fnbOutOfStockDialog');
+        const stockForm = document.getElementById('fnbOutOfStockForm');
+        const stockReason = document.getElementById('fnbOutOfStockReason');
+        let pendingStockTicketId = null;
         title.textContent = station === 'KITCHEN' ? 'Bếp đang chờ' : 'Bar đang chờ';
+
+        function ticketCard(ticket) {
+            const minutes = ticketAgeMinutes(ticket.created_at);
+            return `<article class="fnb-ticket-card ${ticketAgeClass(minutes)}" data-ticket-id="${Number(ticket.id)}" data-created-at="${escapeHtml(ticket.created_at || '')}"><header><div><span class="fnb-ticket-number">Phiếu #${Number(ticket.sequence)}</span><h3>${escapeHtml((ticket.tables || []).join(' + '))}</h3></div><span class="fnb-ticket-time">${minutes} phút</span></header><ul>${(ticket.items || []).map(item => `<li><strong class="fnb-ticket-quantity">${Number(item.quantity)}×</strong><span class="fnb-ticket-item">${escapeHtml(item.product_name)}</span>${item.note ? `<span class="fnb-ticket-note">${escapeHtml(item.note)}</span>` : ''}</li>`).join('')}</ul>${ticket.out_of_stock_reason ? `<p class="fnb-ticket-warning">Hết món: ${escapeHtml(ticket.out_of_stock_reason)}</p>` : ''}<footer>${ticket.status === 'NEW' ? '<button type="button" data-action="start">Nhận làm</button>' : '<button type="button" data-action="done">Hoàn tất</button>'}<button type="button" class="fnb-secondary" data-action="out-of-stock">Báo hết món</button></footer></article>`;
+        }
+
+        function ticketLane(label, tickets) {
+            return `<section class="fnb-ticket-lane"><header><h2>${label}</h2><span class="fnb-ticket-count">${tickets.length}</span></header><div class="fnb-ticket-list">${tickets.length ? tickets.map(ticketCard).join('') : '<p class="fnb-lane-empty">Không có phiếu</p>'}</div></section>`;
+        }
+
+        function refreshTicketTimers() {
+            list.querySelectorAll('[data-created-at]').forEach(card => {
+                const minutes = ticketAgeMinutes(card.dataset.createdAt);
+                card.classList.remove('is-warn', 'is-late');
+                const ageClass = ticketAgeClass(minutes);
+                if (ageClass) card.classList.add(ageClass);
+                card.querySelector('.fnb-ticket-time').textContent = `${minutes} phút`;
+            });
+        }
 
         function render(event) {
             if (event.type === 'loading') {
+                retry.hidden = true;
                 status.textContent = 'Đang tải phiếu…';
                 list.innerHTML = '<div class="fnb-skeleton" aria-hidden="true"></div><div class="fnb-skeleton" aria-hidden="true"></div>';
             } else if (event.type === 'queue') {
+                retry.hidden = true;
                 status.textContent = '';
                 const tickets = event.value.tickets || [];
-                list.innerHTML = tickets.length ? tickets.map(ticket => `<article class="fnb-ticket-card" data-ticket-id="${Number(ticket.id)}"><header><div><span class="fnb-ticket-number">#${Number(ticket.sequence)}</span><h2>${escapeHtml((ticket.tables || []).join(' + '))}</h2></div><span class="fnb-ticket-status">${escapeHtml(ticket.status === 'NEW' ? 'Mới' : 'Đang làm')}</span></header><ul>${(ticket.items || []).map(item => `<li><strong>${Number(item.quantity)} × ${escapeHtml(item.product_name)}</strong>${item.note ? `<span>${escapeHtml(item.note)}</span>` : ''}</li>`).join('')}</ul>${ticket.out_of_stock_reason ? `<p class="fnb-ticket-warning">Hết món: ${escapeHtml(ticket.out_of_stock_reason)}</p>` : ''}<footer>${ticket.status === 'NEW' ? '<button type="button" data-action="start">Nhận làm</button>' : '<button type="button" data-action="done">Xong</button>'}<button type="button" class="fnb-secondary" data-action="out-of-stock">Báo hết món</button></footer></article>`).join('') : '<section class="fnb-empty"><h2>Chưa có phiếu mới</h2><p>Màn hình sẽ tự cập nhật khi quầy gửi món.</p></section>';
+                const fresh = tickets.filter(ticket => ticket.status === 'NEW');
+                const doing = tickets.filter(ticket => ticket.status === 'IN_PROGRESS');
+                list.innerHTML = ticketLane('Mới', fresh) + ticketLane('Đang làm', doing);
             } else if (event.type === 'pending') {
                 status.textContent = 'Đang cập nhật phiếu…';
             } else {
-                status.textContent = event.error?.message || 'Chưa cập nhật được. Kiểm tra mạng rồi thử lại.';
+                retry.hidden = false;
+                status.textContent = navigator.onLine
+                    ? 'Chưa cập nhật được phiếu. Thử lại hoặc đăng nhập lại nếu phiên đã hết.'
+                    : 'Đang mất kết nối. Phiếu gần nhất vẫn được giữ.';
+                if (!event.hasData) list.innerHTML = '<section class="fnb-empty"><h2>Chưa tải được phiếu</h2><p>Kiểm tra mạng rồi bấm Thử lại.</p></section>';
             }
         }
 
@@ -142,17 +183,38 @@
             if (!button) return;
             const ticketId = Number(button.closest('[data-ticket-id]')?.dataset.ticketId);
             const action = button.dataset.action;
+            if (action === 'close-stock') {
+                pendingStockTicketId = null;
+                stockDialog.close();
+                return;
+            }
             let reason = null;
             if (action === 'out-of-stock') {
-                reason = global.prompt('Món nào đã hết?');
-                if (!reason?.trim()) return;
+                pendingStockTicketId = ticketId;
+                stockReason.value = '';
+                stockDialog.showModal();
+                stockReason.focus();
+                return;
             }
             controller.transition(ticketId, action, reason?.trim()).catch(() => {});
         });
+        stockForm.addEventListener('submit', event => {
+            event.preventDefault();
+            const reason = stockReason.value.trim();
+            if (!pendingStockTicketId || !reason) return;
+            controller.transition(pendingStockTicketId, 'out-of-stock', reason)
+                .then(() => { pendingStockTicketId = null; stockDialog.close(); })
+                .catch(() => {});
+        });
+        retry.addEventListener('click', () => controller.load(true).catch(() => {}));
         shopSelect.addEventListener('change', () => controller.start(Number(shopSelect.value), station).catch(() => {}));
         global.addEventListener('online', () => controller.load(true).catch(() => {}));
         global.addEventListener('offline', () => { status.textContent = 'Đang mất kết nối. Phiếu gần nhất vẫn được giữ.'; });
-        global.addEventListener('pagehide', () => controller.dispose(), { once: true });
+        const clock = global.setInterval(refreshTicketTimers, 30_000);
+        global.addEventListener('pagehide', () => {
+            global.clearInterval(clock);
+            controller.dispose();
+        }, { once: true });
 
         apiCall('/shops').then(shops => {
             const available = (shops || []).filter(shop => shop.is_active !== false && shop.fnb_enabled);

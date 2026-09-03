@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
-const { createStationController } = require('../../static/js/fnb-station-r1b.js');
+const {
+    createStationController, ticketAgeMinutes, ticketAgeClass,
+} = require('../../static/js/fnb-station-r1b.js');
 
 function queue(revision = 3) {
     return { changed: true, station: 'KITCHEN', revision, tickets: [
@@ -8,6 +10,10 @@ function queue(revision = 3) {
 }
 
 async function run() {
+    assert.equal(ticketAgeMinutes('2026-09-03T10:00:00Z', Date.parse('2026-09-03T10:05:59Z')), 5);
+    assert.equal(ticketAgeClass(4), '');
+    assert.equal(ticketAgeClass(5), 'is-warn');
+    assert.equal(ticketAgeClass(10), 'is-late');
     const calls = [];
     const renders = [];
     const clearedTimers = [];

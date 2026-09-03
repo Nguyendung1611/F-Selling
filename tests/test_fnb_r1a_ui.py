@@ -35,6 +35,7 @@ def test_fnb_page_and_assets_are_wired(client):
     html = page.text
     for element_id in (
         "fnbFloor",
+        "fnbFloorSummary",
         "fnbSessionPanel",
         "fnbLiveStatus",
         "fnbSetupOpen",
@@ -48,15 +49,17 @@ def test_fnb_page_and_assets_are_wired(client):
         "fnbClosePaidSession",
         "fnbVariantDialog",
         "fnbVariantList",
+        "fnbCategoryTabs",
+        "fnbCheckoutHint",
     ):
         assert f'id="{element_id}"' in html
     assert "/css/fnb-r1a.css?" in html
     assert "/js/locales/fnb.js?" in html
-    assert "/js/fnb-r1a.js?v=20260903-r2" in html
+    assert "/js/fnb-r1a.js?v=20260903-r3" in html
     source = (ROOT / "static/js/fnb-r1a.js").read_text(encoding="utf-8")
     assert "values.voucher_code = voucherCode" in source
     assert "values.loyalty_points_to_use = loyaltyPoints" in source
-    assert "groupMenuProducts(products, query)" in source
+    assert "groupMenuProducts(categoryProducts, query)" in source
     assert 'data-action="choose-variant"' in source
     assert 'data-action="add-variant"' in source
     assert client.get("/fnb.html", follow_redirects=False).headers["location"] == "/fnb"
@@ -69,7 +72,8 @@ def test_fnb_station_page_and_role_routing_are_wired(client):
     assert page.status_code == 200
     assert 'id="fnbStationTickets"' in page.text
     assert "/css/fnb-station-r1b.css?" in page.text
-    assert "/js/fnb-station-r1b.js?v=20260901-r1b2" in page.text
+    assert "/js/fnb-station-r1b.js?v=20260903-r3" in page.text
+    assert "/js/i18n.js?" in page.text
 
     source = (ROOT / "static/js/fnb-r1a.js").read_text(encoding="utf-8")
     assert "['KITCHEN', 'BAR'].includes(staffRole)" in source
@@ -85,6 +89,19 @@ def test_fnb_role_translations_use_one_fresh_common_catalog_url():
 def test_table_setup_forms_come_before_the_potentially_long_station_list():
     html = (ROOT / "static/fnb.html").read_text(encoding="utf-8")
     assert html.index('id="fnbAreaForm"') < html.index('id="fnbStationList"')
+
+
+def test_fnb_r3_operational_layout_is_wired():
+    html = (ROOT / "static/fnb.html").read_text(encoding="utf-8")
+    source = (ROOT / "static/js/fnb-r1a.js").read_text(encoding="utf-8")
+    station = (ROOT / "static/js/fnb-station-r1b.js").read_text(encoding="utf-8")
+    assert 'class="fnb-order-layout"' in html
+    assert 'class="fnb-menu-pane"' in html
+    assert 'class="fnb-bill-pane"' in html
+    assert 'data-action="quantity-minus"' in source
+    assert "fnb.checkout.paid_label" in source
+    assert "ticketAgeMinutes" in station
+    assert "fnb-ticket-lane" in station
 
 
 def test_pos_entry_is_hidden_until_shop_capability_is_known():

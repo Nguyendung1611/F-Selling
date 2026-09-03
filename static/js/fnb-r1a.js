@@ -587,28 +587,30 @@
         }
 
         const elements = Object.fromEntries([
-            'fnbShopSelect', 'fnbFloor', 'fnbAreaTabs', 'fnbLiveStatus', 'fnbRetry', 'fnbRefreshNote',
+            'fnbShopSelect', 'fnbFloor', 'fnbFloorSummary', 'fnbAreaTabs', 'fnbLiveStatus', 'fnbRetry', 'fnbRefreshNote',
             'fnbSetupOpen', 'fnbSetupDialog', 'fnbSetupAreas', 'fnbSetupStatus',
             'fnbAreaForm', 'fnbAreaName', 'fnbTableForm', 'fnbTableArea', 'fnbTableName',
             'fnbSessionPanel', 'fnbSessionBackdrop', 'fnbSessionClose', 'fnbSessionTitle',
-            'fnbProductSearch', 'fnbProductGrid', 'fnbDraftLines', 'fnbSentLines', 'fnbSubtotal',
+            'fnbProductSearch', 'fnbCategoryTabs', 'fnbProductGrid', 'fnbDraftLines', 'fnbSentLines', 'fnbSubtotal',
             'fnbVariantDialog', 'fnbVariantTitle', 'fnbVariantHint', 'fnbVariantList',
             'fnbConflict', 'fnbSessionStatus', 'fnbTableActions', 'fnbTargetTable',
             'fnbCancelSession', 'fnbSend', 'fnbStationList', 'fnbPinForm', 'fnbManagerPin',
             'fnbApprovalDialog', 'fnbApprovalForm', 'fnbApproverUsername', 'fnbApprovalPin',
             'fnbCancelResolution', 'fnbCancelReason', 'fnbApprovalStatus',
-            'fnbCheckoutOpen', 'fnbCheckoutDialog', 'fnbCheckoutStatus', 'fnbCheckList',
+            'fnbCheckoutOpen', 'fnbCheckoutDialog', 'fnbCheckoutTitle', 'fnbCheckoutStatus', 'fnbCheckList',
             'fnbCheckDetail', 'fnbSplitPanel', 'fnbSplitForm', 'fnbSplitLines', 'fnbSplitLabel',
             'fnbSplitButton', 'fnbAdjustmentPanel', 'fnbAdjustmentForm', 'fnbDiscountKind',
             'fnbDiscountValue', 'fnbServiceKind', 'fnbServiceValue', 'fnbAdjustmentButton',
             'fnbPayForm', 'fnbCashTenderedField', 'fnbCashTendered', 'fnbCustomerField',
             'fnbCustomer', 'fnbVoucherCode', 'fnbLoyaltyPoints', 'fnbPayButton',
-            'fnbPrintProvisional', 'fnbClosePaidSession',
+            'fnbPrintProvisional', 'fnbClosePaidSession', 'fnbCheckoutHint',
             'fnbReceiptPrint'
         ].map(id => [id, document.getElementById(id)]));
         let shops = [];
         let products = [];
+        let categories = [];
         let selectedAreaId = null;
+        let selectedCategoryId = null;
         let lastTableTrigger = null;
         let setupAllowed = false;
         let pendingCancelLineId = null;
@@ -665,6 +667,7 @@
         function renderFloor(value) {
             const nonemptyAreas = (value.areas || []).filter(area => (area.tables || []).length);
             if (!nonemptyAreas.length) {
+                elements.fnbFloorSummary.innerHTML = '';
                 elements.fnbAreaTabs.innerHTML = '';
                 const ownerAction = setupAllowed
                     ? `<button type="button" data-action="open-setup">${escapeHtml(t('fnb.setup.open'))}</button>`
@@ -684,31 +687,62 @@
                 `<button type="button" data-action="select-area" data-id="${Number(area.id)}" aria-current="${Number(area.id) === Number(selectedAreaId)}">${escapeHtml(area.name)}</button>`
             ).join('');
             const area = nonemptyAreas.find(row => Number(row.id) === Number(selectedAreaId));
+            const allTables = floorTables(value);
+            const emptyCount = allTables.filter(table => table.state !== 'SERVING').length;
+            const servingCount = allTables.length - emptyCount;
+            const unsentCount = allTables.reduce(
+                (sum, table) => sum + Number(table.session?.unsent_quantity || 0), 0,
+            );
+            elements.fnbFloorSummary.innerHTML = [
+                ['fnb.floor.total', allTables.length, ''],
+                ['fnb.floor.empty', emptyCount, ''],
+                ['fnb.floor.serving', servingCount, 'is-serving'],
+                ['fnb.floor.unsent', unsentCount, unsentCount ? 'is-attention' : ''],
+            ].map(([key, count, className]) => `<div class="fnb-summary-card ${className}"><span>${escapeHtml(t(key))}</span><strong>${Number(count)}</strong></div>`).join('');
             elements.fnbFloor.innerHTML = (area.tables || []).map(table => {
                 const serving = table.state === 'SERVING';
                 const opened = table.session?.opened_at ? new Date(table.session.opened_at).getTime() : Date.now();
                 const minutes = Math.max(0, Math.floor((Date.now() - opened) / 60000));
-                return `<button type="button" class="fnb-table-card${serving ? ' is-serving' : ''}" data-action="open-table" data-id="${Number(table.id)}"><strong>${escapeHtml(table.name)}</strong><span class="fnb-table-state">${escapeHtml(t(serving ? 'fnb.table.serving' : 'fnb.table.empty'))}</span>${serving ? `<span class="fnb-table-meta"><span>${escapeHtml(t('fnb.table.elapsed', { minutes }))}</span><span>${escapeHtml(money(table.session?.subtotal_vnd || 0))}</span><span>${escapeHtml(t('fnb.table.unsent', { count: Number(table.session?.unsent_quantity || 0) }))}</span></span>` : ''}</button>`;
+                return `<button type="button" class="fnb-table-card${serving ? ' is-serving' : ''}" data-action="open-table" data-id="${Number(table.id)}"><strong>${escapeHtml(table.name)}</strong><span class="fnb-table-state">${escapeHtml(t(serving ? 'fnb.table.serving' : 'fnb.table.empty'))}</span>${serving ? `<span class="fnb-table-meta"><span>${escapeHtml(t('fnb.table.elapsed', { minutes }))}</span><span class="fnb-table-total">${escapeHtml(money(table.session?.subtotal_vnd || 0))}</span><span class="fnb-table-unsent">${escapeHtml(t('fnb.table.unsent', { count: Number(table.session?.unsent_quantity || 0) }))}</span></span>` : ''}</button>`;
             }).join('');
             elements.fnbRetry.hidden = true;
             elements.fnbRefreshNote.hidden = true;
             live('');
         }
 
+        function renderCategories() {
+            const available = categories.filter(category => products.some(
+                product => Number(product.category_id) === Number(category.id),
+            ));
+            if (selectedCategoryId && !available.some(category => Number(category.id) === Number(selectedCategoryId))) {
+                selectedCategoryId = null;
+            }
+            elements.fnbCategoryTabs.innerHTML = [
+                `<button type="button" data-action="select-menu-category" data-id="0" aria-current="${!selectedCategoryId}">${escapeHtml(t('fnb.menu.all'))}</button>`,
+                ...available.map(category => `<button type="button" data-action="select-menu-category" data-id="${Number(category.id)}" aria-current="${Number(category.id) === Number(selectedCategoryId)}">${escapeHtml(category.name)}</button>`),
+            ].join('');
+        }
+
         function renderProducts() {
             const query = elements.fnbProductSearch.value;
-            visibleMenuEntries = groupMenuProducts(products, query);
+            const categoryProducts = selectedCategoryId
+                ? products.filter(product => Number(product.category_id) === Number(selectedCategoryId))
+                : products;
+            visibleMenuEntries = groupMenuProducts(categoryProducts, query);
+            renderCategories();
             elements.fnbProductGrid.innerHTML = visibleMenuEntries.length
                 ? visibleMenuEntries.map((entry, index) => {
                     const ids = entry.products.map(product => Number(product.id)).join(' ');
                     if (!entry.group) {
                         const product = entry.products[0];
-                        return `<button type="button" data-action="add-product" data-id="${Number(product.id)}" data-product-ids="${ids}"><strong>${escapeHtml(product.name)}</strong><small>${escapeHtml(money(product.price))}</small><span class="fnb-station-chip">${escapeHtml(t(`fnb.station.${String(product.fnb_station || 'DIRECT').toLowerCase()}`))}</span></button>`;
+                        const soldOut = Number(product.stock) <= 0;
+                        return `<button type="button" data-action="add-product" data-id="${Number(product.id)}" data-product-ids="${ids}" ${soldOut ? 'disabled' : ''}><strong>${escapeHtml(product.name)}</strong><small class="fnb-product-price">${escapeHtml(money(product.price))}</small><small>${escapeHtml(soldOut ? t('fnb.menu.out_of_stock') : t('fnb.menu.stock', { count: Number(product.stock) }))}</small></button>`;
                     }
                     const prices = entry.products.map(product => Number(product.price) || 0);
                     const price = Math.min(...prices) === Math.max(...prices)
                         ? money(prices[0]) : `${money(Math.min(...prices))} – ${money(Math.max(...prices))}`;
-                    return `<button type="button" class="fnb-product-group" data-action="choose-variant" data-index="${index}" data-product-ids="${ids}" aria-haspopup="dialog"><strong>${escapeHtml(entry.group)}</strong><small>${escapeHtml(price)}</small><span class="fnb-variant-count">${escapeHtml(t('fnb.menu.variant_count', { count: entry.products.length }))}</span></button>`;
+                    const soldOut = entry.products.every(product => Number(product.stock) <= 0);
+                    return `<button type="button" class="fnb-product-group" data-action="choose-variant" data-index="${index}" data-product-ids="${ids}" aria-haspopup="dialog" ${soldOut ? 'disabled' : ''}><strong>${escapeHtml(entry.group)}</strong><small class="fnb-product-price">${escapeHtml(price)}</small><span class="fnb-variant-count">${escapeHtml(soldOut ? t('fnb.menu.out_of_stock') : t('fnb.menu.variant_count', { count: entry.products.length }))}</span></button>`;
                 }).join('')
                 : `<p>${escapeHtml(t('fnb.menu.empty'))}</p>`;
         }
@@ -743,16 +777,17 @@
 
         function renderSession(value, draft) {
             if (!value) return;
+            document.body.classList.add('fnb-order-open');
             elements.fnbSessionPanel.hidden = false;
             elements.fnbSessionPanel.inert = false;
-            elements.fnbSessionBackdrop.hidden = false;
+            elements.fnbSessionBackdrop.hidden = true;
             elements.fnbSessionTitle.textContent = (value.tables || []).map(table => table.name).join(' + ');
             const pending = controller.getState().pendingMutation;
             const buckets = partitionLines(value.lines || []);
             const serverLines = buckets.draft.map(line => {
                     const saved = draft?.line_id === line.id ? draft : null;
                     const unsynced = pending?.attempt?.line_id === line.id || saved;
-                    return `<article class="fnb-draft-row" data-line-id="${Number(line.id)}"><header><strong>${escapeHtml(line.product_name || `#${line.product_id}`)}</strong>${unsynced ? `<span class="fnb-unsynced">${escapeHtml(t('fnb.state.unsynced'))}</span>` : ''}</header><div class="fnb-draft-edit"><label><span class="sr-only">${escapeHtml(t('fnb.draft.quantity'))}</span><input data-field="quantity" type="number" min="1" inputmode="numeric" value="${Number(saved?.quantity ?? line.quantity)}" aria-label="${escapeHtml(t('fnb.draft.quantity'))}"></label><label><span class="sr-only">${escapeHtml(t('fnb.draft.note'))}</span><input data-field="note" maxlength="500" value="${escapeHtml(saved?.note ?? line.note ?? '')}" placeholder="${escapeHtml(t('fnb.draft.note_placeholder'))}" aria-label="${escapeHtml(t('fnb.draft.note'))}"></label><button type="button" class="fnb-secondary" data-action="save-line" data-id="${Number(line.id)}">${escapeHtml(t('fnb.action.save'))}</button></div><button type="button" class="fnb-secondary" data-action="cancel-line" data-id="${Number(line.id)}">${escapeHtml(t('fnb.action.cancel_quantity'))}</button></article>`;
+                    return `<article class="fnb-draft-row" data-line-id="${Number(line.id)}"><header><strong>${escapeHtml(line.product_name || `#${line.product_id}`)}</strong>${unsynced ? `<span class="fnb-unsynced">${escapeHtml(t('fnb.state.unsynced'))}</span>` : ''}</header><div class="fnb-draft-edit"><label><span>${escapeHtml(t('fnb.draft.quantity'))}</span><span class="fnb-quantity-stepper"><button type="button" class="fnb-secondary" data-action="quantity-minus" data-id="${Number(line.id)}" aria-label="${escapeHtml(t('fnb.action.decrease'))}">−</button><input data-field="quantity" type="number" min="1" inputmode="numeric" value="${Number(saved?.quantity ?? line.quantity)}" aria-label="${escapeHtml(t('fnb.draft.quantity'))}"><button type="button" class="fnb-secondary" data-action="quantity-plus" data-id="${Number(line.id)}" aria-label="${escapeHtml(t('fnb.action.increase'))}">+</button></span></label><label><span>${escapeHtml(t('fnb.draft.note'))}</span><input data-field="note" maxlength="500" value="${escapeHtml(saved?.note ?? line.note ?? '')}" placeholder="${escapeHtml(t('fnb.draft.note_placeholder'))}" aria-label="${escapeHtml(t('fnb.draft.note'))}"></label></div><button type="button" class="fnb-secondary" data-action="cancel-line" data-id="${Number(line.id)}">${escapeHtml(t('fnb.action.cancel_quantity'))}</button></article>`;
                 }).join('');
             const localProduct = draft?.product_id && !draft.line_id
                 ? products.find(product => Number(product.id) === Number(draft.product_id))
@@ -773,11 +808,14 @@
             const sentQuantity = buckets.sent.reduce((sum, line) => sum + Number(line.active_sent_quantity || 0), 0);
             elements.fnbCheckoutOpen.disabled = sentQuantity <= 0 || Number(value.unsent_quantity || 0) > 0 || Boolean(pending);
             elements.fnbCheckoutOpen.title = Number(value.unsent_quantity || 0) > 0 ? t('fnb.checkout.unsent_block') : '';
+            elements.fnbCheckoutHint.hidden = Number(value.unsent_quantity || 0) <= 0;
+            elements.fnbCheckoutHint.textContent = elements.fnbCheckoutHint.hidden ? '' : t('fnb.checkout.unsent_block_count', { count: Number(value.unsent_quantity || 0) });
             renderTargets();
             renderProducts();
         }
 
         function closeSession() {
+            document.body.classList.remove('fnb-order-open');
             elements.fnbSessionPanel.hidden = true;
             elements.fnbSessionPanel.inert = true;
             elements.fnbSessionBackdrop.hidden = true;
@@ -817,7 +855,9 @@
                 ? `/pos?receipt=${Number(check.order_id)}` : '';
             const finalReceipt = finalReceiptUrl
                 ? `<div class="fnb-payment-result"><a class="fnb-queue-link" href="${finalReceiptUrl}">${escapeHtml(t('fnb.checkout.final_receipt'))}</a></div>` : '';
-            elements.fnbCheckDetail.innerHTML = `<div class="fnb-receipt-head"><span>${escapeHtml(t('fnb.checkout.provisional_label'))}</span><strong>${escapeHtml(check.label)}</strong></div><div class="fnb-receipt-lines">${check.lines.map(line => `<div><span>${escapeHtml(line.product_name)} × ${Number(line.quantity)}</span><strong>${escapeHtml(money(Number(line.unit_price_vnd) * Number(line.quantity)))}</strong></div>`).join('')}</div><dl class="fnb-check-totals"><div><dt>${escapeHtml(t('fnb.checkout.subtotal'))}</dt><dd>${escapeHtml(money(check.subtotal_vnd))}</dd></div>${Number(check.discount_vnd) ? `<div><dt>${escapeHtml(t('fnb.checkout.discount'))}</dt><dd>−${escapeHtml(money(check.discount_vnd))}</dd></div>` : ''}${Number(check.service_charge_vnd) ? `<div><dt>${escapeHtml(t('fnb.checkout.service_charge'))}</dt><dd>${escapeHtml(money(check.service_charge_vnd))}</dd></div>` : ''}<div class="is-total"><dt>${escapeHtml(t('fnb.checkout.total'))}</dt><dd>${escapeHtml(money(check.total_vnd))}</dd></div></dl>${qr}${finalReceipt}`;
+            const paid = ['PAID', 'DEBT'].includes(check.status);
+            const documentLabel = paid ? t('fnb.checkout.paid_label') : t('fnb.checkout.provisional_label');
+            elements.fnbCheckDetail.innerHTML = `<div class="fnb-receipt-head"><span class="${paid ? 'is-paid' : ''}">${escapeHtml(documentLabel)}</span><strong>${escapeHtml(check.label)}</strong></div><div class="fnb-receipt-lines">${check.lines.map(line => `<div><span>${escapeHtml(line.product_name)} × ${Number(line.quantity)}</span><strong>${escapeHtml(money(Number(line.unit_price_vnd) * Number(line.quantity)))}</strong></div>`).join('')}</div><dl class="fnb-check-totals"><div><dt>${escapeHtml(t('fnb.checkout.subtotal'))}</dt><dd>${escapeHtml(money(check.subtotal_vnd))}</dd></div>${Number(check.discount_vnd) ? `<div><dt>${escapeHtml(t('fnb.checkout.discount'))}</dt><dd>−${escapeHtml(money(check.discount_vnd))}</dd></div>` : ''}${Number(check.service_charge_vnd) ? `<div><dt>${escapeHtml(t('fnb.checkout.service_charge'))}</dt><dd>${escapeHtml(money(check.service_charge_vnd))}</dd></div>` : ''}<div class="is-total"><dt>${escapeHtml(t(paid ? 'fnb.checkout.paid_total' : 'fnb.checkout.total'))}</dt><dd>${escapeHtml(money(check.total_vnd))}</dd></div></dl>${qr}${finalReceipt}`;
             elements.fnbSplitLines.innerHTML = check.lines.map(line => `<label class="fnb-split-line" data-line-id="${Number(line.line_id)}"><input type="checkbox" ${editable ? '' : 'disabled'}><span>${escapeHtml(line.product_name)} · ${Number(line.quantity)}</span><input type="number" min="1" max="${Number(line.quantity)}" value="1" inputmode="numeric" aria-label="${escapeHtml(t('fnb.draft.quantity'))}" ${editable ? '' : 'disabled'}></label>`).join('');
             elements.fnbSplitLabel.disabled = !editable;
             elements.fnbSplitButton.disabled = !editable || check.lines.length < 2 && Number(check.lines[0]?.quantity || 0) < 2;
@@ -961,6 +1001,16 @@
             }
         }
 
+        async function loadCategories() {
+            try {
+                const result = await apiCall(`/categories/${Number(elements.fnbShopSelect.value)}`);
+                categories = (result || []).filter(category => category.is_active !== false);
+            } catch (error) {
+                categories = [];
+            }
+            renderProducts();
+        }
+
         async function loadCustomers() {
             try {
                 customers = await apiCall(`/customers/${Number(elements.fnbShopSelect.value)}`) || [];
@@ -997,7 +1047,9 @@
             if (elements.fnbVariantDialog.open) elements.fnbVariantDialog.close();
             localStorage.setItem('currentShopId', String(shopId));
             products = [];
-            await Promise.all([controller.selectShop(Number(shopId)), loadProducts()]);
+            categories = [];
+            selectedCategoryId = null;
+            await Promise.all([controller.selectShop(Number(shopId)), loadProducts(), loadCategories()]);
         }
 
         async function loadShops() {
@@ -1032,6 +1084,9 @@
             if (action === 'select-area') {
                 selectedAreaId = id;
                 renderFloor(controller.getState().floor);
+            } else if (action === 'select-menu-category') {
+                selectedCategoryId = id || null;
+                renderProducts();
             } else if (action === 'open-table') {
                 lastTableTrigger = button;
                 sessionStatus(t('fnb.session.loading'));
@@ -1051,10 +1106,12 @@
             } else if (action === 'add-variant') {
                 elements.fnbVariantDialog.close();
                 controller.addLine({ product_id: id, quantity: 1, note: '' }).catch(() => {});
-            } else if (action === 'save-line') {
+            } else if (action === 'quantity-minus' || action === 'quantity-plus') {
                 const row = button.closest('[data-line-id]');
+                const quantity = row.querySelector('[data-field="quantity"]');
+                quantity.value = String(Math.max(1, Number(quantity.value || 1) + (action === 'quantity-plus' ? 1 : -1)));
                 controller.updateLine(id, {
-                    quantity: Number(row.querySelector('[data-field="quantity"]').value),
+                    quantity: Number(quantity.value),
                     note: row.querySelector('[data-field="note"]').value,
                 }).catch(() => {});
             } else if (action === 'cancel-line') {
@@ -1131,6 +1188,7 @@
             selectedCheckId = null;
             lastPaymentResult = null;
             checkoutStatus(t('fnb.checkout.loading'));
+            elements.fnbCheckoutTitle.textContent = t('fnb.checkout.table_title', { table: elements.fnbSessionTitle.textContent });
             elements.fnbCheckoutDialog.showModal();
             try {
                 await Promise.all([controller.loadChecks(), loadCustomers()]);
@@ -1250,6 +1308,14 @@
                 note: row.querySelector('[data-field="note"]').value,
             });
         });
+        elements.fnbDraftLines.addEventListener('change', event => {
+            const row = event.target.closest('[data-line-id]');
+            if (!row || !event.target.matches('[data-field]')) return;
+            controller.updateLine(Number(row.dataset.lineId), {
+                quantity: Number(row.querySelector('[data-field="quantity"]').value),
+                note: row.querySelector('[data-field="note"]').value,
+            }).catch(() => {});
+        });
         elements.fnbSetupDialog.addEventListener('close', () => elements.fnbSetupOpen.focus());
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) controller.loadFloor(false);
@@ -1265,6 +1331,7 @@
         global.addEventListener('pagehide', () => controller.dispose(), { once: true });
         document.addEventListener('fselling:localechange', () => {
             renderFloor(controller.getState().floor);
+            renderCategories();
             if (controller.getState().session) renderSession(controller.getState().session, controller.getDraft());
             if (controller.getState().checks) renderChecks(controller.getState().checks);
             if (elements.fnbVariantDialog.open) renderVariantDialog();
