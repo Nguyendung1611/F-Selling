@@ -128,6 +128,8 @@ body.fnb-page {
 .fnb-product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; max-height: 240px; overflow-y: auto; margin: 10px 0 20px; }
 .fnb-product-grid button { min-height: 62px; background: #fff; border-color: var(--fnb-line); color: var(--fnb-ink); text-align: left; overflow-wrap: anywhere; }
 .fnb-product-grid small { display: block; margin-top: 4px; color: var(--fnb-muted); }
+.fnb-product-group { border-left: 4px solid var(--primary) !important; }
+.fnb-variant-count { display: inline-block; margin-top: 6px; color: #9a3412; font-size: .78rem; font-weight: 850; }
 .fnb-draft-lines { display: grid; gap: 10px; }
 .fnb-draft-row { padding: 12px; border: 1px solid var(--fnb-line); border-radius: 8px; }
 .fnb-draft-row header { display: flex; justify-content: space-between; gap: 8px; }
@@ -147,6 +149,16 @@ body.fnb-page {
 
 #fnbSetupDialog { width: min(920px, calc(100vw - 24px)); max-height: 90dvh; padding: 22px; border: 1px solid var(--fnb-line); border-radius: 12px; color: var(--fnb-ink); }
 #fnbSetupDialog::backdrop { background: rgb(15 23 42 / .58); }
+#fnbVariantDialog { width: min(520px, calc(100vw - 24px)); max-height: 88dvh; padding: 22px; border: 1px solid var(--fnb-line); border-radius: 12px; color: var(--fnb-ink); }
+#fnbVariantDialog::backdrop { background: rgb(15 23 42 / .62); }
+.fnb-variant-hint { margin: -8px 0 14px; color: var(--fnb-muted); }
+.fnb-variant-list { display: grid; gap: 9px; max-height: 58dvh; overflow-y: auto; }
+.fnb-variant-option { min-height: 64px !important; display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; color: var(--fnb-ink) !important; background: #fff !important; border-color: var(--fnb-line) !important; text-align: left; }
+.fnb-variant-option:hover { border-color: var(--primary) !important; background: #fff7ed !important; }
+.fnb-variant-option > span { min-width: 0; }
+.fnb-variant-option small { display: block; margin-top: 3px; color: var(--fnb-muted); }
+.fnb-variant-price { flex: 0 0 auto; text-align: right; }
+.fnb-variant-option:disabled { background: #f1f5f9 !important; color: var(--fnb-muted) !important; }
 .fnb-dialog-heading { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
 .fnb-dialog-heading h2 { margin: 3px 0 18px; }
 .fnb-setup-list { display: grid; gap: 12px; max-height: 43dvh; overflow-y: auto; }
@@ -239,6 +251,7 @@ body.fnb-page {
     .fnb-pin-form { grid-template-columns: 1fr; }
     .fnb-setup-row button, .fnb-setup-row small { grid-column: auto; }
     #fnbCheckoutDialog { padding: 14px; }
+    #fnbVariantDialog { padding: 16px; }
     .fnb-checkout-layout, .fnb-checkout-tools, .fnb-pay-form { grid-template-columns: 1fr; }
     .fnb-check-list { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
     .fnb-pay-form fieldset { grid-template-columns: 1fr; }

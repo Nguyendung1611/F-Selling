@@ -11,7 +11,7 @@
     <meta name="apple-mobile-web-app-title" content="F-Selling">
     <title data-i18n="fnb.page_title">Bán tại bàn | F-Selling</title>
     <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
-    <link rel="stylesheet" href="/css/fnb-r1a.css?v=20260902-r1c4">
+    <link rel="stylesheet" href="/css/fnb-r1a.css?v=20260903-r2">
 </head>
 <body class="fnb-page">
     <header class="fnb-header">
@@ -89,6 +89,18 @@
             </footer>
         </aside>
     </main>
+
+    <dialog id="fnbVariantDialog" aria-labelledby="fnbVariantTitle" aria-describedby="fnbVariantHint">
+        <div class="fnb-dialog-heading">
+            <div>
+                <p class="eyebrow" data-i18n="fnb.menu.variant_eyebrow">Chọn size / loại</p>
+                <h2 id="fnbVariantTitle"></h2>
+            </div>
+            <form method="dialog"><button class="fnb-icon-button" value="cancel" aria-label="Đóng" data-i18n-aria-label="common.close">×</button></form>
+        </div>
+        <p id="fnbVariantHint" class="fnb-variant-hint"></p>
+        <div id="fnbVariantList" class="fnb-variant-list"></div>
+    </dialog>
 
     <dialog id="fnbCheckoutDialog" aria-labelledby="fnbCheckoutTitle">
         <div class="fnb-dialog-heading">
@@ -199,10 +211,10 @@
     <div id="toast" role="status" aria-live="polite"></div>
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
     <script src="/js/locales/common.js?v=20260901-fnb-r1b"></script>
-    <script src="/js/locales/fnb.js?v=20260902-r1e"></script>
+    <script src="/js/locales/fnb.js?v=20260903-r2"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
     <script src="/js/api.js?v=20260901-fnb-r1a&amp;g=20260813-i09-g2h2"></script>
-    <script src="/js/fnb-r1a.js?v=20260902-r1e2"></script>
+    <script src="/js/fnb-r1a.js?v=20260903-r2"></script>
     <script src="/js/pwa.js?v=20260806-pwa"></script>
 </body>
 </html>

@@ -287,12 +287,18 @@ def main():
 
         products = {}
         for ten, gia, _von, nhom, theo_lo, _toc_do, _con_lai in HANG_HOA_CONFIG:
+            bien_the = (
+                ten.removeprefix("Áo thun F-Selling Cotton - ")
+                if ten.startswith("Áo thun F-Selling Cotton - ") else ""
+            )
             du_lieu = {
-                "name": ten,
+                "name": "Áo thun F-Selling Cotton" if bien_the else ten,
                 "price": gia,
                 "stock": 0,
                 "category_id": cats[nhom],
             }
+            if bien_the:
+                du_lieu["variant_name"] = bien_the
             if theo_lo:
                 du_lieu["track_batches"] = "true"
             p = _ok(

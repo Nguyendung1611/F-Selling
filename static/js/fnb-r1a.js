@@ -20,6 +20,29 @@
         };
     }
 
+    function groupMenuProducts(products, query = '') {
+        const needle = String(query || '').trim().toLocaleLowerCase();
+        const matches = (products || []).filter(product => !needle || [
+            product.name, product.variant_group, product.variant_name,
+        ].some(value => String(value || '').toLocaleLowerCase().includes(needle)));
+        const entries = [];
+        const groupIndexes = new Map();
+        matches.forEach(product => {
+            if (!product.variant_group) {
+                entries.push({ group: null, products: [product] });
+                return;
+            }
+            const existing = groupIndexes.get(product.variant_group);
+            if (existing !== undefined) {
+                entries[existing].products.push(product);
+                return;
+            }
+            groupIndexes.set(product.variant_group, entries.length);
+            entries.push({ group: product.variant_group, products: [product] });
+        });
+        return entries;
+    }
+
     function adjustmentValueForApi(kind, value) {
         return kind === 'PERCENT' ? Math.round(Number(value || 0) * 100) : Number(value || 0);
     }
@@ -537,7 +560,7 @@
 
     const api = Object.freeze({
         createController, escapeHtml, partitionLines,
-        adjustmentValueForApi, adjustmentValueForForm,
+        adjustmentValueForApi, adjustmentValueForForm, groupMenuProducts,
     });
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     if (global) global.FnbR1A = api;
@@ -569,6 +592,7 @@
             'fnbAreaForm', 'fnbAreaName', 'fnbTableForm', 'fnbTableArea', 'fnbTableName',
             'fnbSessionPanel', 'fnbSessionBackdrop', 'fnbSessionClose', 'fnbSessionTitle',
             'fnbProductSearch', 'fnbProductGrid', 'fnbDraftLines', 'fnbSentLines', 'fnbSubtotal',
+            'fnbVariantDialog', 'fnbVariantTitle', 'fnbVariantHint', 'fnbVariantList',
             'fnbConflict', 'fnbSessionStatus', 'fnbTableActions', 'fnbTargetTable',
             'fnbCancelSession', 'fnbSend', 'fnbStationList', 'fnbPinForm', 'fnbManagerPin',
             'fnbApprovalDialog', 'fnbApprovalForm', 'fnbApproverUsername', 'fnbApprovalPin',
@@ -591,6 +615,9 @@
         let selectedCheckId = null;
         let customers = [];
         let lastPaymentResult = null;
+        let visibleMenuEntries = [];
+        let selectedVariantEntry = null;
+        let lastVariantTrigger = null;
 
         const storage = {
             get: key => sessionStorage.getItem(key),
@@ -669,13 +696,42 @@
         }
 
         function renderProducts() {
-            const query = elements.fnbProductSearch.value.trim().toLocaleLowerCase();
-            const matches = products.filter(product =>
-                String(product.name || '').toLocaleLowerCase().includes(query)
-            );
-            elements.fnbProductGrid.innerHTML = matches.length
-                ? matches.map(product => `<button type="button" data-action="add-product" data-id="${Number(product.id)}"><strong>${escapeHtml(product.name)}</strong><small>${escapeHtml(money(product.price))}</small><span class="fnb-station-chip">${escapeHtml(t(`fnb.station.${String(product.fnb_station || 'DIRECT').toLowerCase()}`))}</span></button>`).join('')
+            const query = elements.fnbProductSearch.value;
+            visibleMenuEntries = groupMenuProducts(products, query);
+            elements.fnbProductGrid.innerHTML = visibleMenuEntries.length
+                ? visibleMenuEntries.map((entry, index) => {
+                    const ids = entry.products.map(product => Number(product.id)).join(' ');
+                    if (!entry.group) {
+                        const product = entry.products[0];
+                        return `<button type="button" data-action="add-product" data-id="${Number(product.id)}" data-product-ids="${ids}"><strong>${escapeHtml(product.name)}</strong><small>${escapeHtml(money(product.price))}</small><span class="fnb-station-chip">${escapeHtml(t(`fnb.station.${String(product.fnb_station || 'DIRECT').toLowerCase()}`))}</span></button>`;
+                    }
+                    const prices = entry.products.map(product => Number(product.price) || 0);
+                    const price = Math.min(...prices) === Math.max(...prices)
+                        ? money(prices[0]) : `${money(Math.min(...prices))} – ${money(Math.max(...prices))}`;
+                    return `<button type="button" class="fnb-product-group" data-action="choose-variant" data-index="${index}" data-product-ids="${ids}" aria-haspopup="dialog"><strong>${escapeHtml(entry.group)}</strong><small>${escapeHtml(price)}</small><span class="fnb-variant-count">${escapeHtml(t('fnb.menu.variant_count', { count: entry.products.length }))}</span></button>`;
+                }).join('')
                 : `<p>${escapeHtml(t('fnb.menu.empty'))}</p>`;
+        }
+
+        function renderVariantDialog() {
+            if (!selectedVariantEntry) return;
+            elements.fnbVariantTitle.textContent = selectedVariantEntry.group;
+            const available = selectedVariantEntry.products.filter(product => Number(product.stock) > 0);
+            elements.fnbVariantHint.textContent = available.length
+                ? t('fnb.menu.variant_help') : t('fnb.menu.variant_none');
+            elements.fnbVariantList.innerHTML = selectedVariantEntry.products.map(product => {
+                const soldOut = Number(product.stock) <= 0;
+                return `<button type="button" class="fnb-variant-option" data-action="add-variant" data-id="${Number(product.id)}" ${soldOut ? 'disabled' : ''}><span><strong>${escapeHtml(product.variant_name || product.name)}</strong><small>${escapeHtml(t(`fnb.station.${String(product.fnb_station || 'DIRECT').toLowerCase()}`))}</small></span><span class="fnb-variant-price"><strong>${escapeHtml(money(product.price))}</strong><small>${escapeHtml(soldOut ? t('fnb.menu.out_of_stock') : t('fnb.menu.stock', { count: Number(product.stock) }))}</small></span></button>`;
+            }).join('');
+        }
+
+        function openVariantDialog(entry, trigger) {
+            selectedVariantEntry = entry;
+            lastVariantTrigger = trigger;
+            renderVariantDialog();
+            elements.fnbVariantDialog.showModal();
+            (elements.fnbVariantList.querySelector('button:not(:disabled)')
+                || elements.fnbVariantDialog.querySelector('.fnb-icon-button')).focus();
         }
 
         function renderTargets() {
@@ -847,7 +903,7 @@
                     : mutation.attempt?.line_id
                         ? elements.fnbDraftLines.querySelector(`[data-line-id="${Number(mutation.attempt.line_id)}"]`)
                         : mutation.attempt?.product_id
-                            ? elements.fnbProductGrid.querySelector(`[data-action="add-product"][data-id="${Number(mutation.attempt.product_id)}"]`)
+                            ? elements.fnbProductGrid.querySelector(`[data-product-ids~="${Number(mutation.attempt.product_id)}"]`)
                             : null;
                 if (affected?.matches?.('button')) affected.disabled = true;
                 affected?.querySelectorAll?.('button, input, select').forEach(control => { control.disabled = true; });
@@ -938,6 +994,7 @@
         }
 
         async function chooseShop(shopId) {
+            if (elements.fnbVariantDialog.open) elements.fnbVariantDialog.close();
             localStorage.setItem('currentShopId', String(shopId));
             products = [];
             await Promise.all([controller.selectShop(Number(shopId)), loadProducts()]);
@@ -987,6 +1044,12 @@
                 elements.fnbSetupDialog.showModal();
                 controller.loadSetup().catch(() => {});
             } else if (action === 'add-product') {
+                controller.addLine({ product_id: id, quantity: 1, note: '' }).catch(() => {});
+            } else if (action === 'choose-variant') {
+                const entry = visibleMenuEntries[Number(button.dataset.index)];
+                if (entry) openVariantDialog(entry, button);
+            } else if (action === 'add-variant') {
+                elements.fnbVariantDialog.close();
                 controller.addLine({ product_id: id, quantity: 1, note: '' }).catch(() => {});
             } else if (action === 'save-line') {
                 const row = button.closest('[data-line-id]');
@@ -1049,9 +1112,13 @@
         elements.fnbSessionClose.addEventListener('click', closeSession);
         elements.fnbSessionBackdrop.addEventListener('click', closeSession);
         document.addEventListener('keydown', event => {
-            if (event.key === 'Escape' && !elements.fnbSessionPanel.hidden && !elements.fnbSetupDialog.open) {
+            if (event.key === 'Escape' && !elements.fnbSessionPanel.hidden && !document.querySelector('dialog[open]')) {
                 closeSession();
             }
+        });
+        elements.fnbVariantDialog.addEventListener('close', () => {
+            selectedVariantEntry = null;
+            (lastVariantTrigger?.isConnected ? lastVariantTrigger : elements.fnbProductSearch).focus();
         });
         elements.fnbProductSearch.addEventListener('input', renderProducts);
         elements.fnbShopSelect.addEventListener('change', event => chooseShop(Number(event.target.value)));
@@ -1200,6 +1267,7 @@
             renderFloor(controller.getState().floor);
             if (controller.getState().session) renderSession(controller.getState().session, controller.getDraft());
             if (controller.getState().checks) renderChecks(controller.getState().checks);
+            if (elements.fnbVariantDialog.open) renderVariantDialog();
         });
 
         skeletons();

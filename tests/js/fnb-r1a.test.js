@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const {
     createController, escapeHtml, partitionLines,
-    adjustmentValueForApi, adjustmentValueForForm,
+    adjustmentValueForApi, adjustmentValueForForm, groupMenuProducts,
 } = require('../../static/js/fnb-r1a.js');
 
 function floor(revision = 2) {
@@ -374,6 +374,20 @@ const buckets = partitionLines([
 ]);
 assert.deepEqual(buckets.draft.map(line => line.id), [1, 3]);
 assert.deepEqual(buckets.sent.map(line => line.id), [2, 3]);
+
+const menu = [
+    { id: 1, name: 'Cà phê sữa - Nhỏ', variant_group: 'Cà phê sữa', variant_name: 'Nhỏ' },
+    { id: 2, name: 'Bánh mì', variant_group: null, variant_name: null },
+    { id: 3, name: 'Cà phê sữa - Lớn', variant_group: 'Cà phê sữa', variant_name: 'Lớn' },
+];
+assert.deepEqual(groupMenuProducts(menu).map(entry => ({
+    group: entry.group, ids: entry.products.map(product => product.id),
+})), [
+    { group: 'Cà phê sữa', ids: [1, 3] },
+    { group: null, ids: [2] },
+]);
+assert.deepEqual(groupMenuProducts(menu, 'lớn')[0].products.map(product => product.id), [3]);
+assert.deepEqual(groupMenuProducts(menu, 'bánh').map(entry => entry.products[0].id), [2]);
 
 Promise.resolve()
     .then(testLateFloorResponseIsIgnoredAfterShopChange)
