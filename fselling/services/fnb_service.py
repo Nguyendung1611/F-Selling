@@ -1555,9 +1555,30 @@ def pay_check(
             payment_service.require_transfer_account(shop)
         if request.payment_method == order_service.PAYMENT_METHOD_DEBT:
             order_service._kiem_ban_ghi_no(db, customer, total)
-        if request.payment_method != order_service.PAYMENT_METHOD_CASH and request.cash_tendered_vnd is not None:
-            raise fnb_error(400, "FNB_CASH_TENDERED_INVALID", "Chỉ nhập tiền khách đưa khi thu tiền mặt")
-        tendered = total if request.cash_tendered_vnd is None else int(request.cash_tendered_vnd)
+        if (
+            request.payment_method == order_service.PAYMENT_METHOD_CASH
+            and request.cash_tendered_vnd is None
+        ):
+            raise fnb_error(
+                400,
+                "FNB_CASH_TENDERED_REQUIRED",
+                "Cần nhập số tiền khách đã đưa",
+                required=total,
+            )
+        if (
+            request.payment_method != order_service.PAYMENT_METHOD_CASH
+            and request.cash_tendered_vnd is not None
+        ):
+            raise fnb_error(
+                400,
+                "FNB_CASH_TENDERED_INVALID",
+                "Chỉ nhập tiền khách đưa khi thu tiền mặt",
+            )
+        tendered = (
+            int(request.cash_tendered_vnd)
+            if request.payment_method == order_service.PAYMENT_METHOD_CASH
+            else total
+        )
         if request.payment_method == order_service.PAYMENT_METHOD_CASH and tendered < total:
             raise fnb_error(
                 400,

@@ -7,6 +7,45 @@ from fselling.services import loyalty_service
 from test_fnb_r1c_checks import op, sent_session
 
 
+def test_cash_checkout_requires_explicit_tender_without_side_effects(client, db):
+    ctx, headers, session = sent_session(client, 1)
+    primary = client.get(
+        f"/api/fnb/sessions/{session['id']}/checks", headers=headers
+    ).json()["checks"][0]
+    product = db.get(models.Product, ctx["product"]["id"])
+    before_stock = product.stock
+    before_orders = db.query(models.Order).count()
+    before_logs = db.query(models.FnbActionLog).count()
+    before_check_revision = primary["revision"]
+    before_session_revision = session["revision"]
+
+    response = client.post(
+        f"/api/fnb/checks/{primary['id']}/pay",
+        json={
+            "payment_method": "cash",
+            "expected_revision": before_check_revision,
+            "expected_session_revision": before_session_revision,
+            "operation_id": op("cash-missing-tender"),
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == {
+        "code": "FNB_CASH_TENDERED_REQUIRED",
+        "message": "Cần nhập số tiền khách đã đưa",
+        "required": 100_000,
+    }
+    db.expire_all()
+    assert db.query(models.Order).count() == before_orders
+    assert db.query(models.FnbActionLog).count() == before_logs
+    assert db.get(models.Product, product.id).stock == before_stock
+    check = db.get(models.FnbServiceCheck, primary["id"])
+    assert check.status == "OPEN"
+    assert check.revision == before_check_revision
+    assert db.get(models.FnbServiceSession, session["id"]).revision == before_session_revision
+
+
 def test_cash_checkout_transfers_provenance_once_and_closes_table(client, db):
     ctx, headers, session = sent_session(client, 2)
     primary = client.get(
@@ -156,6 +195,7 @@ def test_cancelled_sent_quantity_is_removed_from_open_check(client, db):
         f"/api/fnb/checks/{primary['id']}/pay",
         json={
             "payment_method": "cash",
+            "cash_tendered_vnd": primary["total_vnd"],
             "expected_revision": primary["revision"],
             "expected_session_revision": checks["session_revision"],
             "operation_id": op("pay-after-cancel"),
@@ -190,6 +230,7 @@ def test_split_checks_pay_once_each_and_conserve_stock_provenance(client, db):
             f"/api/fnb/checks/{check['id']}/pay",
             json={
                 "payment_method": "cash",
+                "cash_tendered_vnd": check["total_vnd"],
                 "expected_revision": check["revision"],
                 "expected_session_revision": revision,
                 "operation_id": op(f"pay-{check['id']}"),
@@ -225,6 +266,7 @@ def test_paid_fnb_order_reuses_receipt_history_and_cash_shift(client):
         f"/api/fnb/checks/{primary['id']}/pay",
         json={
             "payment_method": "cash",
+            "cash_tendered_vnd": primary["total_vnd"],
             "expected_revision": primary["revision"],
             "expected_session_revision": session["revision"],
             "operation_id": op("receipt-shift"),
@@ -330,6 +372,26 @@ def test_fnb_checkout_reuses_voucher_and_loyalty_contract_once(client, db):
         "expected_session_revision": adjusted.json()["session_revision"],
         "operation_id": op("voucher-points-pay"),
     }
+    missing_tender = {
+        key: value for key, value in payload.items() if key != "cash_tendered_vnd"
+    }
+    before_balance = loyalty_service.balance_for_customer(
+        db, customer["id"], shop_id=ctx["shop_id"]
+    )
+    before_orders = db.query(models.Order).count()
+    rejected = client.post(
+        f"/api/fnb/checks/{primary['id']}/pay",
+        json=missing_tender,
+        headers=headers,
+    )
+    assert rejected.status_code == 400, rejected.text
+    assert rejected.json()["detail"]["code"] == "FNB_CASH_TENDERED_REQUIRED"
+    db.expire_all()
+    assert db.get(models.Voucher, voucher.json()["id"]).usage_count == 0
+    assert loyalty_service.balance_for_customer(
+        db, customer["id"], shop_id=ctx["shop_id"]
+    ) == before_balance
+    assert db.query(models.Order).count() == before_orders
     paid = client.post(
         f"/api/fnb/checks/{primary['id']}/pay", json=payload, headers=headers
     )
@@ -363,3 +425,45 @@ def test_fnb_checkout_reuses_voucher_and_loyalty_contract_once(client, db):
     assert loyalty_service.balance_for_customer(
         db, customer["id"], shop_id=ctx["shop_id"]
     ) == 9
+
+
+def test_zero_total_cash_still_requires_explicit_numeric_zero(client, db):
+    _, headers, session = sent_session(client, 1)
+    primary = client.get(
+        f"/api/fnb/sessions/{session['id']}/checks", headers=headers
+    ).json()["checks"][0]
+    adjusted = client.patch(
+        f"/api/fnb/checks/{primary['id']}/adjustments",
+        json={
+            "discount_kind": "FLAT",
+            "discount_value": primary["total_vnd"],
+            "service_charge_kind": "NONE",
+            "service_charge_value": 0,
+            "expected_revision": primary["revision"],
+            "expected_session_revision": session["revision"],
+            "operation_id": op("zero-total-adjust"),
+        },
+        headers=headers,
+    ).json()
+    primary = adjusted["checks"][0]
+    base = {
+        "payment_method": "cash",
+        "expected_revision": primary["revision"],
+        "expected_session_revision": adjusted["session_revision"],
+        "operation_id": op("zero-total-pay"),
+    }
+
+    missing = client.post(
+        f"/api/fnb/checks/{primary['id']}/pay", json=base, headers=headers
+    )
+    assert missing.status_code == 400
+    assert missing.json()["detail"]["required"] == 0
+
+    paid = client.post(
+        f"/api/fnb/checks/{primary['id']}/pay",
+        json={**base, "cash_tendered_vnd": 0},
+        headers=headers,
+    )
+    assert paid.status_code == 200, paid.text
+    assert paid.json()["order"]["cash_tendered_vnd"] == 0
+    assert paid.json()["order"]["cash_change_vnd"] == 0
