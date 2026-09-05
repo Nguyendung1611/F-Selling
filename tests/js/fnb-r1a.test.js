@@ -361,6 +361,190 @@ async function testCheckoutUsesLatestCheckAndSessionRevisions() {
     assert.equal(calls.at(-2).body.expected_session_revision, 13);
 }
 
+function fakeCheckoutElement(id, paymentMethod) {
+    const listeners = new Map();
+    return {
+        id,
+        value: '',
+        textContent: '',
+        innerHTML: '',
+        hidden: false,
+        disabled: false,
+        open: false,
+        dataset: {},
+        classList: { add() {}, remove() {} },
+        addEventListener(type, handler) {
+            listeners.set(type, [...(listeners.get(type) || []), handler]);
+        },
+        emit(type, event = {}) {
+            (listeners.get(type) || []).forEach(handler => handler({
+                preventDefault() {}, target: this, ...event,
+            }));
+        },
+        querySelector(selector) {
+            return selector.includes('fnbPaymentMethod') ? paymentMethod : null;
+        },
+        querySelectorAll() { return []; },
+        closest() { return this; },
+        matches() { return false; },
+        focus() { this.focused = true; },
+        showModal() { this.open = true; },
+        close() { this.open = false; this.emit('close'); },
+    };
+}
+
+function check(id, total) {
+    return {
+        id, label: `Bill ${id}`, status: 'OPEN', total_vnd: total, subtotal_vnd: total,
+        revision: 1, order_id: 0, discount_vnd: 0, service_charge_vnd: 0,
+        discount_kind: 'NONE', discount_value: 0,
+        service_charge_kind: 'NONE', service_charge_value: 0,
+        lines: [{ line_id: id, product_name: 'Tea', quantity: 1, unit_price_vnd: total }],
+    };
+}
+
+async function mountedCheckoutHarness() {
+    const original = Object.fromEntries([
+        'document', 'localStorage', 'sessionStorage', 'navigator', 'apiCall', 't',
+        'showToast', 'navigateToPage', 'redirectToLogin', 'addEventListener', 'window',
+        'setTimeout', 'clearTimeout',
+    ].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+    const globalListeners = new Map();
+    const paymentMethod = { value: 'cash' };
+    const elements = new Map();
+    const element = id => {
+        if (!elements.has(id)) elements.set(id, fakeCheckoutElement(id, paymentMethod));
+        return elements.get(id);
+    };
+    const documentListeners = new Map();
+    const document = {
+        readyState: 'complete', hidden: false,
+        body: { classList: { add() {}, remove() {} } },
+        getElementById: element,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener(type, handler) {
+            documentListeners.set(type, [...(documentListeners.get(type) || []), handler]);
+        },
+        emit(type, event = {}) {
+            (documentListeners.get(type) || []).forEach(handler => handler(event));
+        },
+    };
+    const storage = values => ({
+        getItem: key => values.get(key) ?? null,
+        setItem: (key, value) => values.set(key, String(value)),
+        removeItem: key => values.delete(key),
+    });
+    const first = check(1, 120000);
+    const second = check(2, 70000);
+    const checkReplies = [
+        { session_revision: 2, session_status: 'OPEN', checks: [first, second] },
+        { session_revision: 4, session_status: 'OPEN', checks: [first] },
+    ];
+    const calls = [];
+    let opened = false;
+    const setGlobal = (key, value) => Object.defineProperty(globalThis, key, {
+        configurable: true, writable: true, value,
+    });
+    setGlobal('document', document);
+    setGlobal('localStorage', storage(new Map([['token', 'test'], ['role', 'SELLER']])));
+    setGlobal('sessionStorage', storage(new Map()));
+    setGlobal('navigator', { onLine: true });
+    setGlobal('t', (key, values = {}) => values.amount ? `${key}:${values.amount}` : key);
+    setGlobal('showToast', () => {});
+    setGlobal('navigateToPage', () => {});
+    setGlobal('redirectToLogin', () => {});
+    setGlobal('setTimeout', () => 0);
+    setGlobal('clearTimeout', () => {});
+    setGlobal('addEventListener', (type, handler) => {
+        globalListeners.set(type, [...(globalListeners.get(type) || []), handler]);
+    });
+    setGlobal('window', { document, addEventListener: globalThis.addEventListener });
+    setGlobal('apiCall', async endpoint => {
+        calls.push(endpoint);
+        if (endpoint === '/shops') return [{ id: 1, name: 'Test', fnb_enabled: true }];
+        if (endpoint.startsWith('/fnb/floor')) {
+            const value = floor();
+            if (opened) value.areas[0].tables[0] = {
+                ...value.areas[0].tables[0], state: 'SERVING', session: { id: 30, revision: 3 },
+            };
+            return value;
+        }
+        if (endpoint.startsWith('/products/') || endpoint.startsWith('/categories/')) return [];
+        if (endpoint.startsWith('/customers/')) return [];
+        if (endpoint === '/fnb/sessions') {
+            opened = true;
+            return session();
+        }
+        if (endpoint === '/fnb/sessions/30/checks') return checkReplies.shift();
+        if (endpoint === '/fnb/checks/1/pay') return {
+            session_revision: 3, session_status: 'OPEN', checks: [second], check: first,
+            order: { qr_url: 'receipt-one' },
+        };
+        throw new Error(`Unexpected endpoint ${endpoint}`);
+    });
+    const source = require.resolve('../../static/js/fnb-r1a.js');
+    delete require.cache[source];
+    require(source);
+    const settle = async () => {
+        for (let index = 0; index < 20; index += 1) await new Promise(resolve => setImmediate(resolve));
+    };
+    await settle();
+    const table = fakeCheckoutElement('table', paymentMethod);
+    table.dataset = { action: 'open-table', id: '20' };
+    document.emit('click', { target: table });
+    await settle();
+    element('fnbCheckoutOpen').emit('click');
+    await settle();
+    return {
+        elements: Object.fromEntries([...elements.entries()]), calls, paymentMethod,
+        emitOnline: () => globalListeners.get('online').forEach(handler => handler()),
+        settle,
+        cleanup() {
+            delete require.cache[source];
+            for (const [key, descriptor] of Object.entries(original)) {
+                if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+                else delete globalThis[key];
+            }
+        },
+    };
+}
+
+async function testCheckoutCashBehavior() {
+    const harness = await mountedCheckoutHarness();
+    const { elements, calls, paymentMethod, emitOnline, settle } = harness;
+    try {
+        elements.fnbPayForm.emit('submit');
+        assert.equal(calls.some(endpoint => endpoint.endsWith('/pay')), false);
+        assert.equal(elements.fnbCashTendered.focused, true);
+        assert.equal(elements.fnbCashTenderedError.textContent, 'fnb.checkout.cash_required');
+
+        assert.equal(elements.fnbCashExact.disabled, false);
+        elements.fnbVoucherCode.value = 'GIAM10';
+        elements.fnbVoucherCode.emit('input');
+        assert.equal(elements.fnbCashExact.disabled, true);
+        elements.fnbVoucherCode.value = '';
+        elements.fnbVoucherCode.emit('input');
+        elements.fnbCashExact.emit('click');
+        assert.equal(elements.fnbCashExact.disabled, false);
+        assert.equal(elements.fnbCashTendered.value, '120000');
+
+        elements.fnbCashTendered.value = '130000';
+        elements.fnbCashTenderedError.textContent = 'old error';
+        paymentMethod.value = 'transfer';
+        elements.fnbPayForm.emit('submit');
+        await settle();
+        assert.equal(elements.fnbCashTendered.value, '');
+        assert.equal(elements.fnbCashTenderedError.textContent, '');
+        elements.fnbCheckoutDialog.open = true;
+        emitOnline();
+        await settle();
+        assert.doesNotMatch(elements.fnbCheckDetail.innerHTML, /receipt-one/);
+    } finally {
+        harness.cleanup();
+    }
+}
+
 assert.equal(
     escapeHtml('<img src=x onerror=alert(1)>'),
     '&lt;img src=x onerror=alert(1)&gt;',
@@ -412,4 +596,5 @@ Promise.resolve()
     .then(testStationUpdateUsesCurrentFloorRevision)
     .then(testSetupMutationsAndAccess)
     .then(testCheckoutUsesLatestCheckAndSessionRevisions)
+    .then(testCheckoutCashBehavior)
     .then(() => process.stdout.write('fnb-r1a controller ok\n'));

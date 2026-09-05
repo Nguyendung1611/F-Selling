@@ -841,6 +841,18 @@
             return `fnb.checkout.status.${String(status || 'OPEN').toLowerCase()}`;
         }
 
+        function clearCashPaymentIntent() {
+            lastPaymentResult = null;
+            elements.fnbCashTendered.value = '';
+            elements.fnbCashTenderedError.textContent = '';
+        }
+
+        function selectCheck(id) {
+            if (Number(selectedCheckId) === Number(id)) return;
+            selectedCheckId = id;
+            clearCashPaymentIntent();
+        }
+
         function activeCheck() {
             const checks = controller.getState().checks?.checks || [];
             return checks.find(check => Number(check.id) === Number(selectedCheckId)) || checks[0];
@@ -849,12 +861,14 @@
         function renderChecks(value) {
             const checks = value?.checks || [];
             if (!checks.length) {
+                selectCheck(null);
                 elements.fnbCheckList.innerHTML = '';
                 elements.fnbCheckDetail.innerHTML = `<p>${escapeHtml(t('fnb.checkout.no_checks'))}</p>`;
+                updateCashControls();
                 return;
             }
             if (!checks.some(check => Number(check.id) === Number(selectedCheckId))) {
-                selectedCheckId = (checks.find(check => check.status === 'OPEN') || checks[0]).id;
+                selectCheck((checks.find(check => check.status === 'OPEN') || checks[0]).id);
             }
             const check = checks.find(row => Number(row.id) === Number(selectedCheckId));
             const pending = Boolean(controller.getState().pendingMutation);
@@ -1127,9 +1141,7 @@
                 sessionStatus(t('fnb.session.loading'));
                 controller.openTable(id).then(() => controller.loadChecks()).catch(error => sessionStatus(error.message));
             } else if (action === 'select-check') {
-                selectedCheckId = id;
-                lastPaymentResult = null;
-                elements.fnbCashTendered.value = '';
+                selectCheck(id);
                 renderChecks(controller.getState().checks);
                 updateCashControls();
             } else if (action === 'open-setup') {
