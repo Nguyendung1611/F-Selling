@@ -46,6 +46,139 @@ def test_cash_checkout_requires_explicit_tender_without_side_effects(client, db)
     assert db.get(models.FnbServiceSession, session["id"]).revision == before_session_revision
 
 
+def test_cash_checkout_rejects_short_tender_without_side_effects(client, db):
+    ctx, headers, session = sent_session(client, 1)
+    shift = client.post(
+        f"/api/shifts/{ctx['shop_id']}/open",
+        json={"opening_cash_amount": 50_000, "note": "Ca kiểm tender thiếu"},
+        headers=headers,
+    ).json()
+    primary = client.get(
+        f"/api/fnb/sessions/{session['id']}/checks", headers=headers
+    ).json()["checks"][0]
+    product = db.get(models.Product, ctx["product"]["id"])
+    before_stock = product.stock
+    before_orders = db.query(models.Order).count()
+    before_payments = db.query(models.OrderPayment).count()
+    before_movements = db.query(models.CashMovement).count()
+    before_logs = db.query(models.FnbActionLog).count()
+    before_check_revision = primary["revision"]
+    before_session_revision = session["revision"]
+    before_shift = db.get(models.CashShift, shift["id"])
+    before_status = before_shift.status
+    before_opening_cash = before_shift.opening_cash_amount
+    before_expected_cash = before_shift.expected_cash_amount
+
+    response = client.post(
+        f"/api/fnb/checks/{primary['id']}/pay",
+        json={
+            "payment_method": "cash",
+            "cash_tendered_vnd": primary["total_vnd"] - 1,
+            "expected_revision": before_check_revision,
+            "expected_session_revision": before_session_revision,
+            "operation_id": op("cash-short-tender"),
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == {
+        "code": "FNB_CASH_SHORT",
+        "message": "Tiền khách đưa chưa đủ",
+        "required": 100_000,
+    }
+    db.expire_all()
+    assert db.query(models.Order).count() == before_orders
+    assert db.query(models.OrderPayment).count() == before_payments
+    assert db.query(models.CashMovement).count() == before_movements
+    assert db.query(models.FnbActionLog).count() == before_logs
+    assert db.get(models.Product, product.id).stock == before_stock
+    check = db.get(models.FnbServiceCheck, primary["id"])
+    assert check.status == "OPEN"
+    assert check.revision == before_check_revision
+    assert db.get(models.FnbServiceSession, session["id"]).revision == before_session_revision
+    after_shift = db.get(models.CashShift, shift["id"])
+    assert after_shift.status == before_status
+    assert after_shift.opening_cash_amount == before_opening_cash
+    assert after_shift.expected_cash_amount == before_expected_cash
+
+
+def test_transfer_with_cash_tender_is_rejected_without_side_effects(client, db):
+    ctx, headers, session = sent_session(client, 1)
+    primary = client.get(
+        f"/api/fnb/sessions/{session['id']}/checks", headers=headers
+    ).json()["checks"][0]
+    product = db.get(models.Product, ctx["product"]["id"])
+    before_stock = product.stock
+    before_orders = db.query(models.Order).count()
+    before_payments = db.query(models.OrderPayment).count()
+    before_logs = db.query(models.FnbActionLog).count()
+
+    response = client.post(
+        f"/api/fnb/checks/{primary['id']}/pay",
+        json={
+            "payment_method": "transfer",
+            "cash_tendered_vnd": primary["total_vnd"],
+            "expected_revision": primary["revision"],
+            "expected_session_revision": session["revision"],
+            "operation_id": op("transfer-cash-tender"),
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"]["code"] == "FNB_CASH_TENDERED_INVALID"
+    db.expire_all()
+    assert db.query(models.Order).count() == before_orders
+    assert db.query(models.OrderPayment).count() == before_payments
+    assert db.query(models.FnbActionLog).count() == before_logs
+    assert db.get(models.Product, product.id).stock == before_stock
+    assert db.get(models.FnbServiceCheck, primary["id"]).status == "OPEN"
+    assert db.get(models.FnbServiceCheck, primary["id"]).revision == primary["revision"]
+    assert db.get(models.FnbServiceSession, session["id"]).revision == session["revision"]
+
+
+def test_debt_with_cash_tender_is_rejected_without_side_effects(client, db):
+    ctx, headers, session = sent_session(client, 1)
+    customer = client.post(
+        f"/api/customers/{ctx['shop_id']}",
+        json={"name": "Khách nợ tender", "phone": f"09{uuid.uuid4().int % 10**8:08d}"},
+        headers=headers,
+    ).json()
+    primary = client.get(
+        f"/api/fnb/sessions/{session['id']}/checks", headers=headers
+    ).json()["checks"][0]
+    product = db.get(models.Product, ctx["product"]["id"])
+    before_stock = product.stock
+    before_orders = db.query(models.Order).count()
+    before_payments = db.query(models.OrderPayment).count()
+    before_logs = db.query(models.FnbActionLog).count()
+
+    response = client.post(
+        f"/api/fnb/checks/{primary['id']}/pay",
+        json={
+            "payment_method": "debt",
+            "customer_id": customer["id"],
+            "cash_tendered_vnd": primary["total_vnd"],
+            "expected_revision": primary["revision"],
+            "expected_session_revision": session["revision"],
+            "operation_id": op("debt-cash-tender"),
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"]["code"] == "FNB_CASH_TENDERED_INVALID"
+    db.expire_all()
+    assert db.query(models.Order).count() == before_orders
+    assert db.query(models.OrderPayment).count() == before_payments
+    assert db.query(models.FnbActionLog).count() == before_logs
+    assert db.get(models.Product, product.id).stock == before_stock
+    assert db.get(models.FnbServiceCheck, primary["id"]).status == "OPEN"
+    assert db.get(models.FnbServiceCheck, primary["id"]).revision == primary["revision"]
+    assert db.get(models.FnbServiceSession, session["id"]).revision == session["revision"]
+
+
 def test_cash_checkout_transfers_provenance_once_and_closes_table(client, db):
     ctx, headers, session = sent_session(client, 2)
     primary = client.get(
