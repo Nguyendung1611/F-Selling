@@ -51,6 +51,18 @@
         return kind === 'PERCENT' ? Number(value || 0) / 100 : Number(value || 0);
     }
 
+    function cashTenderedForPayment(method, rawValue) {
+        if (method !== 'cash') return {};
+        const normalized = String(rawValue ?? '').trim();
+        if (normalized === '') return { error: 'required' };
+        return { cash_tendered_vnd: Number(normalized) };
+    }
+
+    function cashExactAllowed(voucherCode, loyaltyPoints) {
+        return String(voucherCode || '').trim() === ''
+            && Number(loyaltyPoints || 0) === 0;
+    }
+
     function createController(deps) {
         const state = {
             shopId: null,
@@ -561,6 +573,7 @@
     const api = Object.freeze({
         createController, escapeHtml, partitionLines,
         adjustmentValueForApi, adjustmentValueForForm, groupMenuProducts,
+        cashTenderedForPayment, cashExactAllowed,
     });
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     if (global) global.FnbR1A = api;
@@ -601,7 +614,8 @@
             'fnbCheckDetail', 'fnbSplitPanel', 'fnbSplitForm', 'fnbSplitLines', 'fnbSplitLabel',
             'fnbSplitButton', 'fnbAdjustmentPanel', 'fnbAdjustmentForm', 'fnbDiscountKind',
             'fnbDiscountValue', 'fnbServiceKind', 'fnbServiceValue', 'fnbAdjustmentButton',
-            'fnbPayForm', 'fnbCashTenderedField', 'fnbCashTendered', 'fnbCustomerField',
+            'fnbPayForm', 'fnbCashTenderedField', 'fnbCashTendered', 'fnbCashExact',
+            'fnbCashTenderedHelp', 'fnbCashTenderedError', 'fnbCustomerField',
             'fnbCustomer', 'fnbVoucherCode', 'fnbLoyaltyPoints', 'fnbPayButton',
             'fnbPrintProvisional', 'fnbClosePaidSession', 'fnbCheckoutHint',
             'fnbReceiptPrint'
@@ -867,6 +881,7 @@
             elements.fnbServiceValue.value = adjustmentValueForForm(check.service_charge_kind, check.service_charge_value);
             elements.fnbAdjustmentForm.querySelectorAll('input, select, button').forEach(control => { control.disabled = !editable; });
             elements.fnbPayForm.querySelectorAll('input, select, button').forEach(control => { control.disabled = !editable || !navigator.onLine; });
+            updateCashControls();
             elements.fnbPrintProvisional.disabled = false;
             elements.fnbClosePaidSession.disabled = pending || !checks.every(row => ['PAID', 'DEBT', 'CANCELLED'].includes(row.status));
             if (!navigator.onLine) checkoutStatus(t('fnb.checkout.offline'));
@@ -1024,9 +1039,29 @@
             return elements.fnbPayForm.querySelector('[name="fnbPaymentMethod"]:checked')?.value || 'cash';
         }
 
-        function togglePaymentFields() {
+        function updateCashControls({ clearTender = false } = {}) {
             const method = paymentMethod();
-            elements.fnbCashTenderedField.hidden = method !== 'cash';
+            const cash = method === 'cash';
+            const check = activeCheck();
+            const editable = check?.status === 'OPEN'
+                && !controller.getState().pendingMutation
+                && navigator.onLine;
+            const exactAllowed = cashExactAllowed(
+                elements.fnbVoucherCode.value,
+                elements.fnbLoyaltyPoints.value,
+            );
+            if (clearTender) elements.fnbCashTendered.value = '';
+            elements.fnbCashTenderedField.hidden = !cash;
+            elements.fnbCashExact.disabled = !editable || !cash || !exactAllowed;
+            elements.fnbCashTenderedHelp.textContent = t(
+                exactAllowed ? 'fnb.checkout.cash_help' : 'fnb.checkout.cash_promotion_help'
+            );
+            elements.fnbCashTenderedError.textContent = '';
+            elements.fnbPayButton.textContent = cash && elements.fnbCashTendered.value !== ''
+                ? t('fnb.checkout.confirm_cash', {
+                    amount: money(Number(elements.fnbCashTendered.value)),
+                })
+                : t('fnb.checkout.pay');
         }
 
         async function printProvisionalReceipt() {
@@ -1094,7 +1129,9 @@
             } else if (action === 'select-check') {
                 selectedCheckId = id;
                 lastPaymentResult = null;
+                elements.fnbCashTendered.value = '';
                 renderChecks(controller.getState().checks);
+                updateCashControls();
             } else if (action === 'open-setup') {
                 elements.fnbSetupDialog.showModal();
                 controller.loadSetup().catch(() => {});
@@ -1192,14 +1229,26 @@
             elements.fnbCheckoutDialog.showModal();
             try {
                 await Promise.all([controller.loadChecks(), loadCustomers()]);
-                togglePaymentFields();
+                updateCashControls({ clearTender: true });
             } catch (error) {
                 checkoutStatus(error.message);
             }
         });
-        elements.fnbCheckoutDialog.addEventListener('close', () => elements.fnbCheckoutOpen.focus());
+        elements.fnbCheckoutDialog.addEventListener('close', () => {
+            updateCashControls({ clearTender: true });
+            elements.fnbCheckoutOpen.focus();
+        });
         elements.fnbPayForm.addEventListener('change', event => {
-            if (event.target.name === 'fnbPaymentMethod') togglePaymentFields();
+            if (event.target.name === 'fnbPaymentMethod') updateCashControls({ clearTender: true });
+        });
+        [elements.fnbVoucherCode, elements.fnbLoyaltyPoints].forEach(input =>
+            input.addEventListener('input', () => updateCashControls()));
+        elements.fnbCashTendered.addEventListener('input', () => updateCashControls());
+        elements.fnbCashExact.addEventListener('click', () => {
+            const check = activeCheck();
+            if (!check) return;
+            elements.fnbCashTendered.value = String(check.total_vnd);
+            updateCashControls();
         });
         elements.fnbSplitForm.addEventListener('submit', event => {
             event.preventDefault();
@@ -1236,9 +1285,13 @@
             const customerId = Number(elements.fnbCustomer.value) || null;
             const voucherCode = elements.fnbVoucherCode.value.trim();
             const loyaltyPoints = Number(elements.fnbLoyaltyPoints.value) || 0;
-            if (method === 'cash' && elements.fnbCashTendered.value !== '') {
-                values.cash_tendered_vnd = Number(elements.fnbCashTendered.value);
+            const cashInput = cashTenderedForPayment(method, elements.fnbCashTendered.value);
+            if (cashInput.error === 'required') {
+                elements.fnbCashTenderedError.textContent = t('fnb.checkout.cash_required');
+                elements.fnbCashTendered.focus();
+                return;
             }
+            Object.assign(values, cashInput);
             if (customerId) values.customer_id = customerId;
             if (voucherCode) values.voucher_code = voucherCode;
             if (loyaltyPoints > 0) values.loyalty_points_to_use = loyaltyPoints;

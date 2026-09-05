@@ -46,6 +46,10 @@ def test_fnb_page_and_assets_are_wired(client):
         "fnbVoucherCode",
         "fnbLoyaltyPoints",
         "fnbPayButton",
+        "fnbCashTendered",
+        "fnbCashExact",
+        "fnbCashTenderedHelp",
+        "fnbCashTenderedError",
         "fnbClosePaidSession",
         "fnbVariantDialog",
         "fnbVariantList",
@@ -53,9 +57,10 @@ def test_fnb_page_and_assets_are_wired(client):
         "fnbCheckoutHint",
     ):
         assert f'id="{element_id}"' in html
-    assert "/css/fnb-r1a.css?" in html
-    assert "/js/locales/fnb.js?" in html
-    assert "/js/fnb-r1a.js?v=20260903-r3" in html
+    assert "/css/fnb-r1a.css?v=20260905-safety-r1" in html
+    assert 'aria-describedby="fnbCashTenderedHelp fnbCashTenderedError"' in html
+    assert "/js/locales/fnb.js?v=20260905-safety-r1" in html
+    assert "/js/fnb-r1a.js?v=20260905-safety-r1" in html
     source = (ROOT / "static/js/fnb-r1a.js").read_text(encoding="utf-8")
     assert "values.voucher_code = voucherCode" in source
     assert "values.loyalty_points_to_use = loyaltyPoints" in source
@@ -152,6 +157,11 @@ def test_owner_edit_switch_and_bilingual_contracts():
         "fnb.checkout.pay",
         "fnb.checkout.close_table",
         "fnb.checkout.offline",
+        "fnb.checkout.cash_exact",
+        "fnb.checkout.cash_help",
+        "fnb.checkout.cash_promotion_help",
+        "fnb.checkout.cash_required",
+        "fnb.checkout.confirm_cash",
     } <= vi_keys
 
     for path, keys in (

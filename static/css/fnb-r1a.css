@@ -219,6 +219,10 @@ body.fnb-page {
 .fnb-pay-form fieldset input { width: 20px; height: 20px; }
 .fnb-pay-form > label { display: grid; gap: 5px; }
 .fnb-pay-form > label[hidden] { display: none; }
+.fnb-cash-field { display: grid; gap: 5px; }
+.fnb-cash-field[hidden] { display: none; }
+.fnb-cash-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+#fnbCashTenderedError { min-height: 20px; margin: 0; color: #9a3412; }
 .fnb-pay-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1.25fr; gap: 8px; align-items: end; }
 .fnb-close-table { width: 100%; min-height: 50px; margin-top: 12px; background: var(--fnb-ink); }
 .fnb-payment-result { margin-top: 14px; padding: 12px; text-align: center; background: #fff7ed; border: 1px solid #fdba74; border-radius: 9px; }
@@ -256,6 +260,10 @@ body.fnb-page {
     .fnb-check-list { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
     .fnb-pay-form fieldset { grid-template-columns: 1fr; }
     .fnb-pay-actions { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+    .fnb-cash-entry { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 360px) {

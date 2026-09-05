@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const {
     createController, escapeHtml, partitionLines,
     adjustmentValueForApi, adjustmentValueForForm, groupMenuProducts,
+    cashTenderedForPayment, cashExactAllowed,
 } = require('../../static/js/fnb-r1a.js');
 
 function floor(revision = 2) {
@@ -388,6 +389,18 @@ assert.deepEqual(groupMenuProducts(menu).map(entry => ({
 ]);
 assert.deepEqual(groupMenuProducts(menu, 'lớn')[0].products.map(product => product.id), [3]);
 assert.deepEqual(groupMenuProducts(menu, 'bánh').map(entry => entry.products[0].id), [2]);
+
+assert.deepEqual(cashTenderedForPayment('transfer', ''), {});
+assert.deepEqual(cashTenderedForPayment('debt', '50000'), {});
+assert.deepEqual(cashTenderedForPayment('cash', ''), { error: 'required' });
+assert.deepEqual(cashTenderedForPayment('cash', '   '), { error: 'required' });
+assert.deepEqual(cashTenderedForPayment('cash', '0'), { cash_tendered_vnd: 0 });
+assert.deepEqual(cashTenderedForPayment('cash', '120000'), {
+    cash_tendered_vnd: 120000,
+});
+assert.equal(cashExactAllowed('', 0), true);
+assert.equal(cashExactAllowed('GIAM10', 0), false);
+assert.equal(cashExactAllowed('', 1), false);
 
 Promise.resolve()
     .then(testLateFloorResponseIsIgnoredAfterShopChange)
