@@ -29,7 +29,12 @@ function session(revision = 3) {
         shop_id: 1,
         revision,
         tables: [{ id: 20, name: 'Bàn 1', state_version: 5 }],
-        lines: [{ id: 40, product_id: 7, quantity: 2, cancelled_quantity: 0, state_version: 9 }],
+        lines: [{
+            id: 40, product_id: 7, product_name: 'Trà', quantity: 2,
+            cancelled_quantity: 0, unsent_quantity: 0, active_sent_quantity: 2,
+            station: 'KITCHEN', state_version: 9,
+        }],
+        unsent_quantity: 0,
         subtotal_vnd: 20000,
     };
 }
@@ -243,6 +248,7 @@ async function testCancelDecisionRequiredAfterNetworkFailureClearsPendingAndDraf
         operation_id: 'operation-1',
     });
 
+    deps.renders.length = 0;
     await assert.rejects(controller.cancelLine(40, 1));
 
     assert.deepEqual(bodies[1], bodies[0]);
@@ -251,6 +257,10 @@ async function testCancelDecisionRequiredAfterNetworkFailureClearsPendingAndDraf
     assert.equal(deps.storage.size, 0);
     assert.equal(deps.renders.at(-1).type, 'cancel-action-required');
     assert.equal(deps.renders.at(-1).attempt.line_id, 40);
+    assert.equal(
+        deps.renders.some(event => event.type === 'mutation-error'),
+        false,
+    );
 }
 
 async function testCancelConflictAfterNetworkFailureRequiresFreshUserDecision() {
@@ -451,7 +461,7 @@ function fakeCheckoutElement(id, paymentMethod) {
     const listeners = new Map();
     return {
         id,
-        value: '',
+        value: id === 'fnbCancelResolution' ? 'WASTE' : '',
         textContent: '',
         innerHTML: '',
         hidden: false,
@@ -489,7 +499,7 @@ function check(id, total) {
     };
 }
 
-async function mountedCheckoutHarness() {
+async function mountedFnbHarness(options = {}) {
     const original = Object.fromEntries([
         'document', 'localStorage', 'sessionStorage', 'navigator', 'apiCall', 't',
         'showToast', 'navigateToPage', 'redirectToLogin', 'addEventListener', 'window',
@@ -524,11 +534,14 @@ async function mountedCheckoutHarness() {
     const first = check(1, 120000);
     const second = check(2, 70000);
     const checkReplies = [
-        { session_revision: 2, session_status: 'OPEN', checks: [first, second] },
+        { session_revision: 3, session_status: 'OPEN', checks: [first, second] },
         { session_revision: 4, session_status: 'OPEN', checks: [first] },
     ];
+    const cancelReplies = [...(options.cancelReplies || [])];
+    const approvalReplies = [...(options.approvalReplies || [])];
     const calls = [];
     let opened = false;
+    let hideSession = false;
     const setGlobal = (key, value) => Object.defineProperty(globalThis, key, {
         configurable: true, writable: true, value,
     });
@@ -545,13 +558,18 @@ async function mountedCheckoutHarness() {
     setGlobal('addEventListener', (type, handler) => {
         globalListeners.set(type, [...(globalListeners.get(type) || []), handler]);
     });
-    setGlobal('window', { document, addEventListener: globalThis.addEventListener });
-    setGlobal('apiCall', async endpoint => {
-        calls.push(endpoint);
+    let uuidIndex = 0;
+    setGlobal('window', {
+        document,
+        addEventListener: globalThis.addEventListener,
+        crypto: { randomUUID: () => `operation-${++uuidIndex}` },
+    });
+    setGlobal('apiCall', async (endpoint, method, body) => {
+        calls.push({ endpoint, method, body });
         if (endpoint === '/shops') return [{ id: 1, name: 'Test', fnb_enabled: true }];
         if (endpoint.startsWith('/fnb/floor')) {
             const value = floor();
-            if (opened) value.areas[0].tables[0] = {
+            if (opened && !hideSession) value.areas[0].tables[0] = {
                 ...value.areas[0].tables[0], state: 'SERVING', session: { id: 30, revision: 3 },
             };
             return value;
@@ -567,6 +585,18 @@ async function mountedCheckoutHarness() {
             session_revision: 3, session_status: 'OPEN', checks: [second], check: first,
             order: { qr_url: 'receipt-one' },
         };
+        if (endpoint === '/fnb/sessions/30/cancel-line') {
+            if (!cancelReplies.length) throw new Error(`Unexpected endpoint ${endpoint}`);
+            const reply = cancelReplies.shift();
+            if (reply instanceof Error) throw reply;
+            return reply;
+        }
+        if (endpoint === '/fnb/manager-approvals') {
+            if (!approvalReplies.length) throw new Error(`Unexpected endpoint ${endpoint}`);
+            const reply = approvalReplies.shift();
+            if (reply instanceof Error) throw reply;
+            return reply;
+        }
         throw new Error(`Unexpected endpoint ${endpoint}`);
     });
     const source = require.resolve('../../static/js/fnb-r1a.js');
@@ -580,11 +610,21 @@ async function mountedCheckoutHarness() {
     table.dataset = { action: 'open-table', id: '20' };
     document.emit('click', { target: table });
     await settle();
-    element('fnbCheckoutOpen').emit('click');
-    await settle();
+    if (options.openCheckout) {
+        element('fnbCheckoutOpen').emit('click');
+        await settle();
+    }
     return {
         elements: Object.fromEntries([...elements.entries()]), calls, paymentMethod,
-        emitOnline: () => globalListeners.get('online').forEach(handler => handler()),
+        document,
+        clickAction(action, id) {
+            const target = fakeCheckoutElement(action, paymentMethod);
+            target.dataset = { action, ...(id === undefined ? {} : { id: String(id) }) };
+            document.emit('click', { target });
+        },
+        emitOnline: () => (globalListeners.get('online') || []).forEach(handler => handler()),
+        emitPagehide: () => (globalListeners.get('pagehide') || []).forEach(handler => handler()),
+        hideSession: () => { hideSession = true; },
         settle,
         cleanup() {
             delete require.cache[source];
@@ -596,12 +636,157 @@ async function mountedCheckoutHarness() {
     };
 }
 
+function fnbError(code, message, status, snapshot) {
+    const error = new Error(message);
+    error.status = status;
+    error.code = code;
+    error.detail = { code, ...(snapshot ? { snapshot } : {}) };
+    return error;
+}
+
+function approvalState(elements) {
+    return {
+        open: elements.fnbApprovalDialog.open,
+        pin: elements.fnbApprovalPin.value,
+        reason: elements.fnbCancelReason.value,
+        resolution: elements.fnbCancelResolution.value,
+        status: elements.fnbApprovalStatus.textContent,
+    };
+}
+
+async function withCancellation(options, action) {
+    const code = options.code || 'FNB_APPROVAL_REQUIRED';
+    const harness = await mountedFnbHarness({
+        cancelReplies: [
+            fnbError(code, 'Action required', code === 'FNB_CANCELLATION_DECISION_REQUIRED' ? 400 : 403),
+            ...(options.cancelReplies || []),
+        ],
+        approvalReplies: options.approvalReplies || [],
+    });
+    try {
+        harness.clickAction('cancel-line', 40);
+        await harness.settle();
+        await action(harness);
+    } finally {
+        harness.cleanup();
+    }
+}
+
+async function testCancellationApprovalDialogLifecycle() {
+    for (const code of ['FNB_CANCELLATION_DECISION_REQUIRED', 'FNB_APPROVAL_REQUIRED']) {
+        await withCancellation({ code }, async ({ elements }) => {
+            assert.equal(elements.fnbApprovalDialog.open, true);
+            assert.equal(elements.fnbCancelResolution.focused, true);
+            assert.equal(elements.fnbSessionStatus.textContent, 'fnb.cancel.action_required');
+            assert.doesNotMatch(elements.fnbSentLines.innerHTML, /fnb-unsynced/);
+            assert.match(elements.fnbSentLines.innerHTML, /data-action="cancel-line"/);
+        });
+    }
+
+    await withCancellation({
+        cancelReplies: [session(4)],
+        approvalReplies: [{ approval_token: 'approval-token' }],
+    }, async ({ elements, calls, settle }) => {
+        elements.fnbApprovalPin.value = '2468';
+        elements.fnbCancelReason.value = '   ';
+        elements.fnbApprovalForm.emit('submit');
+        await settle();
+        assert.equal(calls.filter(call => call.endpoint === '/fnb/manager-approvals').length, 0);
+        assert.equal(calls.filter(call => call.endpoint.endsWith('/cancel-line')).length, 1);
+        assert.equal(elements.fnbCancelReason.focused, true);
+        assert.equal(elements.fnbApprovalStatus.textContent, 'fnb.cancel.reason_required');
+    });
+
+    await withCancellation({
+        cancelReplies: [session(4)],
+        approvalReplies: [
+            fnbError('FNB_APPROVAL_INVALID', 'Sai PIN', 403),
+            { approval_token: 'approval-token' },
+        ],
+    }, async ({ elements, calls, settle }) => {
+        elements.fnbApprovalPin.value = '0000';
+        elements.fnbCancelReason.value = '  Món đã làm  ';
+        elements.fnbCancelResolution.value = 'RESTOCK';
+        elements.fnbApprovalForm.emit('submit');
+        await settle();
+        assert.deepEqual(approvalState(elements), {
+            open: true, pin: '', reason: '  Món đã làm  ', resolution: 'RESTOCK', status: 'Sai PIN',
+        });
+        elements.fnbApprovalPin.value = '2468';
+        elements.fnbApprovalForm.emit('submit');
+        await settle();
+        assert.deepEqual(approvalState(elements), {
+            open: false, pin: '', reason: '', resolution: 'WASTE', status: '',
+        });
+        const approved = calls.filter(call => call.endpoint.endsWith('/cancel-line')).at(-1).body;
+        assert.equal(approved.reason, 'Món đã làm');
+        assert.equal(approved.resolution, 'RESTOCK');
+        assert.equal(approved.approval_token, 'approval-token');
+    });
+
+    await withCancellation({
+        cancelReplies: [fnbError('FNB_SESSION_CHANGED', 'Món vừa thay đổi', 409, session(5))],
+        approvalReplies: [{ approval_token: 'approval-token' }],
+    }, async ({ elements, calls, settle }) => {
+        elements.fnbApprovalPin.value = '2468';
+        elements.fnbCancelReason.value = 'Món đã làm';
+        elements.fnbCancelResolution.value = 'RESTOCK';
+        elements.fnbApprovalForm.emit('submit');
+        await settle();
+        assert.deepEqual(approvalState(elements), {
+            open: false, pin: '', reason: '', resolution: 'WASTE', status: '',
+        });
+        assert.equal(elements.fnbSessionStatus.textContent, 'fnb.cancel.changed');
+        elements.fnbCancelReason.value = 'Không được gửi lại';
+        elements.fnbApprovalPin.value = '2468';
+        elements.fnbApprovalForm.emit('submit');
+        await settle();
+        assert.equal(calls.filter(call => call.endpoint === '/fnb/manager-approvals').length, 1);
+    });
+
+    for (const [name, teardown] of [
+        ['close', async harness => harness.clickAction('close-approval')],
+        ['native dialog close', async ({ elements }) => elements.fnbApprovalDialog.close()],
+        ['shop change', async ({ elements, settle }) => {
+            elements.fnbShopSelect.value = '2';
+            elements.fnbShopSelect.emit('change');
+            await settle();
+        }],
+        ['session close', async harness => {
+            harness.hideSession();
+            harness.emitOnline();
+            await harness.settle();
+        }],
+        ['page disposal', async harness => harness.emitPagehide()],
+    ]) {
+        await withCancellation({}, async harness => {
+            const { elements, calls, settle } = harness;
+            elements.fnbApprovalPin.value = '2468';
+            elements.fnbCancelReason.value = 'Nhạy cảm';
+            elements.fnbCancelResolution.value = 'RESTOCK';
+            await teardown(harness);
+            assert.deepEqual(approvalState(elements), {
+                open: false, pin: '', reason: '', resolution: 'WASTE', status: '',
+            }, name);
+            elements.fnbApprovalPin.value = '2468';
+            elements.fnbCancelReason.value = 'Không được gửi lại';
+            elements.fnbApprovalForm.emit('submit');
+            await settle();
+            assert.equal(
+                calls.filter(call => call.endpoint === '/fnb/manager-approvals').length,
+                0,
+                name,
+            );
+        });
+    }
+}
+
 async function testCheckoutCashBehavior() {
-    const harness = await mountedCheckoutHarness();
+    const harness = await mountedFnbHarness({ openCheckout: true });
     const { elements, calls, paymentMethod, emitOnline, settle } = harness;
     try {
         elements.fnbPayForm.emit('submit');
-        assert.equal(calls.some(endpoint => endpoint.endsWith('/pay')), false);
+        assert.equal(calls.some(call => call.endpoint.endsWith('/pay')), false);
         assert.equal(elements.fnbCashTendered.focused, true);
         assert.equal(elements.fnbCashTenderedError.textContent, 'fnb.checkout.cash_required');
 
@@ -684,5 +869,6 @@ Promise.resolve()
     .then(testStationUpdateUsesCurrentFloorRevision)
     .then(testSetupMutationsAndAccess)
     .then(testCheckoutUsesLatestCheckAndSessionRevisions)
+    .then(testCancellationApprovalDialogLifecycle)
     .then(testCheckoutCashBehavior)
     .then(() => process.stdout.write('fnb-r1a controller ok\n'));

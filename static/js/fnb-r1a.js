@@ -694,6 +694,19 @@
             elements.fnbSessionStatus.textContent = message || '';
         }
 
+        function resetApprovalDialog() {
+            elements.fnbApprovalPin.value = '';
+            elements.fnbApprovalStatus.textContent = '';
+            elements.fnbCancelReason.value = '';
+            elements.fnbCancelResolution.value = 'WASTE';
+            pendingCancelLineId = null;
+        }
+
+        function closeApprovalAfterConflict() {
+            resetApprovalDialog();
+            if (elements.fnbApprovalDialog.open) elements.fnbApprovalDialog.close();
+        }
+
         function checkoutStatus(message) {
             elements.fnbCheckoutStatus.textContent = message || '';
         }
@@ -865,6 +878,7 @@
         }
 
         function closeSession() {
+            closeApprovalAfterConflict();
             document.body.classList.remove('fnb-order-open');
             elements.fnbSessionPanel.hidden = true;
             elements.fnbSessionPanel.inert = true;
@@ -1012,6 +1026,13 @@
                             : null;
                 if (affected?.matches?.('button')) affected.disabled = true;
                 affected?.querySelectorAll?.('button, input, select').forEach(control => { control.disabled = true; });
+            } else if (event.type === 'cancel-action-required') {
+                renderSession(event.value, null);
+                sessionStatus(t('fnb.cancel.action_required'));
+            } else if (event.type === 'cancel-conflict') {
+                renderSession(event.value, null);
+                closeApprovalAfterConflict();
+                sessionStatus(t('fnb.cancel.changed'));
             } else if (event.type === 'mutation-error') {
                 sessionStatus(`${t('fnb.state.unsynced')}. ${event.error?.message || t('fnb.action.retry')}`);
                 renderSession(controller.getState().session, event.draft);
@@ -1129,6 +1150,7 @@
         }
 
         async function chooseShop(shopId) {
+            closeApprovalAfterConflict();
             if (elements.fnbVariantDialog.open) elements.fnbVariantDialog.close();
             localStorage.setItem('currentShopId', String(shopId));
             products = [];
@@ -1202,11 +1224,14 @@
             } else if (action === 'cancel-line') {
                 controller.cancelLine(id, 1).catch(error => {
                     const code = error?.code || error?.detail?.code;
-                    if (code !== 'FNB_APPROVAL_REQUIRED') return;
+                    if (![
+                        'FNB_CANCELLATION_DECISION_REQUIRED',
+                        'FNB_APPROVAL_REQUIRED',
+                    ].includes(code)) return;
+                    resetApprovalDialog();
                     pendingCancelLineId = id;
-                    elements.fnbApprovalStatus.textContent = '';
                     elements.fnbApprovalDialog.showModal();
-                    elements.fnbApproverUsername.focus();
+                    elements.fnbCancelResolution.focus();
                 });
             } else if (action === 'save-station') {
                 const row = button.closest('[data-product-id]');
@@ -1214,7 +1239,7 @@
                     Number(row.dataset.productId), row.querySelector('select').value,
                 ).then(loadProducts).catch(() => {});
             } else if (action === 'close-approval') {
-                elements.fnbApprovalDialog.close();
+                closeApprovalAfterConflict();
             } else if (action === 'reapply') {
                 const draft = controller.getState().recoverableDraft;
                 if (!draft) return;
@@ -1378,6 +1403,12 @@
             event.preventDefault();
             const current = controller.getState().session;
             if (!current || !pendingCancelLineId) return;
+            const reason = elements.fnbCancelReason.value.trim();
+            if (!reason) {
+                elements.fnbApprovalStatus.textContent = t('fnb.cancel.reason_required');
+                elements.fnbCancelReason.focus();
+                return;
+            }
             elements.fnbApprovalStatus.textContent = t('fnb.state.pending');
             try {
                 const approval = await apiCall('/fnb/manager-approvals', 'POST', {
@@ -1389,14 +1420,15 @@
                 });
                 await controller.cancelLine(pendingCancelLineId, 1, {
                     resolution: elements.fnbCancelResolution.value,
-                    reason: elements.fnbCancelReason.value,
+                    reason,
                     approval_token: approval.approval_token,
                 });
-                elements.fnbApprovalPin.value = '';
-                elements.fnbCancelReason.value = '';
-                pendingCancelLineId = null;
+                resetApprovalDialog();
                 elements.fnbApprovalDialog.close();
             } catch (error) {
+                const code = error?.code || error?.detail?.code;
+                elements.fnbApprovalPin.value = '';
+                if (code === 'FNB_SESSION_CHANGED' || code === 'FNB_LINE_CHANGED') return;
                 elements.fnbApprovalStatus.textContent = error.message;
             }
         });
@@ -1417,6 +1449,7 @@
                 note: row.querySelector('[data-field="note"]').value,
             }).catch(() => {});
         });
+        elements.fnbApprovalDialog.addEventListener('close', resetApprovalDialog);
         elements.fnbSetupDialog.addEventListener('close', () => elements.fnbSetupOpen.focus());
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) controller.loadFloor(false);
@@ -1429,7 +1462,10 @@
             controller.loadFloor(true);
             if (elements.fnbCheckoutDialog.open) controller.loadChecks().catch(error => checkoutStatus(error.message));
         });
-        global.addEventListener('pagehide', () => controller.dispose(), { once: true });
+        global.addEventListener('pagehide', () => {
+            closeApprovalAfterConflict();
+            controller.dispose();
+        }, { once: true });
         document.addEventListener('fselling:localechange', () => {
             renderFloor(controller.getState().floor);
             renderCategories();

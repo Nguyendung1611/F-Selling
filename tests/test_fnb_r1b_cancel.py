@@ -85,6 +85,26 @@ def test_in_progress_cancel_requires_bound_one_use_manager_approval(client, db):
 
     cashier_username, cashier_token = new_staff(client, ctx, "CASHIER")
     line = session["lines"][0]
+    decision_required = client.post(
+        f"/api/fnb/sessions/{session['id']}/cancel-line",
+        json={
+            "line_id": line["id"],
+            "quantity": 1,
+            "expected_line_version": line["state_version"],
+            "expected_revision": session["revision"],
+            "operation_id": op("cancel-needs-decision"),
+        },
+        headers=auth(cashier_token),
+    )
+    assert decision_required.status_code == 400
+    assert decision_required.json()["detail"]["code"] == (
+        "FNB_CANCELLATION_DECISION_REQUIRED"
+    )
+    db.expire_all()
+    unchanged = db.get(models.FnbSessionLine, line["id"])
+    assert unchanged.sent_cancelled_quantity == 0
+    assert db.get(models.Product, ctx["product"]["id"]).stock == 8
+
     base_cancel = {"line_id": line["id"], "quantity": 1,
                    "expected_line_version": line["state_version"],
                    "expected_revision": session["revision"], "operation_id": op("cancel"),
@@ -107,6 +127,41 @@ def test_in_progress_cancel_requires_bound_one_use_manager_approval(client, db):
     assert approval.status_code == 200, approval.text
     token = approval.json()["approval_token"]
     approved_payload = {**base_cancel, "approval_token": token}
+    stale = client.post(
+        f"/api/fnb/sessions/{session['id']}/cancel-line",
+        json={**approved_payload, "expected_revision": session["revision"] - 1},
+        headers=auth(cashier_token),
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "FNB_SESSION_CHANGED"
+    db.expire_all()
+    assert db.query(models.FnbManagerApproval).filter_by(
+        shop_id=ctx["shop_id"], action="CANCEL_SENT_LINE",
+        entity_id=session["id"],
+    ).one().used_at is None
+    unchanged_line = db.get(models.FnbSessionLine, line["id"])
+    assert (unchanged_line.sent_cancelled_quantity, unchanged_line.state_version) == (
+        0, line["state_version"]
+    )
+    unchanged_ticket = db.get(models.FnbKitchenTicket, ticket["id"])
+    assert (unchanged_ticket.status, unchanged_ticket.state_version) == (
+        "IN_PROGRESS", 1
+    )
+    unchanged_item = db.query(models.FnbKitchenTicketItem).filter_by(
+        session_line_id=line["id"]
+    ).one()
+    assert (unchanged_item.cancelled_quantity, unchanged_item.quantity) == (0, 2)
+    allocation = db.query(models.FnbStockAllocation).filter_by(
+        session_line_id=line["id"]
+    ).one()
+    assert (
+        allocation.state,
+        allocation.quantity,
+        allocation.resolved_at,
+        allocation.resolution_reason,
+    ) == ("CONSUMED", 2, None, None)
+    assert db.get(models.Product, ctx["product"]["id"]).stock == 8
+
     cancelled = client.post(
         f"/api/fnb/sessions/{session['id']}/cancel-line",
         json=approved_payload, headers=auth(cashier_token),

@@ -67,6 +67,11 @@ def test_fnb_page_and_assets_are_wired(client):
     assert "groupMenuProducts(categoryProducts, query)" in source
     assert 'data-action="choose-variant"' in source
     assert 'data-action="add-variant"' in source
+    assert "type: 'cancel-action-required'" in source
+    assert "type: 'cancel-conflict'" in source
+    assert "FNB_CANCELLATION_DECISION_REQUIRED" in source
+    assert "FNB_APPROVAL_REQUIRED" in source
+    assert "function resetApprovalDialog()" in source
     assert client.get("/fnb.html", follow_redirects=False).headers["location"] == "/fnb"
     api_source = (ROOT / "static/js/api.js").read_text(encoding="utf-8")
     assert "error.detail =" in api_source
@@ -162,6 +167,9 @@ def test_owner_edit_switch_and_bilingual_contracts():
         "fnb.checkout.cash_promotion_help",
         "fnb.checkout.cash_required",
         "fnb.checkout.confirm_cash",
+        "fnb.cancel.action_required",
+        "fnb.cancel.changed",
+        "fnb.cancel.reason_required",
     } <= vi_keys
 
     for path, keys in (
