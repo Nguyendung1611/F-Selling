@@ -1,0 +1,41 @@
+.fnb-station-page { background: #eef2f6; }
+.fnb-station-main { padding: clamp(16px, 3vw, 32px); }
+.fnb-station-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
+.fnb-station-heading h2 { margin: 3px 0 0; font-size: clamp(1.35rem, 2vw, 1.65rem); }
+.fnb-station-tools { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+.fnb-live-badge { color: #166534; font-size: .875rem; font-weight: 700; }
+#fnbStationStatus { min-height: 22px; margin: 0; color: var(--fnb-muted); font-weight: 600; }
+.fnb-ticket-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: start; }
+.fnb-ticket-lane { min-width: 0; padding: 14px; border: 1px solid var(--fnb-line); border-radius: 12px; background: #f8fafc; }
+.fnb-ticket-lane > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.fnb-ticket-lane > header h2 { margin: 0; font-size: 1.15rem; }
+.fnb-ticket-count { min-width: 30px; padding: 3px 8px; border-radius: 999px; color: #fff; background: var(--fnb-ink); text-align: center; font-weight: 700; }
+.fnb-ticket-list { display: grid; gap: 12px; }
+.fnb-ticket-card { border: 1px solid #cbd5e1; border-left: 6px solid #2563eb; border-radius: 10px; background: #fff; overflow: hidden; }
+.fnb-ticket-card.is-warn { border-left-color: #d97706; }
+.fnb-ticket-card.is-late { border-left-color: #dc2626; }
+.fnb-ticket-card > header { display: flex; justify-content: space-between; gap: 12px; padding: 14px; border-bottom: 1px solid var(--fnb-line); }
+.fnb-ticket-card h3 { margin: 2px 0 0; font-size: 1.25rem; overflow-wrap: anywhere; }
+.fnb-ticket-number { color: var(--fnb-muted); font-size: .875rem; font-weight: 700; }
+.fnb-ticket-time { align-self: start; min-width: 64px; color: #1d4ed8; font-size: 1.25rem; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+.fnb-ticket-card.is-warn .fnb-ticket-time { color: #b45309; }
+.fnb-ticket-card.is-late .fnb-ticket-time { color: #b91c1c; }
+.fnb-ticket-card ul { display: grid; gap: 12px; margin: 0; padding: 15px; list-style: none; }
+.fnb-ticket-card li { display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: baseline; gap: 8px; }
+.fnb-ticket-quantity { font-size: 1.6rem; line-height: 1; font-weight: 700; }
+.fnb-ticket-item { font-size: 1.2rem; line-height: 1.3; font-weight: 700; overflow-wrap: anywhere; }
+.fnb-ticket-note { grid-column: 2; color: #9a3412; font-size: 1rem; font-weight: 600; overflow-wrap: anywhere; }
+.fnb-ticket-card footer { display: grid; grid-template-columns: 1.25fr 1fr; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--fnb-line); }
+.fnb-ticket-card footer button { min-height: 50px; }
+.fnb-ticket-warning { margin: 0 14px 14px; padding: 10px; border: 1px solid #fdba74; border-radius: 8px; background: #fff7ed; color: #9a3412; font-weight: 700; }
+.fnb-lane-empty { margin: 0; padding: 20px 10px; color: var(--fnb-muted); text-align: center; }
+.fnb-stock-dialog { width: min(440px, calc(100vw - 24px)); padding: 20px; border: 1px solid var(--fnb-line); border-radius: 12px; color: var(--fnb-ink); }
+.fnb-stock-dialog::backdrop { background: rgb(15 23 42 / .58); }
+.fnb-stock-dialog form { display: grid; gap: 10px; }
+.fnb-stock-dialog h2 { margin: 0; }
+.fnb-stock-dialog input { width: 100%; padding: 9px 10px; border: 1px solid var(--fnb-line); border-radius: 8px; }
+@media (max-width: 560px) {
+    .fnb-station-heading { align-items: start; flex-direction: column; }
+    .fnb-station-tools { justify-content: flex-start; }
+    .fnb-ticket-grid { grid-template-columns: 1fr; }
+}

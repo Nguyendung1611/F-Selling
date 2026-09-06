@@ -16,8 +16,8 @@ không phải của một công thức. Máy dừng ở hòa vốn và nói ra p
 """
 from __future__ import annotations
 
-import math
 from datetime import date, datetime, timedelta
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func
@@ -38,8 +38,8 @@ SO_NGAY_CANH_BAO_HAN = 30
 
 # Nhường bao nhiêu phần LÃI cho khách. Hàng chỉ nằm ế thì nhường một nửa; càng
 # sát hạn càng nhường nhiều, vì quá hạn là mất trắng cả phần vốn.
-NHUONG_LAI_IT_NHAT = 0.5
-NHUONG_LAI_NHIEU_NHAT = 0.9
+NHUONG_LAI_IT_NHAT = Decimal("0.5")
+NHUONG_LAI_NHIEU_NHAT = Decimal("0.9")
 
 # Lý do một món lọt vào danh sách.
 LY_DO_E = "NAM_E"
@@ -47,7 +47,7 @@ LY_DO_SAP_HET_HAN = "SAP_HET_HAN"
 LY_DO_CA_HAI = "CA_HAI"
 
 
-def _don_vi_lam_tron(gia: float) -> int:
+def _don_vi_lam_tron(gia: int) -> int:
     """Giá lẻ tới từng đồng thì không ai dán lên kệ được.
 
     Tiệm tạp hóa niêm yết theo trăm hoặc nửa nghìn, hàng giá trị lớn thì theo
@@ -60,28 +60,31 @@ def _don_vi_lam_tron(gia: float) -> int:
     return 1_000
 
 
-def _gia_de_xuat(gia_ban: float, gia_von: float, so_ngay_con_han: Optional[int]) -> int:
+def _gia_de_xuat(gia_ban: int, gia_von: Decimal, so_ngay_con_han: Optional[int]) -> int:
     """Giá mới: nhường bớt phần lãi, làm tròn, và KHÔNG BAO GIỜ dưới giá vốn."""
     bien_lai = gia_ban - gia_von
     if so_ngay_con_han is None:
         ty_le = NHUONG_LAI_IT_NHAT
     else:
         # Còn đủ 30 ngày -> nhường 50%; hết hạn tới nơi -> nhường 90%.
-        con_lai = max(0.0, min(1.0, so_ngay_con_han / SO_NGAY_CANH_BAO_HAN))
+        con_lai = max(
+            Decimal(0),
+            min(Decimal(1), Decimal(so_ngay_con_han) / Decimal(SO_NGAY_CANH_BAO_HAN)),
+        )
         ty_le = NHUONG_LAI_NHIEU_NHAT - (NHUONG_LAI_NHIEU_NHAT - NHUONG_LAI_IT_NHAT) * con_lai
 
     gia_tho = gia_ban - bien_lai * ty_le
     don_vi = _don_vi_lam_tron(gia_ban)
-    gia = round(gia_tho / don_vi) * don_vi
+    gia = (gia_tho / Decimal(don_vi)).to_integral_value(rounding=ROUND_HALF_UP) * don_vi
 
     # Làm tròn xuống có thể chui xuống dưới giá vốn với món biên lãi mỏng.
     if gia < gia_von:
-        gia = math.ceil(gia_von / don_vi) * don_vi
+        gia = (gia_von / Decimal(don_vi)).to_integral_value(rounding=ROUND_CEILING) * don_vi
     # Và không được vượt quá giá đang bán - "giảm giá" mà đắt lên là vô nghĩa.
     return int(min(gia, gia_ban))
 
 
-def _gia_von_hien_hanh(db: Session, prod: models.Product) -> Optional[float]:
+def _gia_von_hien_hanh(db: Session, prod: models.Product) -> Optional[Decimal]:
     """Giá vốn của số hàng ĐANG CÒN trong kho.
 
     Hàng theo lô KHÔNG giữ giá vốn ở `Product.cost_price` - nó nằm ở từng lô
@@ -100,12 +103,12 @@ def _gia_von_hien_hanh(db: Session, prod: models.Product) -> Optional[float]:
     lo = inventory_service.lo_con_ban_duoc(db, prod.id)
     if not lo:
         return prod.cost_price
-    if any(b.cost_price is None for b in lo):
+    if any(int(b.cost_unknown_qty or 0) > 0 for b in lo):
         return None
     tong_sl = sum(b.quantity for b in lo)
     if tong_sl <= 0:
         return prod.cost_price
-    return sum(float(b.cost_price) * b.quantity for b in lo) / tong_sl
+    return Decimal(sum(int(b.cost_basis_vnd or 0) for b in lo)) / Decimal(tong_sl)
 
 
 def _ngay_ban_gan_nhat(db: Session, shop_id: int) -> Dict[int, datetime]:
@@ -235,11 +238,17 @@ def de_xuat_xa_hang(
         else:
             ly_do = LY_DO_E
 
-        gia_ban = float(prod.price or 0)
+        gia_ban = int(prod.price or 0)
         gia_von = _gia_von_hien_hanh(db, prod)
-        von_dang_dong = (
-            int(round(float(gia_von) * ton)) if gia_von is not None else None
-        )
+        if gia_von is None:
+            von_dang_dong = None
+        elif prod.track_batches:
+            von_dang_dong = sum(
+                int(batch.cost_basis_vnd or 0)
+                for batch in inventory_service.lo_con_ban_duoc(db, prod.id)
+            )
+        else:
+            von_dang_dong = int(prod.cost_basis_vnd or 0)
         if von_dang_dong:
             tong_von_dong += von_dang_dong
 
@@ -250,8 +259,8 @@ def de_xuat_xa_hang(
             "ton_kho": ton,
             "theo_lo": bool(prod.track_batches),
             "so_luong_da_het_han": so_luong_da_het_han,
-            "gia_hien_tai": int(round(gia_ban)),
-            "gia_von": int(round(float(gia_von))) if gia_von is not None else None,
+            "gia_hien_tai": gia_ban,
+            "gia_von": gia_von,
             "von_dang_dong": von_dang_dong,
             "so_ngay_khong_ban": so_ngay_khong_ban,
             "ngay_ban_gan_nhat": (
@@ -268,15 +277,18 @@ def de_xuat_xa_hang(
         if gia_von is None:
             dong["gia_de_xuat"] = None
             dong["khong_tinh_duoc"] = "CHUA_KHAI_GIA_VON"
-        elif gia_ban <= float(gia_von):
+        elif Decimal(gia_ban) <= gia_von:
             dong["gia_de_xuat"] = None
             dong["khong_tinh_duoc"] = "DANG_BAN_KHONG_LAI"
         else:
-            gia_moi = _gia_de_xuat(gia_ban, float(gia_von), so_ngay_con_han)
+            gia_moi = _gia_de_xuat(gia_ban, gia_von, so_ngay_con_han)
             dong["gia_de_xuat"] = gia_moi
-            dong["giam_phan_tram"] = round((gia_ban - gia_moi) / gia_ban * 100, 1)
-            dong["lai_moi_cai_sau_giam"] = int(round(gia_moi - float(gia_von)))
-            dong["tien_thu_ve_du_kien"] = int(round(gia_moi * ton))
+            dong["giam_phan_tram"] = (
+                (Decimal(gia_ban - gia_moi) * Decimal(100) / Decimal(gia_ban))
+                .quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+            )
+            dong["lai_moi_cai_sau_giam"] = Decimal(gia_moi) - gia_von
+            dong["tien_thu_ve_du_kien"] = gia_moi * ton
 
         danh_sach.append(dong)
 

@@ -23,6 +23,11 @@ from ..core.i18n import tr
 from ..core.numeric_limits import MAX_SAFE_QUANTITY, MAX_SAFE_VND
 from ..dependencies import require_cost_visibility, require_shop_access
 from ..schemas.supplier import (
+    PurchaseOrderCancel,
+    PurchaseOrderCreate,
+    PurchaseOrderItemInput,
+    PurchaseOrderPlace,
+    PurchaseOrderUpdate,
     PurchaseReceiptConfirm,
     PurchaseReceiptCreate,
     PurchaseReceiptItemInput,
@@ -37,6 +42,10 @@ from . import catalog_service, shift_service, subscription_service
 
 STATUS_DRAFT = "DRAFT"
 STATUS_POSTED = "POSTED"
+ORDER_DRAFT = "DRAFT"
+ORDER_ORDERED = "ORDERED"
+ORDER_RECEIVED = "RECEIVED"
+ORDER_CANCELLED = "CANCELLED"
 ENTRY_PURCHASE = "PURCHASE"
 ENTRY_OPENING = "OPENING"
 METHOD_CASH_SHIFT = "CASH_SHIFT"
@@ -154,13 +163,15 @@ def _allocated_map(db: Session, entry_ids: Sequence[int]) -> Dict[int, int]:
     rows = (
         db.query(
             models.SupplierPaymentAllocation.payable_entry_id,
-            func.coalesce(func.sum(models.SupplierPaymentAllocation.amount), 0),
+            models.SupplierPaymentAllocation.amount,
         )
         .filter(models.SupplierPaymentAllocation.payable_entry_id.in_(entry_ids))
-        .group_by(models.SupplierPaymentAllocation.payable_entry_id)
         .all()
     )
-    return {int(entry_id): int(amount or 0) for entry_id, amount in rows}
+    result: Dict[int, int] = {}
+    for entry_id, amount in rows:
+        result[int(entry_id)] = result.get(int(entry_id), 0) + int(amount or 0)
+    return result
 
 
 def _supplier_entries(db: Session, supplier_id: int) -> List[models.SupplierPayableEntry]:
@@ -441,6 +452,9 @@ def delete_supplier(
     has_history = any(
         query.first() is not None
         for query in (
+            db.query(models.PurchaseOrder.id).filter(
+                models.PurchaseOrder.supplier_id == supplier.id
+            ),
             db.query(models.PurchaseReceipt.id).filter(
                 models.PurchaseReceipt.supplier_id == supplier.id
             ),
@@ -471,12 +485,478 @@ def delete_supplier(
     return {"msg": message}
 
 
+def _purchase_order_values(
+    request: PurchaseOrderCreate | PurchaseOrderUpdate,
+) -> Dict[str, Any]:
+    return {
+        "supplier_id": int(request.supplier_id),
+        "expected_date": _date(request.expected_date, "Ngày dự kiến nhận"),
+        "note": _clean(request.note, 500),
+    }
+
+
+def _prepare_purchase_order_items(
+    db: Session,
+    shop_id: int,
+    inputs: Iterable[PurchaseOrderItemInput | models.PurchaseOrderItem],
+) -> List[Dict[str, Any]]:
+    items = list(inputs)
+    if not items:
+        raise HTTPException(status_code=400, detail=tr("Đơn đặt hàng chưa có sản phẩm"))
+    product_ids = [int(item.product_id) for item in items]
+    if len(product_ids) != len(set(product_ids)):
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Mỗi sản phẩm chỉ được xuất hiện một lần trong đơn đặt hàng"),
+        )
+    products = {
+        product.id: product
+        for product in db.query(models.Product)
+        .filter(
+            models.Product.shop_id == shop_id,
+            models.Product.id.in_(product_ids),
+            models.Product.is_active.is_(True),
+        )
+        .all()
+    }
+    prepared: List[Dict[str, Any]] = []
+    for item in items:
+        product = products.get(int(item.product_id))
+        if product is None:
+            raise HTTPException(
+                status_code=404,
+                detail=tr(
+                    "Sản phẩm #{id} không hoạt động trong cửa hàng này",
+                    id=str(item.product_id),
+                ),
+            )
+        quantity = int(item.quantity)
+        if quantity <= 0 or quantity > MAX_SAFE_QUANTITY:
+            raise HTTPException(status_code=400, detail=tr("Số lượng đặt không hợp lệ"))
+        prepared.append(
+            {"source": item, "product": product, "quantity": quantity}
+        )
+    return prepared
+
+
+def _purchase_order_fingerprint(
+    shop_id: int,
+    values: Dict[str, Any],
+    items: Iterable[PurchaseOrderItemInput | models.PurchaseOrderItem],
+) -> str:
+    canonical_items = sorted(
+        (
+            {"product_id": int(item.product_id), "quantity": int(item.quantity)}
+            for item in items
+        ),
+        key=lambda item: item["product_id"],
+    )
+    return _hash(
+        {
+            "shop_id": int(shop_id),
+            "supplier_id": int(values["supplier_id"]),
+            "expected_date": values.get("expected_date"),
+            "note": values.get("note"),
+            "items": canonical_items,
+        }
+    )
+
+
+def _purchase_order_items(db: Session, order_id: int) -> List[models.PurchaseOrderItem]:
+    return (
+        db.query(models.PurchaseOrderItem)
+        .filter(models.PurchaseOrderItem.purchase_order_id == order_id)
+        .order_by(models.PurchaseOrderItem.id)
+        .all()
+    )
+
+
+def _stored_purchase_order_fingerprint(
+    order: models.PurchaseOrder,
+    items: Iterable[models.PurchaseOrderItem],
+) -> str:
+    return _purchase_order_fingerprint(
+        order.shop_id,
+        {
+            "supplier_id": order.supplier_id,
+            "expected_date": order.expected_date,
+            "note": order.note,
+        },
+        items,
+    )
+
+
+def _purchase_order_out(
+    db: Session, order: models.PurchaseOrder, *, repeated: bool = False
+) -> Dict[str, Any]:
+    items = _purchase_order_items(db, order.id)
+    supplier_name = db.query(models.Supplier.name).filter(
+        models.Supplier.id == order.supplier_id
+    ).scalar()
+    receipt_id = db.query(models.PurchaseReceipt.id).filter(
+        models.PurchaseReceipt.purchase_order_id == order.id
+    ).scalar()
+    return {
+        "id": order.id,
+        "shop_id": order.shop_id,
+        "supplier_id": order.supplier_id,
+        "supplier_name": supplier_name,
+        "status": order.status,
+        "expected_date": order.expected_date,
+        "note": order.note,
+        "receipt_id": receipt_id,
+        "created_by_user_id": order.created_by_user_id,
+        "placed_by_user_id": order.placed_by_user_id,
+        "cancelled_by_user_id": order.cancelled_by_user_id,
+        "received_by_user_id": order.received_by_user_id,
+        "created_at": order.created_at,
+        "updated_at": order.updated_at,
+        "placed_at": order.placed_at,
+        "cancelled_at": order.cancelled_at,
+        "received_at": order.received_at,
+        "draft_fingerprint": _stored_purchase_order_fingerprint(order, items),
+        "items": [
+            {
+                "id": item.id,
+                "product_id": item.product_id,
+                "product_name": item.product_name,
+                "quantity": int(item.quantity),
+            }
+            for item in items
+        ],
+        "repeated": repeated,
+    }
+
+
+def _get_purchase_order(
+    db: Session, current_user: models.User, order_id: int
+) -> Tuple[models.PurchaseOrder, models.Shop]:
+    order = db.query(models.PurchaseOrder).filter(
+        models.PurchaseOrder.id == order_id
+    ).first()
+    if order is None:
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy đơn đặt hàng"))
+    return order, _authorize_shop(db, current_user, order.shop_id)
+
+
+def create_purchase_order(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    request: PurchaseOrderCreate,
+) -> Dict[str, Any]:
+    _authorize_shop(db, current_user, shop_id)
+    subscription_service.require_pro(db, shop_id)
+    operation_id = _operation(request.operation_id, "Mã thao tác tạo đơn đặt hàng")
+    values = _purchase_order_values(request)
+    fingerprint = _purchase_order_fingerprint(shop_id, values, request.items)
+    _lock_shop(db, shop_id)
+    db.expire_all()
+    existing = db.query(models.PurchaseOrder).filter(
+        models.PurchaseOrder.create_operation_id == operation_id
+    ).first()
+    if existing is not None:
+        if (
+            existing.shop_id != shop_id
+            or existing.created_by_user_id != current_user.id
+            or existing.create_fingerprint != fingerprint
+        ):
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=tr("Mã thao tác đã được dùng cho đơn đặt hàng khác"),
+            )
+        result = _purchase_order_out(db, existing, repeated=True)
+        db.rollback()
+        return result
+
+    supplier = db.query(models.Supplier).filter(
+        models.Supplier.id == values["supplier_id"],
+        models.Supplier.shop_id == shop_id,
+        models.Supplier.is_active.is_(True),
+    ).first()
+    if supplier is None:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=tr("Nhà cung cấp không hoạt động"))
+    prepared = _prepare_purchase_order_items(db, shop_id, request.items)
+    order = models.PurchaseOrder(
+        shop_id=shop_id,
+        supplier_id=supplier.id,
+        status=ORDER_DRAFT,
+        expected_date=values["expected_date"],
+        note=values["note"],
+        create_operation_id=operation_id,
+        create_fingerprint=fingerprint,
+        created_by_user_id=current_user.id,
+        updated_by_user_id=current_user.id,
+    )
+    db.add(order)
+    try:
+        db.flush()
+        for row in prepared:
+            db.add(
+                models.PurchaseOrderItem(
+                    purchase_order_id=order.id,
+                    product_id=row["product"].id,
+                    product_name=row["product"].name,
+                    quantity=row["quantity"],
+                )
+            )
+        _audit(
+            db,
+            current_user.id,
+            "CREATE_PURCHASE_ORDER_DRAFT",
+            f"Shop #{shop_id}: tạo nháp đơn đặt hàng #{order.id} từ NCC '{supplier.name}'",
+        )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        duplicate = db.query(models.PurchaseOrder).filter(
+            models.PurchaseOrder.create_operation_id == operation_id
+        ).first()
+        if duplicate is not None and (
+            duplicate.shop_id == shop_id
+            and duplicate.created_by_user_id == current_user.id
+            and duplicate.create_fingerprint == fingerprint
+        ):
+            return _purchase_order_out(db, duplicate, repeated=True)
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Mã thao tác đã được dùng cho đơn đặt hàng khác"),
+        )
+    db.refresh(order)
+    return _purchase_order_out(db, order)
+
+
+def list_purchase_orders(
+    db: Session, current_user: models.User, shop_id: int
+) -> Dict[str, Any]:
+    _authorize_shop(db, current_user, shop_id)
+    orders = (
+        db.query(models.PurchaseOrder)
+        .filter(models.PurchaseOrder.shop_id == shop_id)
+        .order_by(models.PurchaseOrder.created_at.desc(), models.PurchaseOrder.id.desc())
+        .all()
+    )
+    return {"orders": [_purchase_order_out(db, order) for order in orders]}
+
+
+def get_purchase_order_detail(
+    db: Session, current_user: models.User, order_id: int
+) -> Dict[str, Any]:
+    order, _ = _get_purchase_order(db, current_user, order_id)
+    return _purchase_order_out(db, order)
+
+
+def update_purchase_order_draft(
+    db: Session,
+    current_user: models.User,
+    order_id: int,
+    request: PurchaseOrderUpdate,
+) -> Dict[str, Any]:
+    order, _ = _get_purchase_order(db, current_user, order_id)
+    subscription_service.require_pro(db, order.shop_id)
+    _lock_shop(db, order.shop_id)
+    db.expire_all()
+    order = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == order_id).first()
+    if order is None:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy đơn đặt hàng"))
+    if order.status != ORDER_DRAFT:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Chỉ được sửa đơn đặt hàng nháp"))
+    values = _purchase_order_values(request)
+    supplier = db.query(models.Supplier).filter(
+        models.Supplier.id == values["supplier_id"],
+        models.Supplier.shop_id == order.shop_id,
+        models.Supplier.is_active.is_(True),
+    ).first()
+    if supplier is None:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=tr("Nhà cung cấp không hoạt động"))
+    prepared = _prepare_purchase_order_items(db, order.shop_id, request.items)
+    db.query(models.PurchaseOrderItem).filter(
+        models.PurchaseOrderItem.purchase_order_id == order.id
+    ).delete(synchronize_session=False)
+    order.supplier_id = supplier.id
+    order.expected_date = values["expected_date"]
+    order.note = values["note"]
+    order.updated_by_user_id = current_user.id
+    for row in prepared:
+        db.add(
+            models.PurchaseOrderItem(
+                purchase_order_id=order.id,
+                product_id=row["product"].id,
+                product_name=row["product"].name,
+                quantity=row["quantity"],
+            )
+        )
+    _audit(db, current_user.id, "UPDATE_PURCHASE_ORDER_DRAFT", f"Shop #{order.shop_id}: sửa nháp đơn đặt hàng #{order.id}")
+    db.commit()
+    db.refresh(order)
+    return _purchase_order_out(db, order)
+
+
+def delete_purchase_order_draft(
+    db: Session, current_user: models.User, order_id: int
+) -> Dict[str, str]:
+    order, _ = _get_purchase_order(db, current_user, order_id)
+    subscription_service.require_pro(db, order.shop_id)
+    _lock_shop(db, order.shop_id)
+    db.expire_all()
+    order = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == order_id).first()
+    if order is None:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy đơn đặt hàng"))
+    if order.status != ORDER_DRAFT:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Chỉ được xóa đơn đặt hàng nháp"))
+    shop_id = order.shop_id
+    db.query(models.PurchaseOrderItem).filter(
+        models.PurchaseOrderItem.purchase_order_id == order.id
+    ).delete(synchronize_session=False)
+    db.delete(order)
+    _audit(db, current_user.id, "DELETE_PURCHASE_ORDER_DRAFT", f"Shop #{shop_id}: xóa nháp đơn đặt hàng #{order_id}")
+    db.commit()
+    return {"msg": "Deleted"}
+
+
+def place_purchase_order(
+    db: Session,
+    current_user: models.User,
+    order_id: int,
+    request: PurchaseOrderPlace,
+) -> Dict[str, Any]:
+    order, _ = _get_purchase_order(db, current_user, order_id)
+    subscription_service.require_pro(db, order.shop_id)
+    operation_id = _operation(request.operation_id, "Mã thao tác đặt hàng")
+    fingerprint = _hash(
+        {"order_id": order_id, "draft_fingerprint": request.draft_fingerprint}
+    )
+    if order.status == ORDER_ORDERED:
+        if order.place_operation_id == operation_id and order.place_fingerprint == fingerprint:
+            return _purchase_order_out(db, order, repeated=True)
+        raise HTTPException(status_code=409, detail=tr("Đơn đã được đặt"))
+    _lock_shop(db, order.shop_id)
+    db.expire_all()
+    order = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == order_id).first()
+    if order is None:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy đơn đặt hàng"))
+    if order.status == ORDER_ORDERED:
+        if order.place_operation_id == operation_id and order.place_fingerprint == fingerprint:
+            result = _purchase_order_out(db, order, repeated=True)
+            db.rollback()
+            return result
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Đơn đã được đặt"))
+    if order.status != ORDER_DRAFT:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Đơn không còn ở trạng thái nháp"))
+    items = _purchase_order_items(db, order.id)
+    if _stored_purchase_order_fingerprint(order, items) != request.draft_fingerprint:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Đơn nháp đã thay đổi; hãy mở lại và kiểm tra"))
+    collision = db.query(models.PurchaseOrder).filter(
+        models.PurchaseOrder.place_operation_id == operation_id,
+        models.PurchaseOrder.id != order_id,
+    ).first()
+    if collision is not None:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Mã thao tác đã dùng để đặt đơn khác"))
+    supplier = db.query(models.Supplier).filter(
+        models.Supplier.id == order.supplier_id,
+        models.Supplier.shop_id == order.shop_id,
+        models.Supplier.is_active.is_(True),
+    ).first()
+    if supplier is None:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Nhà cung cấp đã ngừng sử dụng"))
+    _prepare_purchase_order_items(db, order.shop_id, items)
+    order.status = ORDER_ORDERED
+    order.place_operation_id = operation_id
+    order.place_fingerprint = fingerprint
+    order.placed_by_user_id = current_user.id
+    order.placed_at = datetime.utcnow()
+    order.updated_by_user_id = current_user.id
+    _audit(db, current_user.id, "PLACE_PURCHASE_ORDER", f"Shop #{order.shop_id}: đặt đơn NCC #{order.id}")
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Mã thao tác đã dùng để đặt đơn khác"))
+    db.refresh(order)
+    return _purchase_order_out(db, order)
+
+
+def cancel_purchase_order(
+    db: Session,
+    current_user: models.User,
+    order_id: int,
+    request: PurchaseOrderCancel,
+) -> Dict[str, Any]:
+    order, _ = _get_purchase_order(db, current_user, order_id)
+    subscription_service.require_pro(db, order.shop_id)
+    operation_id = _operation(request.operation_id, "Mã thao tác hủy đơn")
+    if order.status == ORDER_CANCELLED:
+        if order.cancel_operation_id == operation_id:
+            return _purchase_order_out(db, order, repeated=True)
+        raise HTTPException(status_code=409, detail=tr("Đơn đã bị hủy"))
+    _lock_shop(db, order.shop_id)
+    db.expire_all()
+    order = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == order_id).first()
+    if order is None:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=tr("Không tìm thấy đơn đặt hàng"))
+    if order.status == ORDER_CANCELLED and order.cancel_operation_id == operation_id:
+        result = _purchase_order_out(db, order, repeated=True)
+        db.rollback()
+        return result
+    if order.status != ORDER_ORDERED:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Chỉ được hủy đơn đang đặt"))
+    collision = db.query(models.PurchaseOrder).filter(
+        models.PurchaseOrder.cancel_operation_id == operation_id,
+        models.PurchaseOrder.id != order_id,
+    ).first()
+    if collision is not None:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Mã thao tác đã dùng để hủy đơn khác"))
+    linked_receipt = db.query(models.PurchaseReceipt.id).filter(
+        models.PurchaseReceipt.purchase_order_id == order.id
+    ).scalar()
+    if linked_receipt is not None:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Đơn đã có phiếu nhập nháp; hãy xóa phiếu nhập trước khi hủy"),
+        )
+    order.status = ORDER_CANCELLED
+    order.cancel_operation_id = operation_id
+    order.cancelled_by_user_id = current_user.id
+    order.cancelled_at = datetime.utcnow()
+    order.updated_by_user_id = current_user.id
+    _audit(db, current_user.id, "CANCEL_PURCHASE_ORDER", f"Shop #{order.shop_id}: hủy đơn NCC #{order.id}")
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Mã thao tác đã dùng để hủy đơn khác"))
+    db.refresh(order)
+    return _purchase_order_out(db, order)
+
+
 def _receipt_values(
     request: PurchaseReceiptCreate | PurchaseReceiptUpdate,
 ) -> Dict[str, Any]:
     received_date = _date(request.received_date, "Ngày nhập", default_today=True)
     due_date = _date(request.due_date, "Hạn thanh toán")
     return {
+        "purchase_order_id": (
+            int(request.purchase_order_id)
+            if request.purchase_order_id is not None
+            else None
+        ),
         "supplier_id": int(request.supplier_id),
         "supplier_invoice_number": _clean(request.supplier_invoice_number, 128),
         "received_date": received_date,
@@ -593,6 +1073,55 @@ def _prepare_items(
     return prepared, total
 
 
+def _validate_receipt_purchase_order(
+    db: Session,
+    *,
+    shop_id: int,
+    supplier_id: int,
+    purchase_order_id: Optional[int],
+    items: Iterable[PurchaseReceiptItemInput | models.PurchaseReceiptItem],
+    receipt_id: Optional[int] = None,
+) -> Optional[models.PurchaseOrder]:
+    if purchase_order_id is None:
+        return None
+    order = db.query(models.PurchaseOrder).filter(
+        models.PurchaseOrder.id == purchase_order_id
+    ).first()
+    if order is None or order.shop_id != shop_id:
+        raise HTTPException(status_code=404, detail=tr("Đơn đặt hàng không thuộc cửa hàng"))
+    if order.supplier_id != supplier_id:
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Nhà cung cấp của phiếu nhập không khớp đơn đặt hàng"),
+        )
+    if order.status != ORDER_ORDERED:
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Chỉ đơn đang đặt mới được lập phiếu nhận hàng"),
+        )
+    linked = db.query(models.PurchaseReceipt.id).filter(
+        models.PurchaseReceipt.purchase_order_id == order.id
+    ).scalar()
+    if linked is not None and linked != receipt_id:
+        raise HTTPException(
+            status_code=409, detail=tr("Đơn đặt hàng đã có phiếu nhập")
+        )
+    expected = {
+        int(row.product_id): int(row.quantity)
+        for row in _purchase_order_items(db, order.id)
+    }
+    actual: Dict[int, int] = {}
+    for row in items:
+        product_id = int(row.product_id)
+        actual[product_id] = actual.get(product_id, 0) + int(row.quantity)
+    if actual != expected:
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Số lượng phiếu nhập phải khớp đúng đơn đặt hàng"),
+        )
+    return order
+
+
 def _draft_fingerprint(
     shop_id: int,
     values: Dict[str, Any],
@@ -622,6 +1151,7 @@ def _draft_fingerprint(
     return _hash(
         {
             "shop_id": int(shop_id),
+            "purchase_order_id": values.get("purchase_order_id"),
             "supplier_id": int(values["supplier_id"]),
             "supplier_invoice_number": values.get("supplier_invoice_number"),
             "received_date": values.get("received_date"),
@@ -640,6 +1170,7 @@ def _stored_draft_fingerprint(
     return _draft_fingerprint(
         receipt.shop_id,
         {
+            "purchase_order_id": receipt.purchase_order_id,
             "supplier_id": receipt.supplier_id,
             "supplier_invoice_number": receipt.supplier_invoice_number,
             "received_date": receipt.received_date,
@@ -670,12 +1201,12 @@ def _receipt_out(
     ).first()
     paid = 0
     if payable is not None:
-        paid = int(
-            db.query(func.coalesce(func.sum(models.SupplierPaymentAllocation.amount), 0))
+        paid_rows = (
+            db.query(models.SupplierPaymentAllocation.amount)
             .filter(models.SupplierPaymentAllocation.payable_entry_id == payable.id)
-            .scalar()
-            or 0
+            .all()
         )
+        paid = sum(int(amount or 0) for (amount,) in paid_rows)
     supplier_name = db.query(models.Supplier.name).filter(
         models.Supplier.id == receipt.supplier_id
     ).scalar()
@@ -684,6 +1215,7 @@ def _receipt_out(
         "id": receipt.id,
         "shop_id": receipt.shop_id,
         "supplier_id": receipt.supplier_id,
+        "purchase_order_id": receipt.purchase_order_id,
         "supplier_name": supplier_name,
         "status": receipt.status,
         "supplier_invoice_number": receipt.supplier_invoice_number,
@@ -789,9 +1321,17 @@ def create_receipt_draft(
             detail=tr("Nhà cung cấp đã ngừng sử dụng"),
         )
     prepared, total = _prepare_items(db, shop_id, request.items)
+    _validate_receipt_purchase_order(
+        db,
+        shop_id=shop_id,
+        supplier_id=supplier.id,
+        purchase_order_id=values["purchase_order_id"],
+        items=request.items,
+    )
     receipt = models.PurchaseReceipt(
         shop_id=shop_id,
         supplier_id=supplier.id,
+        purchase_order_id=values["purchase_order_id"],
         status=STATUS_DRAFT,
         supplier_invoice_number=values["supplier_invoice_number"],
         received_date=values["received_date"],
@@ -914,10 +1454,25 @@ def update_receipt_draft(
             detail=tr("Nhà cung cấp đã ngừng sử dụng"),
         )
     prepared, total = _prepare_items(db, receipt.shop_id, request.items)
+    if receipt.purchase_order_id != values["purchase_order_id"]:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Không được đổi liên kết đơn đặt hàng của phiếu nhập"),
+        )
+    _validate_receipt_purchase_order(
+        db,
+        shop_id=receipt.shop_id,
+        supplier_id=supplier.id,
+        purchase_order_id=values["purchase_order_id"],
+        items=request.items,
+        receipt_id=receipt.id,
+    )
     db.query(models.PurchaseReceiptItem).filter(
         models.PurchaseReceiptItem.receipt_id == receipt.id
     ).delete(synchronize_session=False)
     receipt.supplier_id = supplier.id
+    receipt.purchase_order_id = values["purchase_order_id"]
     receipt.supplier_invoice_number = values["supplier_invoice_number"]
     receipt.received_date = values["received_date"]
     receipt.due_date = values["due_date"]
@@ -1242,6 +1797,14 @@ def confirm_receipt(
             detail=tr("Nhà cung cấp đã ngừng sử dụng; hãy dùng lại trước khi xác nhận"),
         )
     prepared, total = _prepare_items(db, receipt.shop_id, draft_items)
+    linked_order = _validate_receipt_purchase_order(
+        db,
+        shop_id=receipt.shop_id,
+        supplier_id=receipt.supplier_id,
+        purchase_order_id=receipt.purchase_order_id,
+        items=draft_items,
+        receipt_id=receipt.id,
+    )
     if paid > total:
         db.rollback()
         raise HTTPException(
@@ -1331,6 +1894,11 @@ def confirm_receipt(
     receipt.confirmed_by_user_id = current_user.id
     receipt.confirmed_at = datetime.utcnow()
     receipt.updated_by_user_id = current_user.id
+    if linked_order is not None:
+        linked_order.status = ORDER_RECEIVED
+        linked_order.received_by_user_id = current_user.id
+        linked_order.received_at = datetime.utcnow()
+        linked_order.updated_by_user_id = current_user.id
     _audit(
         db,
         current_user.id,

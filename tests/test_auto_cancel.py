@@ -205,6 +205,70 @@ def test_huy_nhieu_don_qua_han_cung_luc(client):
     assert _ton_kho(ctx2["product"]["id"]) == 10
 
 
+def test_don_hong_thieu_product_id_khong_chan_don_hop_le_phia_sau(client):
+    """P1: một PENDING order hỏng (thiếu product_id) không được chặn các đơn
+    quá hạn hợp lệ khác trong cùng lượt quét job (regression cho isolation).
+    """
+    from conftest import admin_token
+
+    ctx_hong, order_hong = _tao_don(client, quantity=2)
+    ctx_ok, order_ok = _tao_don(client, quantity=3)
+
+    session = SessionLocal()
+    try:
+        item_hong = (
+            session.query(models.OrderItem)
+            .filter(models.OrderItem.order_id == order_hong)
+            .first()
+        )
+        product_id_goc = item_hong.product_id
+        item_hong.product_id = None  # giả lập dòng dữ liệu cũ, xem test_cancel_order
+        session.commit()
+    finally:
+        session.close()
+
+    _lam_cu_don(order_hong, 60)
+    _lam_cu_don(order_ok, 60)
+    ton_hong_truoc = _ton_kho(ctx_hong["product"]["id"])
+
+    try:
+        da_huy = cancel_expired_pending_orders(timeout_minutes=30)
+
+        assert da_huy == 1, "Chi dem don thuc su huy thanh cong"
+        assert _trang_thai(order_hong) == STATUS_PENDING, "Don hong phai giu PENDING"
+        assert _ton_kho(ctx_hong["product"]["id"]) == ton_hong_truoc, (
+            "Don hong khong duoc hoan kho"
+        )
+        assert _trang_thai(order_ok) == STATUS_CANCELLED, (
+            "Don hop le phia sau van phai duoc huy"
+        )
+        assert _ton_kho(ctx_ok["product"]["id"]) == 10, "Don hop le van phai hoan kho"
+
+        session = SessionLocal()
+        try:
+            don_hong = session.get(models.Order, order_hong)
+            assert don_hong.inventory_reversed == 0
+            assert don_hong.items[0].returned_total_qty == 0
+        finally:
+            session.close()
+    finally:
+        session = SessionLocal()
+        try:
+            item_hong = (
+                session.query(models.OrderItem)
+                .filter(models.OrderItem.order_id == order_hong)
+                .first()
+            )
+            item_hong.product_id = product_id_goc
+            session.commit()
+        finally:
+            session.close()
+        res_cleanup = client.post(
+            f"/api/orders/{order_hong}/cancel", headers=auth(admin_token(client))
+        )
+        assert res_cleanup.status_code == 200, res_cleanup.text
+
+
 def test_tra_lai_luot_voucher_khi_tu_dong_huy(client):
     ctx = seller_with_shop(client)
     client.post(

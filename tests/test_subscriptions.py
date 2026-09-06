@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from conftest import auth
 from fselling import models
-from fselling.core import bootstrap
+import legacy_bootstrap_support as bootstrap
 from fselling.core.i18n import using_locale
 from fselling.core.security import create_access_token, new_session_id
 from fselling.core.translations_en import EN_MESSAGES
@@ -140,7 +140,8 @@ def test_tao_shop_tao_trial_cung_luc(db):
     after = datetime.datetime.utcnow()
     row = db.query(models.ShopSubscription).filter_by(shop_id=shop.id).one()
     assert before <= row.trial_started_at <= after
-    assert row.trial_ends_at - row.trial_started_at == datetime.timedelta(days=30)
+    assert subscription_service.TRIAL_DAYS == 14
+    assert row.trial_ends_at - row.trial_started_at == datetime.timedelta(days=14)
 
 
 def test_backfill_shop_cu_chi_cap_trial_mot_lan(db):
@@ -202,32 +203,18 @@ def test_backfill_trial_loi_sql_thi_rollback_va_fail_fast():
     fake_db.commit.assert_not_called()
 
 
-def test_initialize_dung_ngay_khi_backfill_trial_that_bai(monkeypatch):
+def test_application_bootstrap_chi_seed_sau_khi_schema_da_verify(monkeypatch):
+    from fselling.core import bootstrap as application_bootstrap
+
     fake_db = Mock()
-    backfill_error = RuntimeError("backfill trial test thất bại")
-    legacy_backfill = Mock()
     seed_admin = Mock()
 
-    monkeypatch.setattr(bootstrap, "create_tables", Mock())
-    monkeypatch.setattr(bootstrap, "SessionLocal", lambda: fake_db)
-    monkeypatch.setattr(bootstrap, "dedupe_product_codes", Mock())
-    monkeypatch.setattr(bootstrap, "run_migrations", Mock())
-    monkeypatch.setattr(bootstrap, "verify_required_indexes", lambda _db: [])
-    monkeypatch.setattr(
-        bootstrap,
-        "backfill_shop_subscriptions",
-        Mock(side_effect=backfill_error),
-    )
-    monkeypatch.setattr(bootstrap, "backfill_legacy_order_payments", legacy_backfill)
-    monkeypatch.setattr(bootstrap, "backfill_order_item_product_id", Mock())
-    monkeypatch.setattr(bootstrap, "seed_admin", seed_admin)
+    monkeypatch.setattr(application_bootstrap, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(application_bootstrap, "seed_admin", seed_admin)
 
-    with pytest.raises(RuntimeError) as exc:
-        bootstrap.initialize()
+    application_bootstrap.initialize_application_data()
 
-    assert exc.value is backfill_error
-    legacy_backfill.assert_not_called()
-    seed_admin.assert_not_called()
+    seed_admin.assert_called_once_with(fake_db)
     fake_db.close.assert_called_once_with()
 
 
@@ -267,7 +254,10 @@ def test_thieu_aggregate_khong_cap_trial_luc_mo_tab_hay_thanh_toan(
 
 def test_trial_gift_khong_grace_nhung_paid_co_grace(db):
     now = datetime.datetime(2026, 8, 7, 5, 0, 0)
-    _owner, shop = _user_and_shop(db, now=now - datetime.timedelta(days=30))
+    _owner, shop = _user_and_shop(
+        db,
+        now=now - datetime.timedelta(days=subscription_service.TRIAL_DAYS),
+    )
     subscription = db.query(models.ShopSubscription).filter_by(shop_id=shop.id).one()
 
     assert subscription_service.get_subscription_state(
@@ -519,8 +509,11 @@ def test_mua_som_noi_tu_cuoi_trial_dang_con(db, monkeypatch):
         now=now,
     )
     subscription = db.query(models.ShopSubscription).filter_by(shop_id=shop.id).one()
-    assert subscription.trial_ends_at == now + datetime.timedelta(days=30)
-    assert subscription.paid_until == now + datetime.timedelta(days=60)
+    expected_trial_end = now + datetime.timedelta(days=subscription_service.TRIAL_DAYS)
+    assert subscription.trial_ends_at == expected_trial_end
+    assert subscription.paid_until == expected_trial_end + datetime.timedelta(
+        days=subscription_service.DURATION_DAYS[subscription_service.CYCLE_MONTHLY]
+    )
 
 
 def test_review_tien_du_gom_mot_issue_checkout_va_tra_dung_so_can_hoan(

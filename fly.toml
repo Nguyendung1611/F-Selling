@@ -9,6 +9,13 @@ primary_region = "sin"  # Singapore, gần Việt Nam
   DB_PATH = "/data/fselling_v4.db"
   UPLOAD_DIR = "/data/uploads"
   ALLOWED_ORIGINS = "https://f-selling-dung.fly.dev"
+  # Default pilot ở tầng app; chưa xác minh limit của provider hay proxy/edge.
+  ORDER_WEBHOOK_MAX_BODY_BYTES = "262144"
+  # Assertion inventory cho topology SQLite được hỗ trợ. Trước mỗi migration,
+  # operator phải đối chiếu hai số này với inventory Fly thật; code không gọi
+  # Fly API/network trong startup hay migration.
+  FSELLING_TOPOLOGY_ACTIVE_MACHINES = "1"
+  FSELLING_TOPOLOGY_SQLITE_FILES = "1"
 
 [http_service]
   internal_port = 8080
@@ -16,6 +23,13 @@ primary_region = "sin"  # Singapore, gần Việt Nam
   auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 0   # tự tắt khi không có traffic để khỏi tốn tiền
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/api/health/ready"
 
 # Volume lưu dữ liệu bền (DB + ảnh upload). Không mất khi redeploy/restart.
 [mounts]

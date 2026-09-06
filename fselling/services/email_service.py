@@ -1,6 +1,7 @@
-"""Gửi email OTP qua SMTP. Không cấu hình SMTP -> in OTP ra console (như code cũ)."""
+"""Gửi email OTP qua SMTP mà không ghi dữ liệu nhạy cảm vào log."""
 from __future__ import annotations
 
+import logging
 import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -10,6 +11,7 @@ from ..core.config import SMTP_TIMEOUT_SECONDS
 from ..core.i18n import get_locale, tr
 
 DEFAULT_SUBJECT = "F-Selling: Mã xác minh của bạn"
+logger = logging.getLogger(__name__)
 
 
 def _build_body(otp_code: str) -> str:
@@ -32,16 +34,22 @@ def _build_body(otp_code: str) -> str:
 
 def send_otp_email(email_to: str, otp_code: str, subject: str = DEFAULT_SUBJECT) -> bool:
     smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_user = os.getenv("SMTP_USER")
     smtp_password = os.getenv("SMTP_PASSWORD")
 
     if not smtp_user or not smtp_password:
-        print("\n" + "=" * 80)
-        print(f" WARNING: SMTP EMAIL NOT CONFIGURRED. BACKUP OTP FOR {email_to}: {otp_code}")
-        print("=" * 80 + "\n")
+        logger.warning("smtp_send_skipped_missing_credentials")
         return False
 
+    try:
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    except (TypeError, ValueError):
+        logger.warning("smtp_send_skipped_invalid_port")
+        return False
+
+    server = None
+    sent = False
+    cleanup_ok = True
     try:
         msg = MIMEMultipart()
         msg["From"] = smtp_user
@@ -52,21 +60,27 @@ def send_otp_email(email_to: str, otp_code: str, subject: str = DEFAULT_SUBJECT)
         # timeout BẮT BUỘC: không có nó thì smtplib chờ vô hạn khi máy chủ mail
         # không phản hồi, và mỗi lần chờ giữ một luồng của threadpool FastAPI.
         server = smtplib.SMTP(smtp_host, smtp_port, timeout=SMTP_TIMEOUT_SECONDS)
-        try:
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.sendmail(smtp_user, email_to, msg.as_string())
-        finally:
+        server.starttls()
+        server.login(smtp_user, smtp_password)
+        server.sendmail(smtp_user, email_to, msg.as_string())
+        sent = True
+    except Exception:
+        # Exception SMTP có thể chứa recipient, username, credential hoặc body.
+        # Chỉ ghi mã sự kiện cố định, tuyệt đối không log exception thô.
+        logger.warning("smtp_send_failed")
+    finally:
+        if server is not None:
             # `quit()` cũng đi qua mạng nên cũng hỏng được; đóng socket kiểu gì
             # cũng phải xảy ra, nếu không thì rò rỉ kết nối sau mỗi lần lỗi.
             try:
                 server.quit()
-            except (smtplib.SMTPException, OSError):
-                server.close()
-        return True
-    except (smtplib.SMTPException, OSError) as e:
-        print(f"Error sending mail to {email_to}: {e}")
-        print("\n" + "=" * 80)
-        print(f" BACKUP OTP FOR {email_to}: {otp_code} (Mail sending failed: {e})")
-        print("=" * 80 + "\n")
-        return False
+            except Exception:
+                cleanup_ok = False
+                logger.warning("smtp_cleanup_failed")
+                try:
+                    server.close()
+                except Exception:
+                    # Không có dữ liệu nào an toàn để lấy từ exception cleanup.
+                    pass
+
+    return sent and cleanup_ok

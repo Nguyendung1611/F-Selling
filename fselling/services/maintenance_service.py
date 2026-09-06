@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from fastapi import HTTPException
+from sqlalchemy import exists
 from sqlalchemy.exc import SQLAlchemyError
 
 from .. import models
@@ -64,19 +66,36 @@ def cancel_expired_pending_orders(timeout_minutes: int = None) -> int:
             .filter(
                 models.Order.status == order_service.STATUS_PENDING,
                 models.Order.created_at < han_chot,
+                # I10-C: a v1 intent has no TTL/grace/auto-cancel policy.
+                # Its immutable account/reference snapshot remains controlled
+                # until explicit reconciliation, even if the legacy job is ON.
+                ~exists().where(
+                    models.QrPaymentIntent.order_id == models.Order.id
+                ),
             )
             .all()
         )
 
         da_huy = 0
         for order in expired_orders:
+            order_id = int(order.id)
             # Mỗi đơn là một transaction riêng: một đơn lỗi không kéo đổ cả lượt chạy.
             try:
                 if order_service.cancel_expired_order(db, order):
                     da_huy += 1
+            except HTTPException as e:
+                # Domain fail-closed từ lock shop / transition / restore_stock
+                # (vd. đơn mồ côi, dòng đơn thiếu product_id). Rollback đúng
+                # transaction của đơn này (apply_transition chưa commit) rồi
+                # sang đơn kế tiếp; đơn hỏng giữ nguyên PENDING.
+                db.rollback()
+                print(
+                    f"[AUTO-CANCEL] Bo qua don #{order_id}: loi nghiep vu "
+                    f"(http_status={e.status_code})"
+                )
             except SQLAlchemyError as e:
                 db.rollback()
-                print(f"[AUTO-CANCEL] Loi khi huy don #{order.id}: {e}")
+                print(f"[AUTO-CANCEL] Loi khi huy don #{order_id}: {e}")
 
         if da_huy:
             print(f"[AUTO-CANCEL] Da huy {da_huy} don qua han (>{minutes} phut) va hoan ton kho")

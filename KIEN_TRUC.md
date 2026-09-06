@@ -17,7 +17,7 @@ python_app/
 │   │   ├── config.py          # BASE_DIR, UPLOAD_DIR, SECRET_KEY, CORS, log_to_file
 │   │   ├── database.py        # engine / SessionLocal / Base
 │   │   ├── security.py        # bcrypt, JWT, OTP, chính sách mật khẩu, compare_digest
-│   │   └── bootstrap.py       # create_all + migration SQLite + seed admin
+│   │   └── bootstrap.py       # seed app, chỉ chạy sau schema verification
 │   ├── models/                # ORM: user, shop, catalog, order, system_log
 │   ├── schemas/               # Pydantic: auth, shop, catalog, order
 │   ├── routers/               # Chỉ xử lý HTTP, gọi service
@@ -107,6 +107,13 @@ Toàn bộ đều có test bảo vệ trong `tests/`.
    Rủi ro: nếu xuất hiện loại lỗi ngoài dự kiến, nó sẽ nổi lên thành 500
    thay vì bị nuốt im lặng - đây là chủ ý để không giấu lỗi.
 
+6. **Webhook `ORDER` chặn tiền vào sai tài khoản shop trước mọi side effect.**
+   Trước đây account mismatch chỉ sinh cảnh báo sau khi ledger/trạng thái đã
+   đổi, nên account của shop B vẫn có thể làm order shop A thành `PAID`. Nay
+   payload có account number sai bị từ chối với `ACCOUNT_MISMATCH`, không tạo
+   `OrderPayment`/`BANK_UNAPPLIED`, không đổi refund/loyalty/trạng thái và vẫn
+   trả HTTP 200. Payload thiếu account giữ tương thích cũ trong increment này.
+
 ## Bẫy cần biết khi viết service mới
 
 ### 1. Luôn `db.refresh(obj)` sau `log_system_action()` nếu còn trả object về client
@@ -142,13 +149,32 @@ là `async` nhưng endpoint vẫn để `def` đồng bộ: FastAPI giải depen
 event loop rồi chạy endpoint trong threadpool, nên phần gọi database đồng bộ
 không chặn event loop.
 
-### 4. `run_migrations()` nuốt lỗi, nên index bắt buộc phải được kiểm lại
+### 4. Migration I04 fail-closed; web startup tuyệt đối không sửa schema
 
-Hàm này bọc mọi câu lệnh trong `except SQLAlchemyError` để chạy lặp lại được.
-Hệ quả: một `CREATE UNIQUE INDEX` thất bại (DB đang có sẵn dữ liệu trùng) sẽ
-**trôi qua im lặng**, app vẫn khởi động, và ràng buộc trùng lặp bị hổng mà
-không ai biết. Thêm index bắt buộc thì phải khai vào `_REQUIRED_INDEXES` để
-`verify_required_indexes()` kiểm lại và in cảnh báo.
+Schema production do graph Alembic tuyến tính trong `migrations/` quản lý, còn
+`fselling/migration/` quản lý checksum, control fingerprint, UUID database,
+lease/fence, request/journal/campaign/attempt và verifier. Coordinator inject
+đúng một SQLAlchemy `Connection` vào Alembic `env.py` và giữ `BEGIN IMMEDIATE`;
+DDL, `alembic_version`, journal, verifier và attempt success commit cùng nhau.
+Lease không tự hết hạn giữa transaction đang giữ SQLite write lock; giữa các
+checkpoint đã commit phải heartbeat cùng fence, và fence mới luôn chặn owner cũ.
+`plan/check` chặn branch/merge, checksum drift, helper import và operation không
+transactional trước side effect. Attempt lỗi chỉ persist error code + SHA-256
+digest, không persist exception/path/PII thô. Với adoption, `request_id` định
+danh durable intent: lỗi transient giữ intent `RUNNING`, đóng attempt cũ ở
+`FAILED_RETRYABLE`, và retry cùng `request_id` tạo attempt số kế tiếp; intent
+`FAILED_BLOCKED` hoặc input backup/digest/request mơ hồ luôn bị chặn.
+
+Web startup chỉ gọi verifier read-only. Thiếu/sai revision, control shape hay
+financial index thì readiness 503 và mọi nghiệp vụ bị khóa; scheduler và seed
+không được chạy. Fresh DB phải `init` → `upgrade head` → `verify`; DB legacy
+9cf7106 phải backup/restore rehearsal rồi `adopt-legacy` → `upgrade head` →
+`verify`. Readiness công khai chỉ trả `ready` và revision, không trả DB path,
+UUID, fingerprint hoặc nguồn topology. Không đưa `create_all()` hay migration
+broad-catch trở lại bootstrap. Revision có thể repair checkout đã quá hạn tại
+thời điểm upgrade, nhưng startup verifier chỉ kiểm invariant bền: không dùng
+`CURRENT_TIMESTAMP` để biến một checkout runtime vừa quá hạn thành schema/data
+corruption và tự khóa readiness sau thời gian downtime.
 
 ### 5. Mã sản phẩm tự sinh phải lấy từ `id`, không lấy từ đồng hồ
 
@@ -159,9 +185,10 @@ giây đều trùng mã. Nay `create_product` gọi `db.flush()` để lấy `id
 `code`, `barcode` và `name` đều duy nhất trong phạm vi một shop
 (`ix_products_shop_code`, `ix_products_shop_barcode`, `ix_products_shop_name`)
 và đều được kiểm ở service để báo tên sản phẩm đang giữ mã.
-`dedupe_product_codes()` dọn dữ liệu cũ và **phải chạy trước
-`run_migrations()`**, nếu không lệnh tạo unique index sẽ thất bại trên DB còn mã
-trùng. Riêng `name` cố ý KHÔNG có bước dồn tự động: tên là dữ liệu người dùng
+Revision `0002_i04_operational_tables` dọn mã trống/trùng theo quy tắc `SP-<id>`
+và verifier kiểm lại trong cùng transaction; web startup không còn chạy
+`dedupe_product_codes()`/`run_migrations()`. Riêng `name` cố ý KHÔNG có bước dồn
+tự động: tên là dữ liệu người dùng
 đặt, tự đổi thành "... (2)" là quyết định không nên thay họ - DB nào còn tên
 trùng thì `verify_required_indexes()` sẽ nêu index bị thiếu để tự sửa.
 
@@ -203,23 +230,50 @@ Luật hiện tại:
 | Tổng nhận = tổng đơn | Tự động `PAID`, frontend xuất hóa đơn |
 | Tổng nhận > tổng đơn | `PAID/OVERPAID`, xuất hóa đơn ngay và mở khoản chờ hoàn |
 | Tiền về sau khi đơn đã hủy | `UNRECONCILED/LATE_PAYMENT`, không hồi sinh đơn; chờ hoàn |
-| Sai số tài khoản nhận | Chỉ cảnh báo, KHÔNG chặn |
+| Có account number nhưng sai tài khoản shop chứa đơn | Từ chối `ACCOUNT_MISMATCH`, không có side effect tài chính |
 
-Ba điều dễ làm sai khi sửa tiếp:
+Bốn điều dễ làm sai khi sửa tiếp:
+
+**Account mismatch phải được kiểm dưới shop write lock, trước cả
+`WEBHOOK_PAY_FROM`.** Sau khi tìm thấy order/shop, webhook lấy lock, refresh
+order rồi đọc lại `Shop.bank_account_no`; đường update account cũng lấy đúng lock
+này. Nếu dùng account đọc trước lock, một update thắng trước vẫn có thể bị quyết
+định theo cấu hình cũ. Nếu kiểm sau nhánh trạng thái thì tiền sai account trỏ tới
+đơn `DEBT` vẫn sinh `BANK_UNAPPLIED`; nếu kiểm trong `_apply_bank_transaction`
+thì ledger/refund/loyalty đã có thể đổi. So account sau khi bỏ số 0 đầu. Payload
+không có account number tạm giữ hành vi tương thích cũ; đây là residual risk,
+không phải bằng chứng rằng provider đã xác nhận đúng tài khoản.
 
 **Phải phân biệt "số tiền = 0" với "không có số tiền".** `GiaoDich.amount is None`
 nghĩa là payload không chứa số tiền nên không có cơ sở xác nhận; `amount == 0`
 là một số tiền thật và sai. Gộp hai ca này lại là mở lại đúng lỗ hổng cũ.
 
-**Giao dịch bị từ chối vẫn trả HTTP 200.** Ngân hàng retry vô hạn khi nhận
-4xx/5xx. Lý do từ chối nằm ở `SystemLog` và khóa `rejected_order_ids`.
+**Business rejection chỉ trả HTTP 200 sau khi audit đã durable.** Compatible
+duplicate trả 200 mà không nhân ledger/audit. Canonical idempotency key gồm
+provider + account + event được tra toàn cục; cùng key nhưng khác
+order/amount/event là collision xác định được: không áp tiền, ghi
+`WEBHOOK_XUNG_DOT_IDEMPOTENCY` (không raw payload/account/transaction ID) rồi
+trả 200 với `rejected_order_ids`. Raw transaction fallback có namespace hẹp hơn:
+chỉ dùng trong chính order hiện tại để nối retry đổi envelope/provider giữa
+`BANK_IN` và `BANK_UNAPPLIED`, không dùng raw ID trùng giữa hai shop làm collision.
+Nếu audit collision không commit được, hoặc lỗi
+ledger/flush/commit/IntegrityError không có durable winner, phải rollback và trả
+5xx để provider retry; giả success ở đây là làm mất tiền.
+
+**Một bank event là một transaction.** `BANK_UNAPPLIED` và audit của nó phải
+commit cùng nhau. `BANK_IN`, tổng đã thu, status/refund, loyalty và audit cũng
+phải commit cùng nhau. Trong batch, item trước có thể đã commit rồi item sau lỗi;
+request khi đó trả 5xx, và retry toàn batch dựa vào shared idempotency để không
+nhân item đầu.
 
 **Webhook chỉ được đụng vào trạng thái trong `WEBHOOK_PAY_FROM`** (mục 25).
 
 **Đừng đặt unique index lên `bank_txn_id`.** Ngân hàng gửi lại cùng một giao
 dịch là bình thường. Khi hỗ trợ khách chuyển nhiều lần, máy trạng thái KHÔNG
 còn đủ để chống lặp: mọi khoản tiền vào/tiền mặt/hoàn tiền nằm trong ledger
-`order_payments`, và webhook dùng unique `idempotency_key` riêng. Cả ledger,
+`order_payments`, và webhook dùng unique `idempotency_key` riêng. Transaction ID
+được strip thống nhất khi tạo key, lưu và so sánh; row legacy có khoảng trắng chỉ
+được fallback trong cùng order. Cả ledger,
 tổng lũy kế, trạng thái và `SystemLog` phải commit trong cùng một transaction;
 không gọi `transition_status()` hay `log_system_action()` ở giữa vì hai hàm đó
 tự commit. `bank_txn_id` vẫn non-unique và chỉ dùng để tra cứu.
@@ -868,15 +922,27 @@ Nay hằng số được kiểm thật, ngay trong vòng lặp của `apply_webh
 **trước khi ghi ledger** — một khi `OrderPayment` đã vào thì tiền đã cộng và
 trạng thái đã bị suy lại từ tổng lũy kế, không lùi được nữa.
 
+Guard `ACCOUNT_MISMATCH` còn phải đứng **trước guard trạng thái này**. Một giao
+dịch sai account trỏ tới đơn `DEBT` là giao dịch bị từ chối hoàn toàn, không
+phải tiền đúng tài khoản đang chờ thu nợ; vì vậy tuyệt đối không được tạo
+`BANK_UNAPPLIED` cho nó.
+
 **Danh sách cho phép phải liệt kê ĐỦ**, không phải chỉ `PENDING`: webhook vốn xử
 lý đúng cả `UNRECONCILED` (chuyển thêm cho đơn thiếu), `CANCELLED` (tiền về sau
 khi hủy → LATE_PAYMENT) và `PAID` (chuyển trùng → OVERPAID). Liệt kê thiếu là
 chặn nhầm những đường đang chạy tốt — nguy hiểm ngang việc không chặn gì.
 
-Kiểm ở vòng lặp mà không kiểm lại sau khi lấy khóa ghi là **an toàn ở đây**:
-`DEBT` chỉ được đặt lúc tạo đơn, không có đường nào đẩy một đơn đang chạy vào
-`DEBT`. `CANCELLED` thì có race thật, nhưng nó nằm trong danh sách cho phép nên
-`_apply_bank_transaction` tự xử như cũ.
+**Không được quyết định nhánh DEBT từ Order đọc trước write lock.** Thu nợ thủ
+công có thể đổi `DEBT` thành `PAID` trong lúc webhook đang chờ. `debt_payment`
+và webhook phải xếp hàng trên cùng shop write lock; sau lock webhook phải
+`refresh(order)` rồi mới chọn `BANK_UNAPPLIED` hay `BANK_IN`. Nếu không, manual
+payment thắng trước nhưng webhook vẫn ghi một reminder unapplied có timestamp
+sau — trạng thái không tương đương bất kỳ thứ tự tuần tự hợp lệ nào.
+
+**Lock order của các luồng vừa đụng shop vừa đụng két là `shop → cash_shift`.**
+`create_order`, thu nợ tiền mặt và trả hàng phải giữ cùng thứ tự. Đảo thành
+`cash_shift → shop` tạo vòng chờ với webhook/luồng shop khi chuyển sang database
+có row lock thực sự.
 
 **Tiền về cho đơn nợ phải NHÌN THẤY ĐƯỢC.** Từ chối mà chỉ ghi `SystemLog` thì
 tiền về xong không ai biết để đi thu — đổi một lỗi mất tiền lấy một lỗi mất
@@ -890,14 +956,22 @@ thái, không gắn `shift_id`. Nó nằm ngoài `CASH_PAYMENT_IN_TYPES` /
 `CASH_PAYMENT_OUT_TYPES` của `shift_service` — hai danh sách đó liệt kê tường
 minh, nên thêm nhầm `"BANK_UNAPPLIED"` vào là tiền ảo vào két và thu ngân lệch ca.
 
-**Dùng CHUNG `_bank_idempotency_key` với bút toán thật.** Đây là chỗ dễ sai
+**Dùng CHUNG `_bank_idempotency_key` với bút toán thật, và raw fallback trong
+chính order cũng phải nhìn cả `BANK_IN` lẫn `BANK_UNAPPLIED`.** Đây là chỗ dễ sai
 nhất và hậu quả là tiền: khách chuyển 100k cho đơn nợ → ghi unapplied → người
 bán thu nợ tay, đơn thành `PAID` → ngân hàng gửi lại đúng giao dịch đó (chuyện
 bình thường) → `PAID` nằm trong `WEBHOOK_PAY_FROM` nên lần này giao dịch được
 xử lý THẬT. Khóa riêng thì nó không bị coi là trùng và đơn thành `OVERPAID` với
 100k chờ hoàn không có thật. Khóa chung thì lần gửi lại rơi vào nhánh trùng lặp
 và không đồng nào được cộng. `test_gui_lai_sau_khi_da_thu_no_KHONG_cong_tien_lan_hai`
-canh đúng chuyện này — đã kiểm bằng cách tạm đổi sang khóa riêng và nó đỏ.
+canh đúng chuyện này — đã kiểm bằng cách tạm đổi sang khóa riêng và nó đỏ. Chỉ
+kiểm key vẫn chưa đủ: provider/envelope/account metadata có thể đổi làm key hash
+đổi, nên cùng raw transaction được canonicalize (strip hai đầu) và fallback trong
+**đúng order hiện tại**; cùng order+amount mới là compatible duplicate, còn cùng
+order nhưng khác amount/event là collision audit-durable rồi 200/rejected. Raw ID
+không unique giữa provider/account/shop nên tuyệt đối không fallback toàn cục.
+Canonical key vẫn được tra toàn cục để cùng provider + account + event key không
+thể áp sang order khác. Account mismatch vẫn đứng trước fallback này.
 
 **Giao diện không được hiện nó như một khoản đã thu.** Màu hổ phách, KHÔNG có
 dấu `+`, kèm câu "chưa được cộng vào đơn". Hiện `+ 250.000` xanh lá cạnh các
@@ -1049,6 +1123,28 @@ KHÔNG khởi động. Máy bán gửi lại phiếu là chuyện bình thườn
 chừng, người dùng bấm đồng bộ lại); không có index đó thì mỗi lần gửi lại là
 một đơn mới, doanh thu và tồn kho cùng nhân đôi. `order_payments.idempotency_key`
 = `offline:<uuid>` là lớp chặn thứ hai cho hai request song song.
+
+Từ I09-B1, phiếu mới còn phải có đúng một dòng
+`offline_receipt_registry` + `offline_receipts` trong **cùng transaction** với
+Order/items/payment/tồn kho/giá vốn/audit. Server tự canonicalize sáu field v0
+(`shop_id`, UUID, giờ bán UTC, các dòng hàng, tiền khách đưa, nhãn máy) và lưu
+fingerprint `fsofr0:`; cùng UUID chỉ là retry khi fingerprint khớp, khác nội
+dung phải 409 trước mọi side effect. Giờ có offset phải đổi thật sang UTC rồi
+mới bỏ timezone, không dùng `replace(tzinfo=None)`. Registry/receipt lệch nhau
+thì fail-closed, không tự vá. Riêng order offline tạo trước I09-B1 không có hai
+bảng bằng chứng vẫn trả retry `created=false` để tương thích, nhưng tuyệt đối
+không dựng fingerprint từ payload gửi lại: lịch sử đó không đủ bằng chứng để
+chứng minh một payload khác hay giống.
+
+Từ I09-E, từng dòng v1 còn có đúng một snapshot trong
+`offline_receipt_items`. `claimed_product_id` ở đó là ID client đã ký, **không
+phải khóa ngoại sản phẩm đã xác minh**. Chỉ khi ID tồn tại và thuộc đúng shop
+thì `order_items.product_id` mới được điền; ID thiếu hoặc thuộc shop khác phải
+để NULL nhưng snapshot vẫn giữ nguyên tên/giá/số lượng/ID và đúng bội số dòng.
+Không được giữ claimed ID chưa xác minh trong `order_items.product_id`: return
+hoặc cancel tra theo ID đó có thể hoàn nhầm tồn kho sang shop khác. Mọi đường
+hoàn kho vẫn phải lọc `Product` theo cả `id` và `order.shop_id`, rồi 409 và
+rollback toàn transaction nếu provenance thiếu hoặc lệch scope.
 
 **Chưa làm:** phần máy bán (hàng chờ trong IndexedDB, khóa về tiền mặt khi mất
 mạng, tự đồng bộ khi có mạng lại). Backend đã sẵn sàng và đứng một mình được —
@@ -1539,6 +1635,323 @@ là đọc sai theo hướng ngược lại.
 RỖNG ở lần gọi đầu rồi mới nạp xong sau đó; kết luận ngay là dòng ghi chú khẳng
 định "máy chưa có giọng tiếng Việt" trên đúng cái máy đang có. Nói sai về máy
 của người dùng còn tệ hơn là không nói gì.
+
+### 41. Webhook ORDER phải xác thực TRƯỚC khi chạm vào body
+
+`Request.json()` đọc hết body rồi mới parse. Vì vậy đặt nó trước bước so secret
+không chỉ tốn CPU cho request giả: request sai secret vẫn có thể ép app giữ body
+lớn trong RAM, và nếu log object vừa parse thì còn ghi nguyên email/tên/note/số
+tài khoản vào file log. Kiểm secret fail-closed bằng `compare_secret()` phải
+đứng trước mọi `request.body()`/`request.json()`/`request.stream()` và trước mọi
+log webhook.
+
+Sau xác thực, `Content-Length` chỉ được dùng để **từ chối sớm**, không phải bằng
+chứng body nhỏ. Header có thể thiếu, sai hoặc nói nhỏ hơn thật; giới hạn bắt buộc
+phải đếm từng chunk từ ASGI stream và ném 413 ngay khi tổng vượt
+`ORDER_WEBHOOK_MAX_BODY_BYTES`, trước khi parse JSON hay gọi `order_service`.
+App chỉ bắt đầu đọc/đếm stream **sau khi secret hợp lệ**. Mức 256 KiB là default
+khởi đầu cho pilot, chưa phải kích thước đã được provider xác minh; phải đo
+payload thật và theo dõi số lượng HTTP 413 trước khi điều chỉnh. Không dùng
+`await request.body()` rồi mới kiểm `len()`: lúc đó body quá lớn đã nằm trọn
+trong RAM.
+
+Log nhận webhook chỉ chứa metadata số học đã chốt sẵn (hiện là số byte body).
+Không nối raw payload, header secret, account number hoặc các field tự do vào
+route/file log như `request_log.txt`. P0.2 không đổi contract structured
+financial audit hiện có: `SystemLog WEBHOOK_TRA_TRUNG` vẫn chứa transaction ID
+để tra soát. Muốn sanitize/correlation các financial audit identifier này cần
+một policy riêng và test migration/khả năng tra cứu riêng, ngoài lát cắt này.
+
+Giới hạn trên chỉ ở tầng ứng dụng. Chưa có bằng chứng proxy/edge production của
+Fly có body limit riêng; nếu cần hai lớp bảo vệ phải cấu hình và kiểm chứng edge
+độc lập.
+
+Webhook subscription đã kiểm secret trước parse từ trước; sửa ORDER không được
+đẩy nó lùi lại. Thứ tự router vẫn là `webhooks.router` trước `orders.router`.
+
+### 42. Offline lease là claim của session, không phải bằng chứng con người
+
+I09-D cấp `lease_id` public và raw token chỉ ở response issue/reclaim; database
+chỉ giữ SHA-256 lowercase. Token chỉ đi qua `X-Offline-Lease-Token`, và phép so
+luôn là `compare_secret(sha256(candidate), stored_digest)`. Heartbeat không kéo
+dài hạn. Reclaim trong 72 giờ grace chỉ cho `SYNC_ONLY`; revoke của owner/ADMIN
+không cần token và chặn mọi normal-v1 capability theo state server hiện tại.
+Reclaim chỉ rotate khi principal vẫn có exact membership, quyền SALE và Pro hiện
+tại; policy được kiểm lại dưới shop write lock trước CAS.
+
+Normal-v1 tương lai chỉ được gọi một seam attribution: JWT user phải chính là
+`lease.user_id`, membership/shop cùng khớp, device/session khớp tuyệt đối và
+token đúng. Seam còn revalidate quyền SALE và Pro hiện tại trong transaction
+caller; mất một trong hai trả 409 `OFFLINE_LEASE_RECOVERY_REQUIRED` để đi owner
+recovery, không tạo `LEASE_CLAIM`. Context khóa `created_by`, payment actor và
+shift owner về claimed seller; normal path không cho owner/ADMIN sync hộ. Đây
+chỉ là claim của session, không chứng minh người thật nào cầm máy bán từng
+phiếu. Heartbeat vẫn là phép đọc state không bị SALE/Pro gate; endpoint v0 giữ
+nguyên `LEGACY_UNKNOWN`, không fabricate lease và không bị Pro gate hồi tố.
+
+### 43. Trust boundary cho offline time contract I09-E+B2
+
+`performance.now()` chỉ chống chỉnh wall-clock vô ý ở app không bị sửa. Delta
+do client khai; server không xác minh được delta, cũng không xác minh được thời
+điểm con người bán. `sequence` chỉ giữ thứ tự tương đối, không xác minh giờ kế
+toán. Rào chắn thật là cửa sổ lease + revocation.
+
+### 44. File phục hồi offline có checksum nhưng KHÔNG có tính xác thực
+
+I09-G1 export một JSON canonical có version và SHA-256. Hash này chỉ phát hiện
+file hỏng vô ý; người sửa file có thể tính lại hash, nên import/resolve luôn phải
+xác thực JWT hiện tại và chỉ cho đúng owner hoặc ADMIN của shop. Server tự
+canonicalize, tự tính fingerprint/content digest và không dùng client hash,
+client fingerprint, tên sản phẩm hay giá vốn làm bằng chứng quyền hoặc provenance.
+
+Import chỉ giữ registry `ABANDONED`, content digest và audit, không giữ raw file.
+Resolve phải gửi lại đúng file đã import và `state_version`; dưới shop write lock,
+server tạo replacement receipt/fingerprint mới, CAS original thành `SUPERSEDED`
+rồi commit order/items/payment/inventory/cost/issues/recovery action/SystemLog
+trong cùng một transaction. Retry/lost response đọc durable winner; quyết định
+khác trên cùng original bị chặn. Contract v0 vẫn `LEGACY_UNKNOWN/LEGACY`; v1
+owner recovery giữ lease evidence có thật nhưng ghi `OWNER_RECOVERY/RECOVERED`.
+`TON_AM` exact không đi qua API này: chỉ stocktake dương FIFO + snapshot/CAS hiện
+hữu mới được giảm hoặc đóng evidence.
+
+Ba hàng rào correction của G1 cũng là invariant startup. Nếu đã có `Order` cùng
+UUID nhưng chưa có registry/receipt (legacy pre-registry), recovery không thể
+chứng minh file owner gửi lại có cùng nội dung nên phải fail-closed trước cả bước
+stage; không được tạo order thay thế. Với replacement v1 `ACCEPT_UNKNOWN`, claimed
+product inactive nhưng vẫn còn thuộc đúng shop phải được giữ ở
+`OrderItem.product_id` để khớp snapshot/verifier 0006, nhưng Product object không
+được đi vào đường trừ tồn/giá vốn. Claimed ID thiếu/deleted hoặc thuộc shop khác
+vẫn để business FK `NULL`.
+
+Riêng v0 normal-ingested đã có `INGESTED` + `SP_KHONG_CON OPEN`, owner resolve
+trực tiếp trên order hiện hữu, không cần import/file và không tạo doanh
+thu/payment mới. Intent được buộc vào fingerprint durable đã lưu; server không
+bịa lại claimed product ID đã không được snapshot ở contract v0.
+MAP áp phần inventory/cost còn thiếu đúng một lần; ACCEPT_UNKNOWN chỉ đóng issue
+với reason. Order-item, issue và registry đều CAS dưới shop write lock;
+`LEGACY_INGEST` action + SystemLog commit transaction-local. Retry/lost response
+đọc durable action, còn `TON_AM` exact vẫn không được click-clear qua đường này.
+
+### 45. I10-A: schema QR payment đã có, nhưng runtime vẫn DISABLED/OFF
+
+Revision tuyến tính `0007_i10a_qr_payment_domain` chỉ đặt nền domain cho QR bán
+hàng; nó **không** phát QR, không parse webhook, không tạo payment, không mở
+endpoint/UI/provider và không bật rollout. Trạng thái vận hành mặc định vẫn OFF;
+report-only/enforce, TTL/grace/cancel, provider/reference contract, retention và
+refund SLA chỉ được mở ở I10-B/C/D/R sau approval riêng.
+
+Ba bảng mới có vai trò tách biệt:
+
+- `qr_payment_intents`: đúng một intent v1 cho một đơn online `transfer` có
+  `total_vnd > 0`. Reference toàn cục, `expected_vnd`, bank code/account/name và
+  adapter profile là snapshot bất biến. `expected_vnd` luôn bằng tuyệt đối
+  `orders.total_vnd`; `display_expires_at`/`cancel_after` đều nullable và không
+  có default chính sách. QR chỉ là hướng dẫn chuyển tiền, không phải bằng chứng
+  `PAID`.
+- `bank_webhook_events`: inbox bền vững cho mọi evidence đã chuẩn hóa, kể cả
+  missing/truncated/multiple/unknown/collision. Bảng chỉ giữ account/direction/
+  integer VND/reference state, normalized SHA-256 và envelope SHA-256 lowercase;
+  tuyệt đối không có raw-body/payload column. Evidence tài chính bất biến;
+  direct terminal `UPDATE` luôn bị chặn. Chỉ một terminal reconciliation action
+  đã validate đủ audit/link/payment mới atomically chuyển `UNAPPLIED` tới
+  `APPLIED`, `REJECTED_NOT_OURS` hoặc `REFUNDED` với state version tăng đúng một;
+  lỗi transition rollback luôn cả action.
+- `bank_reconciliation_actions`: ledger append-only chỉ nhận `KEEP_OPEN`,
+  `MAP_AND_APPLY`, `REJECT_NOT_OURS`, `MARK_REFUNDED_EXTERNALLY`.
+  `MAP_AND_APPLY` là action duy nhất được gắn `OrderPayment`; hai action reject/
+  refunded không được có payment và bắt buộc note + `SystemLog`. Event chưa có
+  `shop_id` chỉ nhận action có actor snapshot `ADMIN`; owner/manager chỉ thao tác
+  event đã map đúng shop.
+
+Unique/composite FK/index/trigger giữ một intent mỗi order, reference toàn cục,
+provider-event idempotency, tenant scope order/payment/intent, lookup UNAPPLIED
+theo `(shop_id, received_at)` và tính bất biến của intent/evidence/action. Startup
+verifier dùng `index_xinfo` để kiểm cả key/aux, expression, collation, ASC/DESC,
+partial predicate và kiểm lại shape lẫn data mà không nhìn đồng hồ hiện tại.
+Guard parent-key/delete tự chứa giữ toàn bộ quan hệ 0007 ngay cả khi runtime để
+`PRAGMA foreign_keys=OFF`; row legacy không có child 0007 vẫn giữ hành vi cũ.
+Object bắt buộc phải đúng shape nhưng index/trigger/column do revision tuyến tính
+sau sở hữu vẫn được phép tồn tại.
+
+Revision **không backfill** intent/event/action từ `ORDER{id}`, account hiện tại
+của shop, `created_at`, order/payment cũ hay dữ liệu I09. Những dòng đó giữ
+contract v0; chỉ intent v1 mới đối chiếu snapshot bank bất biến. Truth table
+under/exact/over/late/no-resurrection, issuance/render, webhook application,
+reconciliation handler và account-change lock vẫn thuộc I10-B/C; POS/PWA/UI
+thuộc I10-D; provider traffic và rollout thật thuộc I10-R.
+
+### 46. I10-B: phát hành sales QR nguyên tử, render cùng origin và vẫn mặc định OFF
+
+`QR_SALES_MODE` chỉ nhận đúng `OFF` hoặc `REPORT_ONLY`; thiếu/sai giá trị đều
+fail-safe về `OFF`. Runtime cài sẵn luôn dùng disabled adapter, vì vậy chỉ đặt
+biến môi trường `REPORT_ONLY` cũng **không** phát intent, không render và không
+mở provider/network. I10-B chỉ có seam test tường minh với deterministic mock
+adapter; không có production adapter, lựa chọn provider hay production rollout.
+Ở `OFF`, response/order legacy v0 giữ nguyên hành vi cũ và không được backfill
+hay bịa intent.
+
+Trong seam `REPORT_ONLY`, chỉ đơn online `payment_method=transfer` với
+`total_vnd > 0` được phát đúng một intent v1. Đơn cash, debt, tổng 0, receipt
+offline và subscription tuyệt đối không đi vào đường này. `expected_vnd` là
+integer chính xác và bằng `Order.total_vnd`; reference `FS1-<32 HEX>` không chứa
+secret, sinh đúng một lần cho candidate và bất biến sau commit. Tối đa 5
+candidate; chỉ unique collision của canonical reference được rollback bằng
+nested savepoint rồi thử candidate kế, còn mọi lỗi intent khác fail đóng với mã
+lỗi ổn định.
+
+Biên transaction là biên tạo order hiện hữu: lấy shop write lock, refresh shop
+dưới lock để chụp đồng bộ `bank_code/account_no/account_name`, rồi ghi order,
+items, inventory/cost, voucher/loyalty, intent và đúng một SystemLog phát hành
+trước **một commit duy nhất**. Audit transaction-local có action kỹ thuật
+`QR_PAYMENT_INTENT_ISSUED`; details JSON chỉ giữ entity, intent/order/shop ID,
+contract version và trạng thái `ISSUED`, không giữ account/reference/
+operation_id/request/bytes/provider/token/URL. Không có intermediate commit.
+Lỗi intent, audit flush hoặc commit rollback toàn bộ. Retry/lost response cùng
+`operation_id` đọc winner durable sau cùng shop lock, trả lại đúng order +
+intent + reference cũ và không chạy lại tồn kho/doanh thu hay ghi audit lần
+hai. I10-C đặt policy chặn thay account trong `shop_service` dưới chính hàng
+rào serialization này; issuer không lặp policy và chỉ chụp snapshot sau lock.
+
+Render nằm hoàn toàn sau transaction tiền và chỉ đọc intent đã tồn tại; fetch
+không thể issue/regenerate intent, đổi trạng thái order/payment hay được coi là
+bằng chứng `PAID`. Adapter contract nhỏ chỉ nhận instruction đã chuẩn hóa và trả
+`bytes + media_type`, không trả remote URL. I10-B allowlist duy nhất `image/png`,
+cap 512 KiB; byte rỗng/sai kiểu/quá cap/media lạ đều thành lỗi đã lọc, không ghi
+raw payload, URL hay QR bytes vào DB/log/local storage. Retry render cùng mock
+instruction cho đúng bytes; render failure sau commit không rollback hoặc tạo
+lại order/intent.
+
+Hai endpoint xác thực cùng origin là `GET /api/orders/{order_id}/qr` (metadata
+đã lọc) và `GET /api/orders/{order_id}/qr/render` (bytes). Scope shop được áp
+trước kiểm quyền SALE: owner/cashier/manager/ADMIN hợp lệ được đọc, WAREHOUSE
+cùng shop nhận 403, còn order ngoài scope và ID không có cùng một 404 để không
+lộ existence. Token chỉ qua Authorization convention hiện hữu, không nhận
+query/cookie. Mọi response API là `Cache-Control: no-store`; render, kể cả lỗi,
+có `X-Content-Type-Options: nosniff`. Metadata chỉ có reference, exact amount,
+bank display snapshot, issued time, cờ instruction-only và capability/render
+path tương đối; không có adapter profile/provider/raw payload/secret/external
+URL. UI/PWA blob/object-URL thuộc I10-D; webhook/reconciliation và account-change
+blocking thuộc I10-C; provider/reference negotiation, TTL/grace/auto-cancel,
+enforce/retention/refund SLA và rollout thật thuộc I10-R.
+
+### 47. I10-C: durable webhook inbox, reconciliation CAS và hàng rào đổi tài khoản
+
+I10-C dùng ba bảng bất biến đã phát hành ở migration `0007`; lát cắt này không
+thêm migration và không sửa DDL/trigger/checksum. `bank_webhook_events` là nguồn
+sự thật của bằng chứng tài chính đã chuẩn hóa. QR/reference/account snapshot chỉ
+là hướng dẫn thanh toán bất biến, không phải bằng chứng tiền về. Ingestion không
+tạo `OrderPayment`, không đổi trạng thái order và mọi evidence parse được đều
+bắt đầu `UNAPPLIED`, `state_version=0`, `payment_id=NULL`.
+
+`QR_WEBHOOK_MODE` chỉ nhận `OFF`/`REPORT_ONLY`, mặc định `OFF`. Runtime cài sẵn
+luôn là disabled adapter; kể cả environment đặt `REPORT_ONLY` cũng không thể bật
+endpoint. Seam test tường minh mới cài deterministic local mock adapter dùng
+HMAC do test truyền trực tiếp. Không có SDK/URL/HTTP client/provider adapter,
+secret loading hay traffic mạng. Endpoint `POST /api/qr-payments/webhook` từ
+chối trước khi đọc body khi runtime disabled; với mock, nó đọc raw ASGI headers
+để loại duplicate content-type/token/signature/content-length không phụ thuộc
+thứ tự/casing, loại mọi `Transfer-Encoding`, chỉ nhận đúng một
+`application/json` không parameter và `Content-Length` decimal canonical nằm
+trong cap. Sau đó nó đếm từng chunk với cap 64 KiB, đối chiếu declared/actual
+length và biến mọi stream exception thành lỗi ổn định không phản chiếu dữ liệu.
+JSON container nesting bị chặn ở độ sâu 32 trước khi dựng object tree.
+Raw bytes chỉ tồn tại tạm để HMAC và tính `envelope_sha256`; raw body, signature,
+token, account/reference/payload và secret không được ghi DB/file/log hay echo.
+
+Adapter output là type đóng và bounded: provider cố định theo adapter, identifier
+theo allowlist, direction chỉ `IN/OUT/UNKNOWN`, timestamp input phải timezone-aware
+rồi canonical UTC, và VND chỉ nhận đúng Python integer trong miền 0007 (bool,
+float và string-coercion bị loại). JSON duplicate key/extra key/sai shape bị loại
+trước DB write. Reference được phân lớp `EXACT/MISSING/TRUNCATED/MULTIPLE/INVALID`;
+chỉ `EXACT` được map theo canonical reference duy nhất. Digest normalized là SHA-256
+của canonical JSON sort-key/compact nên độc lập key order/format; envelope digest
+là SHA-256 của đúng transient bytes. Server tự sinh idempotency key 64-hex từ
+provider identity + hai digest. Exact replay trả đúng row cũ, không ghi/audit lần
+hai; inbox writer fence cho một winner khi concurrent. Cùng provider event ID mà
+normalized/envelope evidence khác được giữ thành row collision riêng với
+`PROVIDER_EVENT_COLLISION`; row gốc không bị ghi đè và mọi MAP liên quan collision
+đều bị chặn. Collision được nhận diện từ provider identity **trước** mọi reference
+lookup và luôn persist với `intent_id/order_id/shop_id=NULL`: kể cả exact reference
+tới shop khác cũng không thể cấp scope, visibility hay action cho tenant đó. Nếu
+driver báo lỗi sau lúc commit có thể đã thành công, request
+session được rollback/reset an toàn và một session đọc sạch chỉ trả winner khớp
+đúng provider/idempotency/hai digest cùng toàn bộ normalized fields; không có
+winner thì trả persistence error, còn collision không bao giờ bị nhầm thành
+exact replay của row gốc.
+
+Truth table report-only là bảo thủ:
+
+| Evidence | Mapping/reason | Ingestion effect |
+|---|---|---|
+| exact reference + account + `IN` + exact positive amount + order PENDING | `READY_TO_MAP`, link intent/order/shop | vẫn `UNAPPLIED` |
+| under/over/zero/missing amount | `AMOUNT_*` | giữ evidence, không payment |
+| account missing/mismatch | `ACCOUNT_*` | giữ mapped evidence, không MAP |
+| outbound/unknown direction | `DIRECTION_*` | giữ mapped evidence, không MAP |
+| missing/truncated/multiple/invalid/unknown reference | `REFERENCE_*`, không đoán scope | admin-only nếu unscoped |
+| provider collision | `PROVIDER_EVENT_COLLISION`, luôn unscoped/admin-only | giữ evidence, không MAP |
+| already paid or duplicate money | payment conflict | giữ evidence, không MAP |
+| late/non-PENDING/final-cancelled | order reason ổn định | không hồi sinh/hủy order |
+
+Một underpayment còn `UNAPPLIED` làm metadata QR hiện hữu chuyển sang trạng thái
+`hidden`, bỏ account/reference và khóa render; không sinh remainder/full replacement
+QR. Job auto-cancel legacy bỏ qua mọi order có intent v1 dù operator bật timeout:
+I10-C không có TTL/grace/auto-cancel/enforce.
+
+Read surface gồm `GET /api/qr-reconciliation/events` (chỉ UNAPPLIED, SQL
+`limit+1/offset` bounded, thứ tự `received_at,id`) và
+`GET /api/qr-reconciliation/events/{id}`. DTO chỉ có ID, disposition/reason,
+integer amount, direction/reference-state, timestamps, state version và mapped
+intent/order/shop IDs; không trả account/reference value, digest, provider hay
+provider event identity. ADMIN thấy cả unscoped; owner và MANAGER chỉ thấy event
+đã map vào shop được phép. CASHIER/WAREHOUSE bị 403; unknown/cross-shop dùng cùng
+404 no-existence-leak. Event/target-intent ID phải là integer dương không vượt
+SQLite signed-int64 `9_223_372_036_854_775_807`; state version riêng dùng miền
+`0..1_000_000_000` đúng migration 0007. Path phải là decimal canonical; body ID
+phải là strict integer. Bool, JSON string/float/null, zero và số quá lớn bị chặn
+ở validation boundary, không đi tới SQLite binder. Mọi API response giữ
+`Cache-Control: no-store`.
+
+`POST /api/qr-reconciliation/events/{id}/actions` nhận strict
+`expected_state_version` và đúng một action allowlist. `KEEP_OPEN` ghi action/audit
+nhưng không đổi event. `REJECT_NOT_OURS` và `MARK_REFUNDED_EXTERNALLY` cần note
+trimmed, bounded, không Unicode control/format/line separator, secret hay evidence
+value. So sánh redaction dùng NFKC + identifier-character fold chỉ để phát hiện
+account/reference/provider identity bị chèn whitespace/punctuation; note được
+lưu nguyên văn, không lưu bản transform, và identifier quá ngắn không dùng để
+match mơ hồ. Hai action này không tạo payment. `MAP_AND_APPLY` là đường duy nhất tạo đúng một ledger `BANK_IN`, sau khi
+re-read dưới shop lock và kiểm lại exact canonical reference, account snapshot,
+direction IN, integer amount bằng `expected_vnd`, v1 scope duy nhất, order PENDING,
+không collision/payment/applied evidence. Nó dùng transition PENDING→PAID và
+loyalty-on-first-paid hiện hữu; không chạy lại inventory, cost, voucher hay tạo
+doanh thu lần hai.
+
+Payment (nếu MAP), order transition, minimal `BANK_RECONCILIATION` SystemLog và
+append-only `BankReconciliationAction` nằm trong một outer transaction/một commit;
+action insert là lệnh duy nhất để trigger chuyển event terminal. Bất kỳ lỗi
+payment/audit/action/trigger/flush/commit đều rollback toàn bộ và giữ evidence
+UNAPPLIED. CAS cho đúng một terminal winner; retry cùng actor/action/version/note/
+mapping trả winner durable, quyết định khác trả conflict kèm current version bounded.
+Sau `KEEP_OPEN`, terminal action dùng durable audit timestamp của KEEP để thỏa đúng
+quan hệ timestamp/verifier bất biến của 0007 mà không sửa migration.
+
+Khi `PUT /api/shops/{id}` thật sự đổi một trong ba bank fields, service dùng đúng
+shop write lock chung với issuance, ingestion mapping và reconciliation, refresh
+rồi kiểm ngay trước update/commit. Mỗi intent v1 phải có ít nhất một evidence
+terminal và mọi event mapped liên quan phải thuộc `APPLIED/REJECTED_NOT_OURS/
+REFUNDED`; intent không evidence hoặc chỉ UNAPPLIED đều chặn fail-closed. Edit
+không đổi bank fields không bị ảnh hưởng; `OFF` không miễn evidence đã tồn tại.
+Collision unscoped không được gán tenant từ reference không tin cậy. Account
+fence chỉ lấy cặp durable `(provider, provider_event_id)` từ một **non-collision
+root event đã map** vào intent/order v1 của shop; sau đó mọi row cùng lineage phải
+terminal trước khi đổi bank fields. Collision/unknown root unscoped tự nó không
+tạo shop seed, exact reference khác shop không chặn shop đó, và provenance này
+không cấp quyền đọc/action cho owner/manager.
+Hai ordering update-vs-issuance và update-vs-terminal action được kiểm bằng
+barrier/event, không sleep, nên không có khe TOCTOU. Snapshot cũ luôn bất biến.
+
+I10-D vẫn sở hữu POS/PWA/UI/service-worker/object-URL. I10-R vẫn sở hữu provider
+contract/credential/traffic production, retention deletion, TTL/grace/enforce,
+refund SLA và rollout; I10-C không mở các capability đó.
 
 ## Phiên bản dependency
 

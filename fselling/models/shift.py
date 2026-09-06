@@ -8,7 +8,7 @@ thủ công để tránh đếm hai lần.
 import datetime
 
 from sqlalchemy import CheckConstraint, Column, DateTime, Float, ForeignKey, Index, Integer, String, text
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, validates
 
 from ..core.database import Base
 
@@ -40,14 +40,18 @@ class CashShift(Base):
     id = Column(Integer, primary_key=True)
     shop_id = Column(Integer, ForeignKey("shops.id"), nullable=False)
     status = Column(String(16), nullable=False, default="OPEN")
-    opening_cash_amount = Column(Float, nullable=False, default=0)
+    legacy_opening_cash_amount = Column("opening_cash_amount", Float, nullable=False, default=0)
+    opening_cash_amount = Column("opening_cash_vnd", Integer, nullable=False, default=0)
     opening_note = Column(String(500), nullable=True)
     opened_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     opened_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
 
-    counted_cash_amount = Column(Float, nullable=True)
-    expected_cash_amount = Column(Float, nullable=True)
-    variance_amount = Column(Float, nullable=True)
+    legacy_counted_cash_amount = Column("counted_cash_amount", Float, nullable=True)
+    counted_cash_amount = Column("counted_cash_vnd", Integer, nullable=True)
+    legacy_expected_cash_amount = Column("expected_cash_amount", Float, nullable=True)
+    expected_cash_amount = Column("expected_cash_vnd", Integer, nullable=True)
+    legacy_variance_amount = Column("variance_amount", Float, nullable=True)
+    variance_amount = Column("variance_vnd", Integer, nullable=True)
     closing_note = Column(String(500), nullable=True)
     closed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     closed_at = Column(DateTime, nullable=True)
@@ -58,6 +62,16 @@ class CashShift(Base):
     movements = relationship("CashMovement", back_populates="shift")
     orders = relationship("Order", back_populates="shift")
     order_payments = relationship("OrderPayment", back_populates="shift")
+
+    @validates(
+        "opening_cash_amount",
+        "counted_cash_amount",
+        "expected_cash_amount",
+        "variance_amount",
+    )
+    def _mirror_money_hints(self, key, value):
+        setattr(self, f"legacy_{key}", value)
+        return value
 
 
 class CashMovement(Base):
@@ -86,7 +100,8 @@ class CashMovement(Base):
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
     movement_type = Column(String(24), nullable=False)  # PAY_IN | PAY_OUT
     direction = Column(String(8), nullable=False)  # IN | OUT
-    amount = Column(Float, nullable=False)
+    legacy_amount = Column("amount", Float, nullable=False)
+    amount = Column("amount_vnd", Integer, nullable=False)
     operation_id = Column(String(128), nullable=False)
     note = Column(String(500), nullable=False)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
@@ -95,3 +110,8 @@ class CashMovement(Base):
     shift = relationship("CashShift", back_populates="movements")
     order = relationship("Order")
     created_by = relationship("User")
+
+    @validates("amount")
+    def _mirror_amount_hint(self, _key, value):
+        self.legacy_amount = value
+        return value

@@ -1,4 +1,5 @@
 import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -35,14 +36,23 @@ class Product(Base):
     # duy nhất trong phạm vi một shop (unique index ix_products_shop_barcode).
     barcode = Column(String(64), index=True, nullable=True)
     name = Column(String, index=True)
-    price = Column(Float)
+    # I05 canonical money.  The released FLOAT column remains as migration
+    # evidence only and is never read by production business logic.
+    legacy_price = Column("price", Float)
+    price = Column("price_vnd", Integer, nullable=False, default=0)
     # Giá vốn bình quân gia quyền, cập nhật mỗi lần nhập kho có kèm đơn giá.
     # NULL = chưa khai bao giờ, KHÁC HẲN 0 = hàng được tặng. Báo cáo lãi gộp
     # phải loại NULL ra và đếm riêng, không được quy về 0.
-    cost_price = Column(Float, nullable=True)
+    legacy_cost_price = Column("cost_price", Float, nullable=True)
     stock = Column(Integer, default=0)
+    cost_known_qty = Column(Integer, nullable=False, default=0)
+    cost_unknown_qty = Column(Integer, nullable=False, default=0)
+    cost_basis_vnd = Column(Integer, nullable=False, default=0)
+    cost_deficit_qty = Column(Integer, nullable=False, default=0)
+    cost_state_version = Column(Integer, nullable=False, default=0)
     image_url = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
+    fnb_station = Column(String(16), nullable=False, default="DIRECT")
     category_id = Column(Integer, ForeignKey("categories.id"))
     shop_id = Column(Integer, ForeignKey("shops.id"))
 
@@ -67,6 +77,14 @@ class Product(Base):
     category = relationship("Category", back_populates="products")
     shop = relationship("Shop", back_populates="products")
     batches = relationship("ProductBatch", back_populates="product")
+
+    @property
+    def cost_price(self):
+        """Compatibility display ratio derived only from the canonical pool."""
+        known = int(self.cost_known_qty or 0)
+        if known <= 0 or int(self.cost_unknown_qty or 0) > 0:
+            return None
+        return Decimal(int(self.cost_basis_vnd or 0)) / Decimal(known)
 
 
 class ProductBatch(Base):
@@ -97,11 +115,23 @@ class ProductBatch(Base):
     expiry_date = Column(String(10), nullable=True)
     quantity = Column(Integer, nullable=False, default=0)
     # Giá nhập của riêng lô này. Bán lô nào thì lãi tính theo giá lô đó.
-    cost_price = Column(Float, nullable=True)
+    legacy_cost_price = Column("cost_price", Float, nullable=True)
+    cost_known_qty = Column(Integer, nullable=False, default=0)
+    cost_unknown_qty = Column(Integer, nullable=False, default=0)
+    cost_basis_vnd = Column(Integer, nullable=False, default=0)
+    cost_deficit_qty = Column(Integer, nullable=False, default=0)
+    cost_state_version = Column(Integer, nullable=False, default=0)
     note = Column(String(200), nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     product = relationship("Product", back_populates="batches")
+
+    @property
+    def cost_price(self):
+        known = int(self.cost_known_qty or 0)
+        if known <= 0 or int(self.cost_unknown_qty or 0) > 0:
+            return None
+        return Decimal(int(self.cost_basis_vnd or 0)) / Decimal(known)
 
 
 class StockWriteOff(Base):
@@ -161,7 +191,17 @@ class StockWriteOffItem(Base):
     batch_id = Column(Integer, ForeignKey("product_batches.id"), nullable=True)
     expiry_date = Column(String(10), nullable=True)
     quantity = Column(Integer, nullable=False)
-    cost_price = Column(Float, nullable=True)
+    legacy_cost_price = Column("cost_price", Float, nullable=True)
+    cost_known_qty = Column(Integer, nullable=False, default=0)
+    cost_unknown_qty = Column(Integer, nullable=False, default=0)
+    cost_basis_vnd = Column(Integer, nullable=False, default=0)
+
+    @property
+    def cost_price(self):
+        known = int(self.cost_known_qty or 0)
+        if known <= 0 or int(self.cost_unknown_qty or 0) > 0:
+            return None
+        return Decimal(int(self.cost_basis_vnd)) / Decimal(known)
 
     write_off = relationship("StockWriteOff", back_populates="items")
 
@@ -172,9 +212,19 @@ class Voucher(Base):
     code = Column(String, index=True)
     shop_id = Column(Integer, ForeignKey("shops.id"))
     discount_type = Column(String)  # 'percentage' hoặc 'flat'
-    discount_value = Column(Float)
-    min_order_value = Column(Float, default=0)
-    max_discount = Column(Float, default=0)  # Cho percentage
+    legacy_discount_value = Column("discount_value", Float)
+    discount_value_vnd = Column(Integer, nullable=True)
+    discount_bps = Column(Integer, nullable=True)
+    legacy_min_order_value = Column("min_order_value", Float, default=0)
+    min_order_value = Column("min_order_vnd", Integer, nullable=False, default=0)
+    legacy_max_discount = Column("max_discount", Float, default=0)
+    max_discount = Column("max_discount_vnd", Integer, nullable=False, default=0)
     usage_limit = Column(Integer, default=-1)  # -1 là ko giới hạn
     usage_count = Column(Integer, default=0)
     expires_at = Column(String, nullable=True)  # YYYY-MM-DD
+
+    @property
+    def discount_value(self):
+        if self.discount_type == "percentage":
+            return Decimal(int(self.discount_bps or 0)) / Decimal(100)
+        return int(self.discount_value_vnd or 0)

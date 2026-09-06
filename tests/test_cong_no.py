@@ -16,6 +16,7 @@ from conftest import _unique, auth, new_seller, new_staff, seller_with_shop
 
 from fselling import models
 from fselling.core.database import SessionLocal
+from fselling.core.numeric_limits import MAX_SAFE_VND
 from fselling.routers import webhooks
 from fselling.services import maintenance_service
 
@@ -269,6 +270,60 @@ def test_han_muc_am_bi_tu_choi(client):
     )
     assert res.status_code == 400
 
+    kh = _tao_khach(client, ctx)
+    updated = client.put(
+        f"/api/customers/member/{kh['id']}",
+        json={"name": kh["name"], "phone": kh["phone"], "credit_limit": -1},
+        headers=auth(ctx["token"]),
+    )
+    assert updated.status_code == 400
+
+
+@pytest.mark.parametrize("value", [100_000.5, True, "1e5", MAX_SAFE_VND + 1])
+def test_customer_and_debt_payment_reject_noncanonical_vnd_at_boundary(client, value):
+    """Business 400 remains distinct from malformed/excessive VND input (422)."""
+    ctx = seller_with_shop(client)
+    create = client.post(
+        f"/api/customers/{ctx['shop_id']}",
+        json={"name": _unique("Khach"), "phone": _unique("09")[:15], "credit_limit": value},
+        headers=auth(ctx["token"]),
+    )
+    assert create.status_code == 422, create.text
+
+    kh = _tao_khach(client, ctx)
+    update = client.put(
+        f"/api/customers/member/{kh['id']}",
+        json={"name": kh["name"], "phone": kh["phone"], "credit_limit": value},
+        headers=auth(ctx["token"]),
+    )
+    assert update.status_code == 422, update.text
+
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+    payment = _thu_no(client, ctx, order_id, value)
+    assert payment.status_code == 422, payment.text
+    assert _don(order_id).status == "DEBT"
+    assert _but_toan(order_id) == []
+
+
+@pytest.mark.parametrize("value", [100_000.0, "100000", "100000.0"])
+def test_customer_and_debt_payment_accept_exact_integer_compatibility(client, value):
+    ctx = seller_with_shop(client)
+    kh = _tao_khach(client, ctx, han_muc=value)
+    assert kh["credit_limit"] == 100_000
+
+    updated = client.put(
+        f"/api/customers/member/{kh['id']}",
+        json={"name": kh["name"], "phone": kh["phone"], "credit_limit": value},
+        headers=auth(ctx["token"]),
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["credit_limit"] == 100_000
+
+    order_id = _ban_no(client, ctx, kh["id"]).json()["order_id"]
+    payment = _thu_no(client, ctx, order_id, value)
+    assert payment.status_code == 200, payment.text
+    assert _don(order_id).status == "PAID"
+
 
 # ---------- Thu nợ ----------
 def test_tra_dan_nhieu_lan_du_tien_thi_thanh_paid(client):
@@ -327,6 +382,8 @@ def test_thu_so_tien_khong_duong_bi_tu_choi(client):
 
     assert _thu_no(client, ctx, order_id, 0).status_code == 400
     assert _thu_no(client, ctx, order_id, -5000).status_code == 400
+    assert _don(order_id).status == "DEBT"
+    assert _but_toan(order_id) == []
 
 
 def test_don_da_tra_het_thi_khong_thu_them(client):

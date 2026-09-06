@@ -2,7 +2,8 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    height: 100vh;
+    min-height: 100vh;
+    padding: 5rem 1rem 2rem;
 }
 
 .login-box {
@@ -20,4 +21,129 @@ input{
     height: 4em;
     width: auto;
     margin-bottom: 1em;
+}
+
+.auth-trial-note {
+    margin: -1rem 0 1.5rem;
+    padding: 0.65rem 0.85rem;
+    border-radius: 0.65rem;
+    color: #087f5b;
+    background: #e8f6f0;
+    font-size: 0.9rem;
+    font-weight: 700;
+    text-align: center;
+}
+
+.auth-landing {
+    width: min(74rem, 100%);
+    min-height: 100vh;
+    margin: 0 auto;
+    padding: 2rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(22rem, 0.9fr);
+    gap: clamp(2rem, 6vw, 5rem);
+    align-items: center;
+}
+
+.auth-landing .login-container {
+    min-height: auto;
+    padding: 4.5rem 0 2rem;
+}
+
+.landing-copy {
+    max-width: 38rem;
+}
+
+.landing-eyebrow {
+    margin: 0 0 0.75rem;
+    color: var(--primary);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 0.78rem;
+}
+
+.landing-copy h1 {
+    margin: 0;
+    color: var(--text-main);
+    font-size: clamp(2.25rem, 5vw, 4rem);
+    line-height: 1.05;
+    letter-spacing: -0.045em;
+}
+
+.landing-body {
+    margin: 1.25rem 0 1.75rem;
+    color: var(--text-muted);
+    font-size: 1.05rem;
+    line-height: 1.7;
+}
+
+.landing-steps {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 0.85rem;
+}
+
+.landing-step {
+    display: grid;
+    grid-template-columns: 2.25rem 1fr;
+    gap: 0.85rem;
+    align-items: start;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.85rem;
+    background: color-mix(in srgb, var(--card-bg) 86%, transparent);
+}
+
+.landing-step > span {
+    width: 2.25rem;
+    height: 2.25rem;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--primary);
+    color: white;
+    font-weight: 700;
+}
+
+.landing-step strong,
+.landing-step small {
+    display: block;
+}
+
+.landing-step small {
+    margin-top: 0.2rem;
+    color: var(--text-muted);
+    line-height: 1.45;
+}
+
+.landing-trust {
+    margin: 1.25rem 0 0;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+@media (max-width: 900px) {
+    .auth-landing {
+        grid-template-columns: 1fr;
+        gap: 1.25rem;
+        padding: 1rem;
+    }
+
+    .auth-landing .login-container {
+        min-height: auto;
+        padding: 1rem 0 2rem;
+        order: 2;
+    }
+
+    .landing-copy {
+        order: 1;
+        padding: 5rem 0 1rem;
+    }
+
+    .landing-copy h1 {
+        font-size: clamp(2rem, 11vw, 3rem);
+    }
 }

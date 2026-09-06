@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..core import thoi_gian
 from ..core.i18n import tr
+from ..core.money import ExactMoneyError, exact_vnd, percentage_to_bps, round_percentage_vnd
 from ..dependencies import (
     PERMISSION_SALE,
     PERMISSION_VOUCHER,
@@ -58,17 +59,29 @@ def _validate(v: VoucherCreate) -> str:
         )
     if v.min_order_value < 0:
         raise HTTPException(status_code=400, detail=tr("Đơn tối thiểu không được âm"))
+    if v.max_discount < 0:
+        raise HTTPException(status_code=400, detail=tr("Mức giảm tối đa không được âm"))
+    try:
+        if v.discount_type == "percentage":
+            percentage_to_bps(v.discount_value)
+        elif v.discount_type == "flat":
+            exact_vnd(v.discount_value)
+    except ExactMoneyError:
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Giá trị voucher phải biểu diễn chính xác bằng VND hoặc basis points"),
+        )
     return code_stripped
 
 
-def compute_discount(voucher: models.Voucher, subtotal: float) -> float:
+def compute_discount(voucher: models.Voucher, subtotal: int) -> int:
     """Số tiền giảm. max_discount chỉ áp dụng cho loại 'percentage'."""
     if voucher.discount_type == "percentage":
-        calc = subtotal * (voucher.discount_value / 100)
+        calc = round_percentage_vnd(int(subtotal), int(voucher.discount_bps or 0))
         if voucher.max_discount and voucher.max_discount > 0 and calc > voucher.max_discount:
-            calc = voucher.max_discount
+            calc = int(voucher.max_discount)
         return calc
-    return voucher.discount_value
+    return min(int(voucher.discount_value_vnd or 0), int(subtotal))
 
 
 def create_voucher(
@@ -89,13 +102,22 @@ def create_voucher(
             detail=tr("Mã voucher này đã tồn tại trong cửa hàng"),
         )
 
+    discount_bps = (
+        percentage_to_bps(v.discount_value)
+        if v.discount_type == "percentage"
+        else None
+    )
+    discount_value_vnd = (
+        exact_vnd(v.discount_value) if v.discount_type == "flat" else None
+    )
     db_v = models.Voucher(
         code=code_stripped,
         shop_id=shop_id,
         discount_type=v.discount_type,
-        discount_value=v.discount_value,
-        min_order_value=v.min_order_value,
-        max_discount=0,
+        discount_bps=discount_bps,
+        discount_value_vnd=discount_value_vnd,
+        min_order_value=int(v.min_order_value),
+        max_discount=int(v.max_discount),
         usage_limit=v.usage_limit,
         expires_at=v.expires_at,
     )
@@ -147,9 +169,16 @@ def update_voucher(
 
     db_v.code = code_stripped
     db_v.discount_type = v.discount_type
-    db_v.discount_value = v.discount_value
-    db_v.min_order_value = v.min_order_value
-    db_v.max_discount = 0
+    db_v.discount_bps = (
+        percentage_to_bps(v.discount_value)
+        if v.discount_type == "percentage"
+        else None
+    )
+    db_v.discount_value_vnd = (
+        exact_vnd(v.discount_value) if v.discount_type == "flat" else None
+    )
+    db_v.min_order_value = int(v.min_order_value)
+    db_v.max_discount = int(v.max_discount)
     db_v.usage_limit = v.usage_limit
     db_v.expires_at = v.expires_at
     db.commit()
@@ -197,9 +226,9 @@ def list_vouchers(
 
 
 def apply_voucher(
-    db: Session, current_user: models.User, shop_id: int, subtotal: float,
+    db: Session, current_user: models.User, shop_id: int, subtotal: int,
     voucher_code: str
-) -> Dict[str, float]:
+) -> Dict[str, int]:
     """Thử áp một mã voucher lên tạm tính, trả về số tiền giảm.
 
     Quyền là `PERMISSION_SALE` chứ KHÔNG phải `PERMISSION_VOUCHER`: đây là thao
@@ -252,7 +281,7 @@ _RELEASE_USAGE = text(
 
 
 def release_usage(
-    db: Session, shop_id: int, voucher_code: Optional[str], discount_amount: Optional[float]
+    db: Session, shop_id: int, voucher_code: Optional[str], discount_amount: Optional[int]
 ) -> bool:
     """Trả lại 1 lượt dùng voucher khi đơn bị hủy.
 
@@ -273,24 +302,24 @@ def release_usage(
 
 
 def resolve_for_order(
-    db: Session, shop_id: int, voucher_code: Optional[str], subtotal: float
+    db: Session, shop_id: int, voucher_code: Optional[str], subtotal: int
 ):
     """Dùng khi tạo đơn: trả (voucher, discount_amount).
     Voucher không hợp lệ -> bỏ qua giảm giá (giữ nguyên hành vi cũ, không báo lỗi)."""
     if not voucher_code:
-        return None, 0.0
+        return None, 0
     voucher = (
         db.query(models.Voucher)
         .filter(models.Voucher.code == voucher_code, models.Voucher.shop_id == shop_id)
         .first()
     )
     if not voucher:
-        return None, 0.0
+        return None, 0
     if voucher.min_order_value > subtotal:
-        return None, 0.0
+        return None, 0
     if is_usage_exhausted(voucher):
-        return None, 0.0
+        return None, 0
     # BEHAVIOR FIX: chặn voucher hết hạn khi tạo đơn.
     if is_expired(voucher):
-        return None, 0.0
+        return None, 0
     return voucher, compute_discount(voucher, subtotal)

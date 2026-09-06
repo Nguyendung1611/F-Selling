@@ -56,6 +56,19 @@ BASELINE_ROUTES = {
 # Route được thêm CÓ CHỦ Ý sau bản refactor. Mọi route /api không nằm trong
 # BASELINE_ROUTES hoặc danh sách này đều bị coi là thêm ngoài ý muốn.
 ROUTES_BO_SUNG = {
+    ("GET", "/api/health/ready"),  # I04: readiness chỉ GO sau schema verify
+    # Lịch sử đơn R1: read model tối thiểu cho POS, vẫn khóa theo shop và SALE.
+    ("GET", "/api/orders/{shop_id}/history"),
+    # I10-B: metadata đã lọc và ảnh QR được render cùng origin từ intent v1
+    # đã tồn tại. Hai route này không phát hành/tái tạo intent và không nhận
+    # token qua query string.
+    ("GET", "/api/orders/{order_id}/qr"),
+    ("GET", "/api/orders/{order_id}/qr/render"),
+    # I10-C: durable normalized inbox plus scoped, explicit reconciliation.
+    ("POST", "/api/qr-payments/webhook"),
+    ("GET", "/api/qr-reconciliation/events"),
+    ("GET", "/api/qr-reconciliation/events/{event_id}"),
+    ("POST", "/api/qr-reconciliation/events/{event_id}/actions"),
     ("POST", "/api/orders/{order_id}/cancel"),  # A1d: hủy đơn + hoàn tồn kho
     ("GET", "/api/orders/{order_id}/detail"),   # B3: xem chi tiết đơn kèm dòng hàng
     ("PUT", "/api/products/{product_id}"),      # behavior fix: sửa sản phẩm từ Kho hàng
@@ -73,6 +86,11 @@ ROUTES_BO_SUNG = {
     ("DELETE", "/api/customers/member/{customer_id}"),  # C2b: xóa khách
     ("GET", "/api/customers/member/{customer_id}/history"),  # C2c: lịch sử mua
     ("GET", "/api/products/{shop_id}/barcode/{barcode}"),  # B1a: tra SP theo mã vạch
+    # Product Import R1: owner-only, preview-first create flow. Commit is
+    # idempotent by operation id; undo hides only products from that import.
+    ("POST", "/api/products/{shop_id}/imports/preview"),
+    ("POST", "/api/products/{shop_id}/imports/commit"),
+    ("POST", "/api/products/{shop_id}/imports/{operation_id}/undo"),
     ("POST", "/api/products/{shop_id}/stocktake"),  # B4: áp dụng kết quả kiểm kê
     ("POST", "/api/tts"),          # D3: sinh giọng đọc khi máy thiếu giọng Việt
     ("GET", "/api/tts/status"),    # D3: frontend hỏi server có đọc hộ được không
@@ -113,6 +131,25 @@ ROUTES_BO_SUNG = {
     # ở đây giao dịch đã xảy ra rồi nên giá lấy từ phiếu và hết hàng vẫn ghi.
     ("POST", "/api/orders/{shop_id}/offline"),
     ("GET", "/api/orders/{shop_id}/offline-issues"),
+    # I09-C: chủ shop ghi nhận đã xem một vướng mắc offline không có bằng chứng
+    # exact để đóng. Khác kiểm kê (đóng TON_AM bằng hàng thật) và khác phục hồi
+    # (map lại sản phẩm/giá vốn, thuộc I09-G).
+    ("POST", "/api/orders/{shop_id}/offline-issues/{issue_id}/acknowledge"),
+    # I09-D: lifecycle credential; normal-v1 financial ingest chưa được mở.
+    ("POST", "/api/offline/leases"),
+    ("POST", "/api/offline/leases/{lease_id}/heartbeat"),
+    ("POST", "/api/offline/leases/{lease_id}/reclaim"),
+    ("DELETE", "/api/offline/leases/{lease_id}"),
+    # I09-H: authenticated public policy; the response intentionally carries no
+    # token, digest, identity or fleet counts.
+    ("GET", "/api/offline/capability"),
+    # I09-G1: owner/ADMIN recovery data path. The file checksum is accidental
+    # corruption detection only; every operation still requires JWT shop owner.
+    ("POST", "/api/offline/recovery/{shop_id}/export"),
+    ("POST", "/api/offline/recovery/{shop_id}/import"),
+    ("GET", "/api/offline/recovery/{shop_id}/candidates"),
+    ("GET", "/api/offline/recovery/{shop_id}/candidates/{offline_uuid}"),
+    ("POST", "/api/offline/recovery/{shop_id}/candidates/{offline_uuid}/resolve"),
     # G3: màn "Ai làm gì" của chủ shop. Khác /api/logs/admin: chỉ việc của người
     # thuộc shop này, và đã lọc bỏ hành động không đụng tiền hay kho.
     ("GET", "/api/logs/shop/{shop_id}"),
@@ -136,6 +173,15 @@ ROUTES_BO_SUNG = {
     ("PUT", "/api/purchase-receipts/receipt/{receipt_id}"),
     ("DELETE", "/api/purchase-receipts/receipt/{receipt_id}"),
     ("POST", "/api/purchase-receipts/receipt/{receipt_id}/confirm"),
+    # Purchase Order is a commitment only; receipt confirmation remains the
+    # sole stock/payable mutation.
+    ("POST", "/api/purchase-orders/{shop_id}"),
+    ("GET", "/api/purchase-orders/{shop_id}"),
+    ("GET", "/api/purchase-orders/order/{order_id}"),
+    ("PUT", "/api/purchase-orders/order/{order_id}"),
+    ("DELETE", "/api/purchase-orders/order/{order_id}"),
+    ("POST", "/api/purchase-orders/order/{order_id}/place"),
+    ("POST", "/api/purchase-orders/order/{order_id}/cancel"),
     # J1: gói Free/Pro theo shop. Tiền thuê bao dùng webhook/ledger riêng, không
     # đi vào OrderPayment/doanh thu bán hàng của shop.
     ("GET", "/api/subscriptions/{shop_id}"),
@@ -177,6 +223,47 @@ ROUTES_BO_SUNG = {
     # và log máy chủ. CHỈ ĐỌC: nó chỉ chọn một báo cáo có sẵn rồi gọi lại, không
     # tự sinh câu lệnh và không ghi gì.
     ("POST", "/api/assistant/{shop_id}"),
+    # Assistant Feedback R1: POST chỉ ghi metadata cố định của một reply đã ký;
+    # GET chỉ trả aggregate cho chủ shop/ADMIN, không có raw question/answer.
+    ("POST", "/api/assistant/{shop_id}/feedback"),
+    ("GET", "/api/assistant/{shop_id}/feedback/summary"),
+    # Onboarding R1: owner-only read model over durable shop/product/shift/order
+    # facts. It never records clicks or performs business mutations.
+    ("GET", "/api/onboarding/{shop_id}"),
+    # Action Center R1: một GET read-only tổng hợp các nguồn sự thật hiện có;
+    # không notification table, background job hay mutation tự động.
+    ("GET", "/api/action-center/{shop_id}"),
+    # F&B R1A: setup/floor và lifecycle phiên phục vụ nháp revision-safe.
+    ("PATCH", "/api/fnb/shops/{shop_id}/settings"),
+    ("POST", "/api/fnb/areas"),
+    ("PATCH", "/api/fnb/areas/{area_id}"),
+    ("POST", "/api/fnb/tables"),
+    ("PATCH", "/api/fnb/tables/{table_id}"),
+    ("GET", "/api/fnb/floor"),
+    ("POST", "/api/fnb/sessions"),
+    ("GET", "/api/fnb/sessions/{session_id}"),
+    ("POST", "/api/fnb/sessions/{session_id}/lines"),
+    ("PATCH", "/api/fnb/lines/{line_id}"),
+    ("POST", "/api/fnb/sessions/{session_id}/cancel-line"),
+    ("POST", "/api/fnb/sessions/{session_id}/move-table"),
+    ("POST", "/api/fnb/sessions/{session_id}/merge-table"),
+    ("POST", "/api/fnb/sessions/{session_id}/cancel"),
+    ("PATCH", "/api/fnb/menu-items/{product_id}/station"),
+    ("POST", "/api/fnb/sessions/{session_id}/send"),
+    ("GET", "/api/fnb/stations/{station}/tickets"),
+    ("POST", "/api/fnb/tickets/{ticket_id}/start"),
+    ("POST", "/api/fnb/tickets/{ticket_id}/done"),
+    ("POST", "/api/fnb/tickets/{ticket_id}/out-of-stock"),
+    ("PATCH", "/api/fnb/shops/{shop_id}/manager-pin"),
+    ("POST", "/api/fnb/manager-approvals"),
+    # F&B R1C: bill, split, provisional receipt, payment and safe table close.
+    ("GET", "/api/fnb/sessions/{session_id}/checks"),
+    ("POST", "/api/fnb/checks/{check_id}/split-preview"),
+    ("POST", "/api/fnb/checks/{check_id}/split"),
+    ("PATCH", "/api/fnb/checks/{check_id}/adjustments"),
+    ("GET", "/api/fnb/checks/{check_id}/provisional-receipt"),
+    ("POST", "/api/fnb/checks/{check_id}/pay"),
+    ("POST", "/api/fnb/sessions/{session_id}/close"),
 }
 
 
@@ -240,6 +327,21 @@ def test_webhook_dang_ky_truoc_route_shop_id(app):
     )
 
 
+def test_cors_cho_phep_header_lease_nhung_khong_mo_wildcard(client):
+    response = client.options(
+        "/api/offline/leases/lse_0000000000000000000000/heartbeat",
+        headers={
+            "Origin": "http://testserver",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "X-Offline-Lease-Token",
+        },
+    )
+    assert response.status_code == 200
+    allowed = response.headers["access-control-allow-headers"].lower()
+    assert "x-offline-lease-token" in allowed
+    assert response.headers["access-control-allow-origin"] == "http://testserver"
+
+
 def test_trang_html_va_redirect(client):
     for page in ("/admin", "/pos", "/register", "/seller", "/verify"):
         res = client.get(page)
@@ -299,6 +401,8 @@ def test_danh_sach_san_pham_giu_nguyen_cac_truong(client):
         # `name` như trước vẫn đúng - `name` đã là tên đầy đủ kèm biến thể.
         "variant_group",
         "variant_name",
+        # R1B: nơi chế biến mặc định, dùng lại cùng catalog cho màn phục vụ.
+        "fnb_station",
     }
 
 

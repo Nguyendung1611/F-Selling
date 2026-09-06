@@ -43,14 +43,19 @@ def _declared_functions(*relative_paths: str) -> set[str]:
     return names
 
 
-def test_tab_nhap_hang_co_du_hai_man_va_cac_hop_thoai_tien_quan_trong():
+def test_tab_nhap_hang_co_du_ba_man_va_cac_hop_thoai_tien_quan_trong():
     html = _read("static/seller.html")
 
     for element_id in (
         "tabPurchasing",
         "purchasing",
         "purchaseSubTabReceipts",
+        "purchaseSubTabOrders",
         "purchaseSubTabSuppliers",
+        "purchaseOrdersPanel",
+        "purchaseOrderEditor",
+        "purchaseOrderLines",
+        "purchaseOrdersList",
         "purchaseReceiptEditor",
         "purchaseReceiptLines",
         "purchaseReceiptsList",
@@ -64,7 +69,98 @@ def test_tab_nhap_hang_co_du_hai_man_va_cac_hop_thoai_tien_quan_trong():
         assert f'id="{element_id}"' in html, element_id
     assert 'data-main-tab="purchasing"' in html
     assert "switchPurchasingSubTab('receipts')" in html
+    assert "switchPurchasingSubTab('orders')" in html
     assert "switchPurchasingSubTab('suppliers')" in html
+
+
+def test_cac_nut_icon_don_dat_hang_co_ten_cho_cong_cu_ho_tro():
+    source = _read("static/js/purchasing.js")
+    actions = (
+        "editPurchaseOrder",
+        "placePurchaseOrder",
+        "deletePurchaseOrder",
+        "receivePurchaseOrder",
+        "cancelPurchaseOrder",
+        "openPurchaseReceiptDetail",
+        "removePurchaseOrderLine",
+    )
+
+    for action in actions:
+        button = re.search(
+            rf'<button[^>]+onclick="{action}\([^>]+>',
+            source,
+        )
+        assert button, f"missing {action} button"
+        assert "aria-label=" in button.group(0), f"{action} has no accessible name"
+
+
+def test_du_bao_chi_prefill_don_dat_hang_va_khong_tu_tao_don():
+    html = _read("static/seller.html")
+    seller_js = _read("static/js/seller.js")
+    purchasing_js = _read("static/js/purchasing.js")
+
+    assert 'data-i18n="seller.forecast.purchase_action"' in html
+    render = _function(seller_js, "function veDuBaoNhapHang(d)", "// ===== F5:")
+    bridge = _function(
+        seller_js,
+        "async function lapPhieuNhapTuDuBao(",
+        "// ===== F5:",
+    )
+    assert "MY_ROLE === 'SELLER'" in render
+    assert "r.can_nhap > 0" in render
+    assert "r.nha_cung_cap" in render
+    assert "duBaoCache.shopId !== currentShopId" in bridge
+    assert "Number(r.nha_cung_cap?.id) === idNcc" in bridge
+    assert "Number(r.can_nhap) > 0" in bridge
+    assert "prefillPurchaseOrderFromForecast" in bridge
+
+    prefill = _function(
+        purchasing_js,
+        "async function prefillPurchaseOrderFromForecast(",
+        "function openPurchaseOrderForm()",
+    )
+    assert "stillCurrent(shopId, generation)" in prefill
+    assert "supplier.is_active !== false" in prefill
+    assert "productOptions()" in prefill
+    assert "$('purchaseOrderSupplierSelect').value = String(supplierId)" in prefill
+    assert "state.orderLines" in prefill
+    assert "state.nextOrderLineKey = lines.length + 1" in prefill
+    assert "apiCall(" not in prefill
+    assert "operationId(" not in prefill
+    assert "savePurchaseOrderDraft(" not in prefill
+
+
+def test_forecast_prefill_khong_de_du_lieu_cu_ghi_de_editor_dang_mo():
+    js = _read("static/js/purchasing.js")
+    prefill = _function(
+        js,
+        "async function prefillPurchaseOrderFromForecast(",
+        "function openPurchaseOrderForm()",
+    )
+
+    assert "purchaseOrderEditor" in prefill
+    assert "style.display === 'block'" in prefill
+    assert "pendingOrderCreate" in prefill
+    assert "blockForOtherPendingOperation('order_create')" in prefill
+    assert "MAX_PURCHASE_QUANTITY" in prefill
+
+
+def test_nhan_hang_tu_don_chi_prefill_receipt_editor_khong_tu_ghi_kho():
+    js = _read("static/js/purchasing.js")
+    receive = _function(
+        js,
+        "async function receivePurchaseOrder(",
+        "function openPurchaseReceiptForm()",
+    )
+    assert "order.status !== 'ORDERED'" in receive
+    assert "state.receiptPurchaseOrderId = Number(order.id)" in receive
+    assert "state.receiptLines" in receive
+    assert "unit_cost: ''" in receive
+    assert "expiry_date: ''" in receive
+    assert "savePurchaseReceiptDraft(" not in receive
+    assert "/confirm" not in receive
+    build = _function(js, "function buildReceiptPayload(", "async function sendNewReceipt(")
+    assert "purchase_order_id: state.receiptPurchaseOrderId" in build
 
 
 def test_tab_chi_hien_cho_chu_shop_admin_va_nap_lai_khi_mo_tab():
@@ -103,13 +199,14 @@ def test_module_nap_sau_seller_va_moi_file_dung_dung_phien_ban():
     cụm là bắt người dùng tải lại những file không hề đổi.
     """
     html = _read("static/seller.html")
-    purchasing_version = "20260807-nha-cung-cap-ui-f9"
+    purchasing_version = "20260822-order-actions-a11y-r2"
+    seller_css_version = "20260825-assistant-guided-tasks-r1-1"
     cashflow_version = "20260808-dong-tien-k1"
-    locale_version = "20260809-tro-ly-giong-noi"
-    seller_version = "20260809-tro-ly-giong-noi"
+    locale_version = "20260825-assistant-guided-tasks-r1-1"
+    seller_version = "20260825-assistant-guided-tasks-r1-1"
 
     expected = (
-        f"/css/seller.css?v={cashflow_version}",
+        f"/css/seller.css?v={seller_css_version}",
         f"/js/locales/seller.js?v={locale_version}",
         f"/js/seller.js?v={seller_version}",
         f"/js/purchasing.js?v={purchasing_version}",
@@ -460,7 +557,7 @@ def test_giao_dien_chan_tran_so_luong_tien_va_tong_nhieu_dong():
     assert "currentStock > MAX_PURCHASE_QUANTITY - accumulated" in receipt
     assert "paid > MAX_PURCHASE_VND" in confirm
     assert "amount > MAX_PURCHASE_VND" in payment
-    assert "20260807-nha-cung-cap-ui-f9" in html
+    assert "20260822-order-actions-a11y-r2" in html
     for key in (
         "seller.purchasing.quantity_limit",
         "seller.purchasing.stock_after_limit",
@@ -486,5 +583,10 @@ def test_du_ban_dich_quan_trong_cho_ca_tieng_viet_va_tieng_anh():
         "seller.purchasing.supplier_retry_notice",
         "seller.purchasing.storage_unavailable",
         "seller.purchasing.pending_actor_changed",
+        "seller.forecast.purchase_action",
+        "seller.forecast.purchase_button",
+        "seller.purchasing.forecast_prefilled",
+        "seller.purchasing.forecast_unavailable",
+        "seller.purchasing.editor_already_open",
     ):
         assert locale.count(f"'{key}'") == 2, key

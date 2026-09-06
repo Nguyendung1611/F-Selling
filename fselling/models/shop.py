@@ -16,6 +16,8 @@ class Shop(Base):
     bank_account_name = Column(String, nullable=True)
     bank_code = Column(String)  # e.g. VCB, MB, etc.
     is_active = Column(Boolean, default=True)
+    fnb_enabled = Column(Boolean, nullable=False, default=False)
+    fnb_revision = Column(Integer, nullable=False, default=0)
     owner_id = Column(Integer, ForeignKey("users.id"))
 
     # Chỉ định rõ FK vì User giờ có 2 khóa ngoại trỏ tới shops

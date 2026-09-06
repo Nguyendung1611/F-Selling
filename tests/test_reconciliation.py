@@ -18,7 +18,7 @@ from conftest import (
     seller_with_shop,
 )
 from fselling import models
-from fselling.core import bootstrap
+import legacy_bootstrap_support as bootstrap
 from fselling.core.database import SessionLocal
 from fselling.routers import webhooks
 
@@ -273,7 +273,7 @@ def test_hai_giao_dich_cung_don_trong_mot_payload_deu_duoc_cong(
     assert len(_payments(order_id)) == 2
 
 
-def test_webhook_trung_ma_khong_cong_lai_va_xung_dot_bi_tu_choi(
+def test_webhook_trung_ma_khong_cong_lai_va_xung_dot_audit_roi_200(
     client, webhook_secret
 ):
     ctx = seller_with_shop(client)
@@ -947,6 +947,7 @@ def test_backfill_legacy_chay_lap_va_chan_retry_ma_cu(
         order = session.query(models.Order).filter(models.Order.id == order_id).one()
         order.status = "PAID"
         order.paid_amount = TOTAL
+        order.legacy_paid_amount = TOTAL
         order.bank_txn_id = f"LEGACY-{order_id}"
         session.commit()
 

@@ -125,6 +125,221 @@ def test_tra_mot_mon_hoan_dung_tien_va_nhap_lai_kho(client):
     assert _sp(sp["id"]).stock == 8, "Hàng trả về phải cộng lại tồn kho"
 
 
+def test_product_id_shop_khac_409_truoc_tien_diem_provenance_va_ton_kho(client):
+    ctx_a = seller_with_shop(client)
+    ctx_b = seller_with_shop(client)
+    sp_a = _tao_sp(client, ctx_a, gia_ban=50_000, ton=10, gia_von=30_000)
+    order_id = _ban(client, ctx_a, [(sp_a, 1)])
+    dong = _dong_don(client, ctx_a, order_id, sp_a["id"])
+    stock_a_before = _sp(sp_a["id"]).stock
+    stock_b_before = _sp(ctx_b["product"]["id"]).stock
+
+    with SessionLocal() as session:
+        item = session.get(models.OrderItem, dong["id"])
+        original_product_id = item.product_id
+        item.product_id = ctx_b["product"]["id"]
+        session.commit()
+        before = {
+            "returns": session.query(models.OrderReturn).filter_by(order_id=order_id).count(),
+            "payments": session.query(models.OrderPayment).filter_by(order_id=order_id).count(),
+            "loyalty": session.query(models.LoyaltyPointEntry).filter_by(order_id=order_id).count(),
+            "logs": session.query(models.SystemLog).filter_by(action="ORDER_RETURN").count(),
+            "return_items": session.query(models.OrderReturnItem).join(models.OrderReturn).filter(
+                models.OrderReturn.order_id == order_id
+            ).count(),
+        }
+
+    try:
+        response = _tra(
+            client,
+            ctx_a,
+            order_id,
+            [{"order_item_id": dong["id"], "quantity": 1, "restock": True}],
+        )
+        assert response.status_code == 409, response.text
+        assert _sp(sp_a["id"]).stock == stock_a_before
+        assert _sp(ctx_b["product"]["id"]).stock == stock_b_before
+        with SessionLocal() as session:
+            item = session.get(models.OrderItem, dong["id"])
+            assert (item.returned_total_qty, item.cost_return_version) == (0, 0)
+            assert session.query(models.OrderReturn).filter_by(order_id=order_id).count() == before["returns"]
+            assert session.query(models.OrderPayment).filter_by(order_id=order_id).count() == before["payments"]
+            assert session.query(models.LoyaltyPointEntry).filter_by(order_id=order_id).count() == before["loyalty"]
+            assert session.query(models.OrderReturnItem).join(models.OrderReturn).filter(
+                models.OrderReturn.order_id == order_id
+            ).count() == before["return_items"]
+
+        operation_id = _op()
+        body = {
+            "operation_id": operation_id,
+            "items": [{"order_item_id": dong["id"], "quantity": 1, "restock": False}],
+            "method": "transfer",
+        }
+        accepted = client.post(
+            f"/api/orders/{order_id}/returns",
+            headers=auth(ctx_a["token"]),
+            json=body,
+        )
+        retry = client.post(
+            f"/api/orders/{order_id}/returns",
+            headers=auth(ctx_a["token"]),
+            json=body,
+        )
+        assert accepted.status_code == retry.status_code == 200
+        assert accepted.json()["return"]["id"] == retry.json()["return"]["id"]
+        assert accepted.json()["return"]["refund_amount"] == 50_000
+        assert _sp(sp_a["id"]).stock == stock_a_before
+        assert _sp(ctx_b["product"]["id"]).stock == stock_b_before
+        with SessionLocal() as session:
+            item = session.get(models.OrderItem, dong["id"])
+            returned = session.query(models.OrderReturnItem).join(models.OrderReturn).filter(
+                models.OrderReturn.order_id == order_id
+            ).one()
+            assert returned.product_id is None
+            assert returned.restocked == 0
+            assert (item.returned_total_qty, item.cost_return_version) == (1, 1)
+            assert session.query(models.OrderReturn).filter_by(order_id=order_id).count() == before["returns"] + 1
+            assert session.query(models.OrderPayment).filter_by(order_id=order_id).count() == before["payments"] + 1
+            assert session.query(models.LoyaltyPointEntry).filter_by(order_id=order_id).count() == before["loyalty"]
+            assert session.query(models.SystemLog).filter_by(action="ORDER_RETURN").count() == before["logs"] + 1
+            assert session.query(models.OrderReturnItem).join(models.OrderReturn).filter(
+                models.OrderReturn.order_id == order_id
+            ).count() == before["return_items"] + 1
+    finally:
+        with SessionLocal() as session:
+            item = session.get(models.OrderItem, dong["id"])
+            item.product_id = original_product_id
+            session.commit()
+
+
+def test_product_bi_xoa_chi_chan_restock_con_hang_hong_van_hoan_tien(client):
+    ctx = seller_with_shop(client)
+    sp = _tao_sp(client, ctx, gia_ban=41_000, ton=5, gia_von=23_000)
+    order_id = _ban(client, ctx, [(sp, 1)])
+    dong = _dong_don(client, ctx, order_id, sp["id"])
+
+    with SessionLocal() as session:
+        session.query(models.Product).filter(models.Product.id == sp["id"]).delete(
+            synchronize_session=False
+        )
+        session.commit()
+        assert session.get(models.Product, sp["id"]) is None
+        before = {
+            "returns": session.query(models.OrderReturn).filter_by(order_id=order_id).count(),
+            "payments": session.query(models.OrderPayment).filter_by(order_id=order_id).count(),
+            "logs": session.query(models.SystemLog).filter_by(action="ORDER_RETURN").count(),
+        }
+
+    blocked = _tra(
+        client,
+        ctx,
+        order_id,
+        [{"order_item_id": dong["id"], "quantity": 1, "restock": True}],
+    )
+    assert blocked.status_code == 409, blocked.text
+
+    operation_id = _op()
+    body = {
+        "operation_id": operation_id,
+        "items": [{"order_item_id": dong["id"], "quantity": 1, "restock": False}],
+        "method": "transfer",
+    }
+    accepted = client.post(
+        f"/api/orders/{order_id}/returns", headers=auth(ctx["token"]), json=body
+    )
+    retry = client.post(
+        f"/api/orders/{order_id}/returns", headers=auth(ctx["token"]), json=body
+    )
+    assert accepted.status_code == retry.status_code == 200
+    assert accepted.json()["return"]["id"] == retry.json()["return"]["id"]
+    assert accepted.json()["return"]["refund_amount"] == 41_000
+
+    with SessionLocal() as session:
+        item = session.get(models.OrderItem, dong["id"])
+        returned = session.query(models.OrderReturnItem).join(models.OrderReturn).filter(
+            models.OrderReturn.order_id == order_id
+        ).one()
+        payment = session.query(models.OrderPayment).filter_by(
+            order_id=order_id, entry_type="RETURN_TRANSFER"
+        ).one()
+        assert session.get(models.Product, sp["id"]) is None
+        assert returned.product_id is None and returned.restocked == 0
+        assert returned.refund_amount == payment.amount == 41_000
+        assert (item.returned_total_qty, item.cost_return_version) == (1, 1)
+        assert item.returned_refund_vnd == 41_000
+        assert (
+            returned.cost_known_qty,
+            returned.cost_unknown_qty,
+            returned.cost_basis_vnd,
+        ) == (
+            item.returned_known_qty,
+            item.returned_unknown_qty,
+            item.returned_cost_basis_vnd,
+        )
+        assert session.query(models.OrderReturn).filter_by(order_id=order_id).count() == before["returns"] + 1
+        assert session.query(models.OrderPayment).filter_by(order_id=order_id).count() == before["payments"] + 1
+        assert session.query(models.SystemLog).filter_by(action="ORDER_RETURN").count() == before["logs"] + 1
+        # Giữ DB test liên-file không có FK treo sau khi đã chứng minh luồng
+        # hard-delete; sự kiện trả đã lưu product_id=NULL độc lập với cleanup này.
+        item.product_id = None
+        session.commit()
+
+
+def test_preflight_nhieu_dong_mot_restock_cross_shop_rollback_toan_bo(client):
+    ctx_a = seller_with_shop(client)
+    ctx_b = seller_with_shop(client)
+    sp_no_restock = _tao_sp(client, ctx_a, gia_ban=31_000, ton=5, gia_von=17_000)
+    sp_restock = _tao_sp(client, ctx_a, gia_ban=29_000, ton=5, gia_von=13_000)
+    order_id = _ban(client, ctx_a, [(sp_no_restock, 1), (sp_restock, 1)])
+    line_no_restock = _dong_don(client, ctx_a, order_id, sp_no_restock["id"])
+    line_restock = _dong_don(client, ctx_a, order_id, sp_restock["id"])
+    stocks_before = {
+        sp_no_restock["id"]: _sp(sp_no_restock["id"]).stock,
+        sp_restock["id"]: _sp(sp_restock["id"]).stock,
+        ctx_b["product"]["id"]: _sp(ctx_b["product"]["id"]).stock,
+    }
+
+    with SessionLocal() as session:
+        corrupted = session.get(models.OrderItem, line_restock["id"])
+        original_product_id = corrupted.product_id
+        corrupted.product_id = ctx_b["product"]["id"]
+        session.commit()
+        before = {
+            "returns": session.query(models.OrderReturn).filter_by(order_id=order_id).count(),
+            "payments": session.query(models.OrderPayment).filter_by(order_id=order_id).count(),
+            "loyalty": session.query(models.LoyaltyPointEntry).filter_by(order_id=order_id).count(),
+            "logs": session.query(models.SystemLog).filter_by(action="ORDER_RETURN").count(),
+        }
+
+    try:
+        response = _tra(
+            client,
+            ctx_a,
+            order_id,
+            [
+                {"order_item_id": line_no_restock["id"], "quantity": 1, "restock": False},
+                {"order_item_id": line_restock["id"], "quantity": 1, "restock": True},
+            ],
+        )
+        assert response.status_code == 409, response.text
+        assert _sp(sp_no_restock["id"]).stock == stocks_before[sp_no_restock["id"]]
+        assert _sp(sp_restock["id"]).stock == stocks_before[sp_restock["id"]]
+        assert _sp(ctx_b["product"]["id"]).stock == stocks_before[ctx_b["product"]["id"]]
+        with SessionLocal() as session:
+            first = session.get(models.OrderItem, line_no_restock["id"])
+            second = session.get(models.OrderItem, line_restock["id"])
+            assert (first.returned_total_qty, first.cost_return_version) == (0, 0)
+            assert (second.returned_total_qty, second.cost_return_version) == (0, 0)
+            assert session.query(models.OrderReturn).filter_by(order_id=order_id).count() == before["returns"]
+            assert session.query(models.OrderPayment).filter_by(order_id=order_id).count() == before["payments"]
+            assert session.query(models.LoyaltyPointEntry).filter_by(order_id=order_id).count() == before["loyalty"]
+            assert session.query(models.SystemLog).filter_by(action="ORDER_RETURN").count() == before["logs"]
+    finally:
+        with SessionLocal() as session:
+            session.get(models.OrderItem, line_restock["id"]).product_id = original_product_id
+            session.commit()
+
+
 def test_don_van_giu_trang_thai_paid(client):
     """Hóa đơn đã xuất là sự thật lịch sử. Việc trả nằm ở bảng riêng."""
     ctx = seller_with_shop(client)
@@ -319,7 +534,7 @@ def test_khong_bao_gio_hoan_qua_so_khach_da_tra(client):
     assert da_hoan == tong
 
 
-def test_chenh_lam_tron_am_duoc_rai_de_khong_dong_nao_hoan_am(client):
+def test_hoan_tien_theo_phan_bo_dong_bat_bien_khong_am(client):
     """Các lần trước có thể đã dùng hết tiền hoàn dù vẫn còn hàng để trả."""
     ctx = seller_with_shop(client)
     products = [
@@ -349,8 +564,9 @@ def test_chenh_lam_tron_am_duoc_rai_de_khong_dong_nao_hoan_am(client):
     assert detail["total_amount"] == 3
     line_ids = [row["id"] for row in detail["items"]]
 
-    # 0,6đ làm tròn thành 1đ: ba phiếu đầu đã hoàn đủ 3đ khách từng trả.
-    for line_id in line_ids[:3]:
+    # Voucher 2đ chia cho năm dòng bằng largest remainder: hai immutable id
+    # đầu nhận mỗi dòng 1đ giảm, nên net/refund lần lượt là 0, 0, 1, 1, 1.
+    for line_id, expected in zip(line_ids[:3], (0, 0, 1)):
         returned = _tra(
             client,
             ctx,
@@ -358,7 +574,7 @@ def test_chenh_lam_tron_am_duoc_rai_de_khong_dong_nao_hoan_am(client):
             [{"order_item_id": line_id, "quantity": 1}],
         )
         assert returned.status_code == 200, returned.text
-        assert returned.json()["return"]["refund_amount"] == 1
+        assert returned.json()["return"]["refund_amount"] == expected
 
     final = _tra(
         client,
@@ -370,7 +586,7 @@ def test_chenh_lam_tron_am_duoc_rai_de_khong_dong_nao_hoan_am(client):
         ],
     )
     assert final.status_code == 200, final.text
-    assert final.json()["return"]["refund_amount"] == 0
+    assert final.json()["return"]["refund_amount"] == 2
 
     session = SessionLocal()
     try:
@@ -383,8 +599,8 @@ def test_chenh_lam_tron_am_duoc_rai_de_khong_dong_nao_hoan_am(client):
             .all()
         )
         assert len(rows) == 2
-        assert all(float(row.refund_amount) >= 0 for row in rows)
-        assert sum(float(row.refund_amount) for row in rows) == 0
+        assert all(int(row.refund_amount) >= 0 for row in rows)
+        assert sum(int(row.refund_amount) for row in rows) == 2
     finally:
         session.close()
 

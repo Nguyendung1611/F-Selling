@@ -48,6 +48,8 @@
         'common.role.cashier': 'Thu ngân',
         'common.role.warehouse': 'Nhân viên kho',
         'common.role.manager': 'Quản lý',
+        'common.role.kitchen': 'Bếp',
+        'common.role.bar': 'Bar',
         'common.items_one': '{{count}} mục',
         'common.items_other': '{{count}} mục'
     });
@@ -93,6 +95,8 @@
         'common.role.cashier': 'Cashier',
         'common.role.warehouse': 'Warehouse staff',
         'common.role.manager': 'Manager',
+        'common.role.kitchen': 'Kitchen',
+        'common.role.bar': 'Bar',
         'common.items_one': '{{count}} item',
         'common.items_other': '{{count}} items'
     });

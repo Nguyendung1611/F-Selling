@@ -29,7 +29,7 @@ from conftest import (
     seller_with_shop,
 )
 from fselling import models
-from fselling.core import bootstrap
+import legacy_bootstrap_support as bootstrap
 from fselling.core.database import SessionLocal
 from fselling.core.numeric_limits import MAX_SAFE_QUANTITY, MAX_SAFE_VND
 from fselling.services import catalog_service, supplier_service
@@ -394,7 +394,7 @@ def test_retry_tao_ncc_bo_trong_ngay_qua_nua_dem_van_cung_ket_qua(
 
 @pytest.mark.parametrize(
     "opening_balance",
-    [-1, 1.5, True, False, "1", "NaN", "Infinity"],
+    [-1, 1.5, True, False, "NaN", "Infinity"],
 )
 def test_so_du_dau_ky_chi_nhan_so_nguyen_khong_am(client, opening_balance):
     ctx = seller_with_shop(client)
@@ -402,6 +402,15 @@ def test_so_du_dau_ky_chi_nhan_so_nguyen_khong_am(client, opening_balance):
         client, ctx, opening_balance=opening_balance, expected=422
     )
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("opening_balance", ["1", "1.0"])
+def test_so_du_dau_ky_nhan_representation_vnd_nguyen_chinh_xac(
+    client, opening_balance
+):
+    ctx = seller_with_shop(client)
+    response = _create_supplier(client, ctx, opening_balance=opening_balance)
+    assert response["payable_balance"] == 1
 
 
 # ---------- DRAFT không được tác động sổ ----------
@@ -607,7 +616,7 @@ def test_confirm_that_bai_phai_rollback_ca_hai_dong_kho_va_so_tien(client):
 # ---------- Giá vốn và lô ----------
 
 
-def test_nhap_dau_tien_khi_gia_von_null_lay_dung_don_gia(client):
+def test_nhap_dau_tien_khong_biet_hoa_ton_cu_thieu_provenance(client):
     ctx = seller_with_shop(client)
     assert _product(ctx["product"]["id"]).cost_price is None
     supplier_id = _entity_id(_create_supplier(client, ctx))
@@ -617,7 +626,13 @@ def test_nhap_dau_tien_khi_gia_von_null_lay_dung_don_gia(client):
         }])
     )
     assert _confirm(client, ctx, receipt_id).status_code == 200
-    assert _product(ctx["product"]["id"]).cost_price == 20_000
+    product = _product(ctx["product"]["id"])
+    assert product.cost_price is None
+    assert (
+        product.cost_known_qty,
+        product.cost_unknown_qty,
+        product.cost_basis_vnd,
+    ) == (5, 10, 100_000)
 
 
 def test_gia_von_binh_quan_va_hang_tang_0_khac_null(client):
@@ -626,7 +641,10 @@ def test_gia_von_binh_quan_va_hang_tang_0_khac_null(client):
     session = SessionLocal()
     try:
         product = session.query(models.Product).filter(models.Product.id == product_id).one()
-        product.cost_price = 40_000
+        product.cost_known_qty = 10
+        product.cost_unknown_qty = 0
+        product.cost_basis_vnd = 400_000
+        product.cost_deficit_qty = 0
         session.commit()
     finally:
         session.close()
@@ -708,7 +726,13 @@ def test_phieu_toan_hang_tang_tong_0_khong_tao_no_hay_thanh_toan_ao(client):
     assert confirmed.status_code == 200, confirmed.text
     assert _receipt(receipt_id).total_amount == 0
     assert _product(ctx["product"]["id"]).stock == 14
-    assert _product(ctx["product"]["id"]).cost_price == 0
+    product = _product(ctx["product"]["id"])
+    assert product.cost_price is None
+    assert (
+        product.cost_known_qty,
+        product.cost_unknown_qty,
+        product.cost_basis_vnd,
+    ) == (4, 10, 0)
     assert _debt(client, ctx, supplier_id) == 0
 
     session = SessionLocal()
@@ -734,7 +758,6 @@ def test_phieu_toan_hang_tang_tong_0_khong_tao_no_hay_thanh_toan_ao(client):
         {"quantity": 1, "unit_cost": -1},
         {"quantity": 1, "unit_cost": 1.5},
         {"quantity": 1, "unit_cost": False},
-        {"quantity": 1, "unit_cost": "10000"},
         {"quantity": 1, "unit_cost": "NaN"},
         {"quantity": 1, "unit_cost": "Infinity"},
     ],
@@ -748,6 +771,23 @@ def test_dong_phieu_chi_nhan_so_nguyen_hop_le(client, item):
     )
     assert response.status_code == 422
     assert _product(ctx["product"]["id"]).stock == 10
+
+
+@pytest.mark.parametrize("unit_cost", ["10000", "10000.0"])
+def test_dong_phieu_nhan_representation_vnd_nguyen_chinh_xac(client, unit_cost):
+    ctx = seller_with_shop(client)
+    supplier_id = _entity_id(_create_supplier(client, ctx))
+    response = _create_receipt(
+        client,
+        ctx,
+        supplier_id,
+        items=[{
+            "product_id": ctx["product"]["id"],
+            "quantity": 1,
+            "unit_cost": unit_cost,
+        }],
+    )
+    assert response["items"][0]["unit_cost"] == 10_000
 
 
 @pytest.mark.parametrize("field", ["supplier_id", "product_id"])
@@ -770,7 +810,7 @@ def test_id_trong_phieu_nhap_phai_la_so_nguyen_that(client, field, bad_id):
     assert _product(ctx["product"]["id"]).stock == 10
 
 
-@pytest.mark.parametrize("paid_amount", [True, False, "0", "10000", 1.5])
+@pytest.mark.parametrize("paid_amount", [True, False, 1.5])
 def test_tien_tra_khi_confirm_phai_la_so_nguyen_that(client, paid_amount):
     ctx = seller_with_shop(client)
     supplier_id = _entity_id(_create_supplier(client, ctx))
@@ -790,7 +830,22 @@ def test_tien_tra_khi_confirm_phai_la_so_nguyen_that(client, paid_amount):
     assert _debt(client, ctx, supplier_id) == 0
 
 
-@pytest.mark.parametrize("amount", [True, False, "1", "10000", 1.5])
+@pytest.mark.parametrize("paid_amount", ["0", "10000", "10000.0"])
+def test_tien_confirm_nhan_representation_vnd_nguyen_chinh_xac(client, paid_amount):
+    ctx = seller_with_shop(client)
+    supplier_id = _entity_id(_create_supplier(client, ctx))
+    receipt = _create_receipt(client, ctx, supplier_id)
+    response = _confirm(
+        client,
+        ctx,
+        _entity_id(receipt),
+        paid_amount=paid_amount,
+        draft_fingerprint=receipt["draft_fingerprint"],
+    )
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize("amount", [True, False, 1.5])
 def test_tien_tra_cong_no_phai_la_so_nguyen_that(client, amount):
     ctx = seller_with_shop(client)
     supplier_id = _entity_id(
@@ -800,6 +855,16 @@ def test_tien_tra_cong_no_phai_la_so_nguyen_that(client, amount):
     response = _payment(client, ctx, supplier_id, amount)
     assert response.status_code == 422, response.text
     assert _debt(client, ctx, supplier_id) == 100_000
+
+
+@pytest.mark.parametrize("amount", ["1", "10000", "10000.0"])
+def test_tien_tra_cong_no_nhan_representation_vnd_nguyen_chinh_xac(client, amount):
+    ctx = seller_with_shop(client)
+    supplier_id = _entity_id(
+        _create_supplier(client, ctx, opening_balance=100_000)
+    )
+    response = _payment(client, ctx, supplier_id, amount)
+    assert response.status_code == 200, response.text
 
 
 def test_gioi_han_tien_nhan_dung_mep_va_chan_vuot_mot_dong(client):
@@ -2334,36 +2399,38 @@ def test_staff_xem_nhat_ky_nhung_khong_thay_so_tien_ncc(client):
         assert str(sensitive_amount) not in details
 
 
-def test_nang_db_legacy_tao_bang_moi_nhung_khong_bia_phieu_tu_ton_cu(client, db):
-    """ADJUST_STOCK cũ không đủ thông tin để đoán NCC, hóa đơn hay đã trả tiền."""
-    ctx = seller_with_shop(client)
-    product_id = ctx["product"]["id"]
-    before = db.query(models.Product).filter(models.Product.id == product_id).one()
-    stock_before = before.stock
-    cost_before = before.cost_price
+def test_nang_db_fresh_tao_bang_moi_nhung_khong_bia_phieu_tu_ton_cu(tmp_path):
+    """Root/head tạo schema NCC nhưng không tự sinh chứng từ không có căn cứ."""
+    import sqlite3
+    from pathlib import Path
 
-    for table in (
-        "supplier_payment_allocations",
-        "supplier_payments",
-        "supplier_payable_entries",
-        "purchase_receipt_items",
-        "purchase_receipts",
-        "suppliers",
-    ):
-        db.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
-    db.commit()
+    from fselling.migration.coordinator import MigrationCoordinator
+    from fselling.migration.topology import StaticInventory
 
-    bootstrap.initialize()
-    db.expire_all()
-    after = db.query(models.Product).filter(models.Product.id == product_id).one()
-    assert after.stock == stock_before
-    assert after.cost_price == cost_before
-    assert db.query(models.Supplier).filter(
-        models.Supplier.shop_id == ctx["shop_id"]
-    ).count() == 0
-    assert db.query(models.PurchaseReceipt).filter(
-        models.PurchaseReceipt.shop_id == ctx["shop_id"]
-    ).count() == 0
+    database = tmp_path / "supplier-fresh.db"
+    project_root = Path(__file__).resolve().parent.parent
+    coordinator = MigrationCoordinator(
+        database,
+        project_root=project_root,
+        inventory_provider=StaticInventory(),
+    )
+    coordinator.init()
+    coordinator.upgrade()
+    coordinator.verify()
+
+    connection = sqlite3.connect(database)
+    try:
+        for table in (
+            "suppliers",
+            "purchase_receipts",
+            "purchase_receipt_items",
+            "supplier_payable_entries",
+            "supplier_payments",
+            "supplier_payment_allocations",
+        ):
+            assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] == 0
+    finally:
+        connection.close()
 
 
 def test_cac_bang_moi_ton_tai_va_migration_chay_lap(client, db):

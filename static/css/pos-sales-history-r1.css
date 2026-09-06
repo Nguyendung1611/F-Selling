@@ -1,0 +1,283 @@
+.sales-history-card {
+    width: min(980px, 96vw);
+    max-height: 92vh;
+    max-height: 92dvh;
+    overflow: auto;
+    padding: 22px;
+}
+
+.sales-history-header {
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--pos-line);
+}
+
+.sales-history-search {
+    margin-top: 16px;
+}
+
+.sales-history-search label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--pos-ink);
+    font-weight: 750;
+}
+
+.sales-history-search > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+}
+
+.sales-history-search input,
+.sales-history-search button,
+.sales-history-card button {
+    min-height: 44px;
+}
+
+.sales-history-search input {
+    min-width: 0;
+    margin: 0;
+    border-color: var(--pos-line);
+    background: var(--pos-paper);
+    color: var(--pos-ink);
+    font-size: 1rem;
+}
+
+.sales-history-search button {
+    min-width: 88px;
+    margin: 0;
+}
+
+.sales-history-scopes {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.sales-history-scopes button {
+    min-width: 110px;
+    border: 1px solid var(--pos-line);
+    background: var(--pos-soft);
+    color: var(--pos-ink);
+    box-shadow: none;
+}
+
+.sales-history-scopes button[aria-pressed="true"] {
+    border-color: var(--pos-orange-dark);
+    background: #fff1e7;
+    color: var(--pos-orange-dark);
+}
+
+.sales-history-hint {
+    margin: 10px 0 0;
+    color: var(--pos-muted);
+    font-size: var(--pos-text-meta);
+}
+
+.sales-history-status {
+    min-height: 24px;
+    margin: 12px 0;
+    color: var(--pos-muted);
+    line-height: 1.5;
+}
+
+.sales-history-status button {
+    margin: 6px 0 0 8px;
+    padding: 7px 12px;
+    border: 1px solid var(--pos-line);
+    background: var(--pos-paper);
+    color: var(--pos-orange-dark);
+    box-shadow: none;
+}
+
+.sales-history-list {
+    display: grid;
+    gap: 8px;
+}
+
+.sales-history-order {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr 1fr;
+    gap: 16px;
+    width: 100%;
+    min-height: 72px;
+    margin: 0;
+    padding: 12px 14px;
+    border: 1px solid var(--pos-line);
+    border-radius: 10px;
+    background: var(--pos-paper);
+    color: var(--pos-ink);
+    box-shadow: none;
+    text-align: left;
+}
+
+.sales-history-order:hover {
+    border-color: color-mix(in srgb, var(--pos-orange) 50%, var(--pos-line));
+    background: #fffaf6;
+}
+
+.sales-history-order > span {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+}
+
+.sales-history-order > span:last-child {
+    align-items: flex-end;
+    text-align: right;
+}
+
+.sales-history-order strong {
+    overflow-wrap: anywhere;
+    font-size: var(--pos-text-key);
+}
+
+.sales-history-order small {
+    overflow-wrap: anywhere;
+    color: var(--pos-muted);
+}
+
+.sales-history-order em {
+    width: fit-content;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--pos-success-soft);
+    color: var(--pos-success);
+    font-size: var(--pos-text-meta);
+    font-style: normal;
+    font-weight: 700;
+}
+
+.sales-history-more {
+    width: 100%;
+    margin: 12px 0 0;
+    border: 1px solid var(--pos-line);
+    background: var(--pos-soft);
+    color: var(--pos-ink);
+    box-shadow: none;
+}
+
+.sales-history-detail {
+    margin-top: 16px;
+    padding: 16px;
+    border: 1px solid color-mix(in srgb, var(--pos-orange) 38%, var(--pos-line));
+    border-left: 4px solid var(--pos-orange);
+    border-radius: 10px;
+    background: #fffaf6;
+    color: var(--pos-ink);
+}
+
+.sales-history-detail-head,
+.sales-history-detail-customer,
+.sales-history-detail-total,
+.sales-history-detail li {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.sales-history-detail-head {
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--pos-line);
+}
+
+.sales-history-detail ul {
+    display: grid;
+    gap: 8px;
+    margin: 12px 0;
+    padding: 0;
+    list-style: none;
+}
+
+.sales-history-detail-customer {
+    margin: 12px 0 0;
+}
+
+.sales-history-detail-customer span,
+.sales-history-detail li small {
+    color: var(--pos-muted);
+}
+
+.sales-history-detail li span:first-child {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+    overflow-wrap: anywhere;
+}
+
+.sales-history-detail-total {
+    margin: 0;
+    padding-top: 10px;
+    border-top: 1px solid var(--pos-line);
+}
+
+.sales-history-detail-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.sales-history-detail-actions button {
+    margin: 0;
+}
+
+.sales-history-detail-actions button:last-child {
+    border: 1px solid var(--pos-line);
+    background: var(--pos-paper);
+    color: var(--pos-ink);
+    box-shadow: none;
+}
+
+.sales-history-skeleton {
+    min-height: 72px;
+    border-radius: 10px;
+    background: linear-gradient(100deg, var(--pos-soft) 30%, #e5e9ef 50%, var(--pos-soft) 70%);
+    background-size: 220% 100%;
+    animation: sales-history-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes sales-history-pulse {
+    to { background-position-x: -220%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sales-history-skeleton { animation: none; }
+}
+
+@media (max-width: 640px) {
+    .sales-history-modal { align-items: stretch; }
+
+    .sales-history-card {
+        width: 100%;
+        max-height: none;
+        min-height: 100vh;
+        min-height: 100dvh;
+        padding: 16px 14px calc(16px + env(safe-area-inset-bottom));
+        border: 0;
+        border-radius: 0;
+    }
+
+    .sales-history-order {
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+    }
+
+    .sales-history-order > span:nth-child(2) {
+        grid-column: 1 / -1;
+        grid-row: 2;
+    }
+
+    .sales-history-search > div,
+    .sales-history-detail-actions {
+        grid-template-columns: 1fr;
+    }
+
+    .sales-history-search button,
+    .sales-history-detail-actions button {
+        width: 100%;
+    }
+}

@@ -168,7 +168,8 @@ def test_lo_khong_han_xep_sau_cung(client):
         session.add(
             models.ProductBatch(
                 product_id=sp["id"], shop_id=ctx["shop_id"],
-                expiry_date=None, quantity=5, cost_price=None,
+                expiry_date=None, quantity=5,
+                cost_known_qty=0, cost_unknown_qty=5, cost_basis_vnd=0,
             )
         )
         prod = session.query(models.Product).filter(

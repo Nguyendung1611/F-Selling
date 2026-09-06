@@ -61,9 +61,11 @@ def get_shop_stats(
     shop_id: int,
     tu_ngay: Optional[str] = Query(None, description="Lọc từ ngày (YYYY-MM-DD)"),
     den_ngay: Optional[str] = Query(None, description="Lọc đến ngày (YYYY-MM-DD)"),
+    contract_version: int = Query(1, ge=1, le=2),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
     return report_service.shop_stats(
-        db, current_user, shop_id, tu_ngay=tu_ngay, den_ngay=den_ngay
+        db, current_user, shop_id, tu_ngay=tu_ngay, den_ngay=den_ngay,
+        contract_version=contract_version,
     )

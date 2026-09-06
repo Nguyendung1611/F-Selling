@@ -30,6 +30,18 @@ def _bo_chu_thich(ma: str) -> str:
     return "\n".join(dong.split("//")[0] for dong in ma.splitlines())
 
 
+def test_nut_tim_va_them_khach_pos_co_ten_truy_cap_duoc():
+    html = _doc("static/pos.html")
+
+    tim = html[html.index('onclick="timKhachPOS()"'):]
+    tim = tim[:tim.index("</button>")]
+    them = html[html.index('onclick="hienFormKhachMoi()"'):]
+    them = them[:them.index("</button>")]
+
+    assert 'data-i18n-aria-label="pos.customer.search_placeholder"' in tim
+    assert 'data-i18n-aria-label="pos.customer.add_title"' in them
+
+
 # ---------- Điều kiện an toàn ----------
 def test_chi_luu_offline_khi_mat_mang_han():
     """Ba điều kiện phải cùng có mặt trong nhánh cứu hộ của `thuTaoDonDangDo`.
@@ -118,6 +130,7 @@ def test_co_ban_chup_danh_muc_de_con_ban_duoc():
     ma = _bo_chu_thich(js[dau:dau + 1200])
     assert "luuAnhChupSanPham(" in ma
     assert "docAnhChupSanPham(" in ma
+    assert "prepareV1(" in ma
 
 
 # ---------- Nối vào trang ----------
@@ -139,6 +152,9 @@ def test_da_bump_phien_ban_pos():
     assert "/js/pos.js?v=20260802-bien-the" not in html
     assert "/js/locales/pos.js?v=20260802-bien-the" not in html
     assert "/js/offline-ban.js?v=" in html
+    assert "/js/offline-ban.js?v=20260813-i09-f3&g=20260813-i09-g2h6" in html
+    assert "/js/pos.js?v=20260824-r14-production2" in html
+    assert "/js/api.js?v=20260812-i09-f1-c1" in html
 
 
 @pytest.mark.parametrize("khoa", CAU_OFFLINE)

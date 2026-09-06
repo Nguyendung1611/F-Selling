@@ -11,7 +11,8 @@ Bốn con số trả về cho mỗi sản phẩm:
     tốc độ bán  v   = (số đã bán trong kỳ - số khách trả về kệ) / số ngày trong kỳ
     còn bán được    = tồn khả dụng / v
     đệm dự phòng    = 1.65 x độ lệch chuẩn ngày x căn(thời gian đặt hàng)
-    cần nhập        = v x (thời gian đặt hàng + muốn đủ cho) + đệm - tồn khả dụng
+    cần nhập        = v x (thời gian đặt hàng + muốn đủ cho) + đệm
+                      - tồn khả dụng - hàng đã đặt đang về
 
 Đệm dự phòng dùng độ lệch chuẩn chứ không dùng một tỷ lệ phần trăm cố định:
 hàng bán đều mỗi ngày thì gần như không cần đệm, hàng lúc bán 1 lúc bán 50 mới
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -56,6 +58,26 @@ HE_SO_AN_TOAN = 1.65
 # Dưới ngần này ngày có phát sinh bán thì con số chỉ là gợi ý, không phải dự
 # báo - giao diện phải nói ra điều đó thay vì để chủ shop tin là chắc chắn.
 NGUONG_DU_LIEU_YEU = 5
+
+
+def _so_luong_dang_ve(db: Session, shop_id: int) -> Dict[int, int]:
+    rows = (
+        db.query(
+            models.PurchaseOrderItem.product_id,
+            func.sum(models.PurchaseOrderItem.quantity),
+        )
+        .join(
+            models.PurchaseOrder,
+            models.PurchaseOrder.id == models.PurchaseOrderItem.purchase_order_id,
+        )
+        .filter(
+            models.PurchaseOrder.shop_id == shop_id,
+            models.PurchaseOrder.status == "ORDERED",
+        )
+        .group_by(models.PurchaseOrderItem.product_id)
+        .all()
+    )
+    return {int(product_id): int(quantity or 0) for product_id, quantity in rows}
 
 # Trạng thái, xếp theo mức gấp giảm dần.
 TT_HET_HANG = "HET_HANG"        # tồn 0 mà vẫn đang bán được
@@ -111,7 +133,7 @@ def _da_ban_theo_ngay(
         db.query(
             models.OrderItem.product_id,
             ngay_ban,
-            func.sum(models.OrderItem.quantity),
+            models.OrderItem.quantity,
         )
         .join(models.Order, models.Order.id == models.OrderItem.order_id)
         .filter(
@@ -121,7 +143,6 @@ def _da_ban_theo_ngay(
             models.Order.created_at < moc_cuoi,
             models.OrderItem.product_id.isnot(None),
         )
-        .group_by(models.OrderItem.product_id, ngay_ban)
         .all()
     )
     for product_id, ngay, so_luong in ban:
@@ -138,7 +159,7 @@ def _da_ban_theo_ngay(
         db.query(
             models.OrderReturnItem.product_id,
             ngay_tra,
-            func.sum(models.OrderReturnItem.quantity),
+            models.OrderReturnItem.quantity,
         )
         .join(
             models.OrderReturn,
@@ -151,7 +172,6 @@ def _da_ban_theo_ngay(
             models.OrderReturn.created_at < moc_cuoi,
             models.OrderReturnItem.product_id.isnot(None),
         )
-        .group_by(models.OrderReturnItem.product_id, ngay_tra)
         .all()
     )
     for product_id, ngay, so_luong in tra:
@@ -263,6 +283,7 @@ def du_bao_nhap_hang(
 
     ban_theo_ngay = _da_ban_theo_ngay(db, shop_id, moc_dau, moc_cuoi)
     ncc_theo_sp = _nha_cung_cap_gan_nhat(db, shop_id)
+    dang_ve_theo_sp = _so_luong_dang_ve(db, shop_id)
 
     san_pham = (
         db.query(models.Product)
@@ -289,6 +310,7 @@ def du_bao_nhap_hang(
         # `prod.stock` ở đây là tính cả hàng hết hạn vào số bán được, rồi báo
         # "còn nhiều, khỏi nhập" trong khi kệ toàn hàng phải hủy.
         ton = inventory_service.ton_kha_dung(db, prod)
+        dang_ve = dang_ve_theo_sp.get(prod.id, 0)
 
         con_ban_duoc_ngay = round(ton / van_toc, 1) if van_toc > 0 else None
         dem_du_phong = (
@@ -299,7 +321,10 @@ def du_bao_nhap_hang(
         can_nhap = 0
         if van_toc > 0:
             can_nhap = math.ceil(
-                van_toc * (thoi_gian_dat_hang + muon_du_cho) + dem_du_phong - ton
+                van_toc * (thoi_gian_dat_hang + muon_du_cho)
+                + dem_du_phong
+                - ton
+                - dang_ve
             )
             can_nhap = max(0, can_nhap)
 
@@ -309,6 +334,7 @@ def du_bao_nhap_hang(
             "ma": prod.code,
             "ton_kho": ton,
             "ton_tong": int(prod.stock or 0),
+            "dang_ve": dang_ve,
             "theo_lo": bool(prod.track_batches),
             "da_ban_trong_ky": da_ban,
             "ban_moi_ngay": round(van_toc, 2),
@@ -330,7 +356,9 @@ def du_bao_nhap_hang(
                 don_gia = ncc["don_gia_lan_truoc"] or None
             dong["gia_von"] = don_gia
             dong["tien_can_bo_ra"] = (
-                int(round(don_gia * can_nhap)) if don_gia is not None else None
+                int((Decimal(don_gia) * Decimal(can_nhap)).to_integral_value(rounding=ROUND_HALF_UP))
+                if don_gia is not None
+                else None
             )
             if dong["tien_can_bo_ra"]:
                 tong_tien += dong["tien_can_bo_ra"]

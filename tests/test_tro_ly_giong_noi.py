@@ -30,6 +30,9 @@ def test_nut_mic_mac_dinh_AN_va_chi_hien_khi_that_su_nghe_duoc():
 
     vi_tri = html.index('id="assistantMic"')
     assert "display:none" in html[vi_tri:vi_tri + 260], "nút mic phải ẩn sẵn trong HTML"
+    assert 'data-i18n-aria-label="seller.assistant.mic_hint"' in html[
+        vi_tri:vi_tri + 360
+    ]
 
     kiem_tra = _function(js, "function ngheDuocKhong()", "function docTraLoiDangBat()")
     # Trang chạy http trên IP LAN thì Chrome chặn mic; nút sẽ bấm mãi không ra gì.

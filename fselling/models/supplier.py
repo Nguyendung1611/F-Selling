@@ -56,6 +56,7 @@ class Supplier(Base):
     )
 
     receipts = relationship("PurchaseReceipt", back_populates="supplier")
+    purchase_orders = relationship("PurchaseOrder", back_populates="supplier")
     payable_entries = relationship("SupplierPayableEntry", back_populates="supplier")
     payments = relationship("SupplierPayment", back_populates="supplier")
 
@@ -87,11 +88,19 @@ class PurchaseReceipt(Base):
             "confirm_operation_id",
             unique=True,
         ),
+        Index(
+            "ux_purchase_receipts_purchase_order_id",
+            "purchase_order_id",
+            unique=True,
+        ),
     )
 
     id = Column(Integer, primary_key=True)
     shop_id = Column(Integer, ForeignKey("shops.id"), nullable=False)
     supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False)
+    purchase_order_id = Column(
+        Integer, ForeignKey("purchase_orders.id"), nullable=True
+    )
     status = Column(String(16), nullable=False, default="DRAFT")
     supplier_invoice_number = Column(String(128), nullable=True)
     # Ngày chứng từ/ngày đến hạn là ngày lịch, lưu YYYY-MM-DD như hạn lô.
@@ -121,6 +130,7 @@ class PurchaseReceipt(Base):
     confirmed_at = Column(DateTime, nullable=True)
 
     supplier = relationship("Supplier", back_populates="receipts")
+    purchase_order = relationship("PurchaseOrder", back_populates="receipt")
     items = relationship("PurchaseReceiptItem", back_populates="receipt")
     payable_entry = relationship(
         "SupplierPayableEntry", back_populates="receipt", uselist=False
@@ -154,6 +164,84 @@ class PurchaseReceiptItem(Base):
     batch_id = Column(Integer, ForeignKey("product_batches.id"), nullable=True)
 
     receipt = relationship("PurchaseReceipt", back_populates="items")
+
+
+class PurchaseOrder(Base):
+    """Đơn đặt NCC không đụng kho/nợ; receipt confirm mới ghi nhận hàng về."""
+
+    __tablename__ = "purchase_orders"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('DRAFT', 'ORDERED', 'RECEIVED', 'CANCELLED')",
+            name="ck_purchase_orders_status",
+        ),
+        Index("ix_purchase_orders_shop_created", "shop_id", "created_at"),
+        Index("ix_purchase_orders_supplier_created", "supplier_id", "created_at"),
+        Index("ix_purchase_orders_shop_status", "shop_id", "status"),
+        Index("ux_purchase_orders_create_operation_id", "create_operation_id", unique=True),
+        Index("ux_purchase_orders_place_operation_id", "place_operation_id", unique=True),
+        Index("ux_purchase_orders_cancel_operation_id", "cancel_operation_id", unique=True),
+    )
+
+    id = Column(Integer, primary_key=True)
+    shop_id = Column(Integer, ForeignKey("shops.id"), nullable=False)
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False)
+    status = Column(String(16), nullable=False, default="DRAFT")
+    expected_date = Column(String(10), nullable=True)
+    note = Column(String(500), nullable=True)
+
+    create_operation_id = Column(String(128), nullable=False)
+    create_fingerprint = Column(String(64), nullable=False)
+    place_operation_id = Column(String(128), nullable=True)
+    place_fingerprint = Column(String(64), nullable=True)
+    cancel_operation_id = Column(String(128), nullable=True)
+
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    updated_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    placed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    cancelled_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    received_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+    )
+    placed_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    received_at = Column(DateTime, nullable=True)
+
+    supplier = relationship("Supplier", back_populates="purchase_orders")
+    items = relationship("PurchaseOrderItem", back_populates="order")
+    receipt = relationship("PurchaseReceipt", back_populates="purchase_order", uselist=False)
+
+
+class PurchaseOrderItem(Base):
+    __tablename__ = "purchase_order_items"
+    __table_args__ = (
+        CheckConstraint(
+            "quantity > 0", name="ck_purchase_order_items_quantity_positive"
+        ),
+        Index("ix_purchase_order_items_order_id", "purchase_order_id"),
+        Index("ix_purchase_order_items_product_id", "product_id"),
+        Index(
+            "ux_purchase_order_items_order_product",
+            "purchase_order_id",
+            "product_id",
+            unique=True,
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    purchase_order_id = Column(
+        Integer, ForeignKey("purchase_orders.id"), nullable=False
+    )
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    product_name = Column(String(300), nullable=False)
+    quantity = Column(Integer, nullable=False)
+
+    order = relationship("PurchaseOrder", back_populates="items")
 
 
 class SupplierPayableEntry(Base):
@@ -279,6 +367,8 @@ __all__ = [
     "Supplier",
     "PurchaseReceipt",
     "PurchaseReceiptItem",
+    "PurchaseOrder",
+    "PurchaseOrderItem",
     "SupplierPayableEntry",
     "SupplierPayment",
     "SupplierPaymentAllocation",

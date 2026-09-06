@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from .. import models
 from ..core import thoi_gian
 from ..core.i18n import tr
+from ..core.numeric_limits import MAX_SAFE_QUANTITY
 from ..dependencies import require_cost_visibility, require_shop_access
 from ..schemas.catalog import WriteOffCreate
 from . import inventory_service
@@ -98,8 +99,8 @@ def _ket_qua(
         # trình bày như tổng thiệt hại - con số đó thấp hơn sự thật.
         "total_cost": (
             None
-            if any(d.cost_price is None for d in dong)
-            else sum(float(d.cost_price) * d.quantity for d in dong)
+            if any(int(d.cost_unknown_qty or 0) > 0 for d in dong)
+            else sum(int(d.cost_basis_vnd or 0) for d in dong)
         ),
         "items": [
             {
@@ -109,6 +110,9 @@ def _ket_qua(
                 "expiry_date": d.expiry_date,
                 "quantity": d.quantity,
                 "cost_price": d.cost_price,
+                "known_qty": d.cost_known_qty,
+                "unknown_qty": d.cost_unknown_qty,
+                "cost_basis_vnd": d.cost_basis_vnd,
             }
             for d in dong
         ],
@@ -129,10 +133,10 @@ def _gom_dong(request: WriteOffCreate) -> List[Any]:
         )
     da_gap = set()
     for it in request.items:
-        if it.quantity <= 0:
+        if it.quantity <= 0 or it.quantity > MAX_SAFE_QUANTITY:
             raise HTTPException(
                 status_code=400,
-                detail=tr("Số lượng hủy phải lớn hơn 0"),
+                detail=tr("Số lượng hủy nằm ngoài giới hạn"),
             )
         khoa = (it.product_id, it.batch_id)
         if khoa in da_gap:
@@ -246,9 +250,6 @@ def create_write_off(
                 "prod": prod,
                 "lo": lo,
                 "quantity": it.quantity,
-                # Giá vốn của ĐÚNG lô bị hủy, không phải bình quân của sản phẩm:
-                # lô nhập đắt hỏng trên kệ là mất đúng số tiền của lô đó.
-                "cost_price": lo.cost_price,
                 "expiry_date": lo.expiry_date,
             })
             continue
@@ -276,7 +277,6 @@ def create_write_off(
             "prod": prod,
             "lo": None,
             "quantity": it.quantity,
-            "cost_price": prod.cost_price,
             "expiry_date": None,
         })
 
@@ -303,6 +303,8 @@ def create_write_off(
     for d in chuan_bi:
         prod = d["prod"]
         so_luong = d["quantity"]
+        source = d["lo"] if d["lo"] is not None else prod
+        allocation = inventory_service.consume_cost_pool(source, int(so_luong))
         if d["lo"] is not None:
             # Lô về 0 thì GIỮ dòng lô lại chứ không xóa: đó là lịch sử, và
             # `order_item_batches` của các đơn cũ còn trỏ vào nó.
@@ -318,7 +320,9 @@ def create_write_off(
                 batch_id=d["lo"].id if d["lo"] is not None else None,
                 expiry_date=d["expiry_date"],
                 quantity=so_luong,
-                cost_price=d["cost_price"],
+                cost_known_qty=allocation.known_qty,
+                cost_unknown_qty=allocation.unknown_qty,
+                cost_basis_vnd=allocation.cost_basis_vnd,
             )
         )
 
@@ -381,6 +385,8 @@ def de_xuat_huy_het_han(
             "expiry_date": b.expiry_date,
             "quantity": b.quantity,
             "cost_price": b.cost_price,
+            "cost_basis_vnd": b.cost_basis_vnd,
+            "unknown_qty": b.cost_unknown_qty,
         }
         for b in lo
     ]
@@ -389,8 +395,8 @@ def de_xuat_huy_het_han(
         "total_quantity": sum(d["quantity"] for d in dong),
         "total_cost": (
             None
-            if any(d["cost_price"] is None for d in dong)
-            else sum(float(d["cost_price"]) * d["quantity"] for d in dong)
+            if any(int(d["unknown_qty"] or 0) > 0 for d in dong)
+            else sum(int(d["cost_basis_vnd"] or 0) for d in dong)
         ),
     }
 

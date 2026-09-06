@@ -12,7 +12,7 @@ from conftest import (
     new_staff,
     seller_with_shop,
 )
-from fselling.core import bootstrap
+import legacy_bootstrap_support as bootstrap
 from fselling.services import catalog_service
 
 

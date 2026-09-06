@@ -29,7 +29,8 @@
         #nhatKyShopSelector,
         .doi-soat-shop-field { display: none !important; }
     </style>
-    <link rel="stylesheet" href="/css/seller.css?v=20260808-dong-tien-k1">
+    <link rel="stylesheet" href="/css/seller.css?v=20260825-assistant-guided-tasks-r1-1&amp;onboarding=20260828-r2">
+    <link rel="stylesheet" href="/css/onboarding-r2.css?v=20260828-r2-1">
     <link rel="stylesheet" href="/css/subscriptions.css?v=20260807-goi-cuoc-f3">
     <link rel="stylesheet" href="/css/style.css?v=20260731-i18n4">
     <style>
@@ -242,8 +243,123 @@
             overflow-y: auto;
         }
 
+        .action-center-summary,
+        .action-center-list {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.85rem;
+        }
+        .action-center-summary { margin: 1.1rem 0; }
+        .action-center-summary-card,
+        .action-center-card {
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            background: #fff;
+        }
+        .action-center-summary-card { padding: 0.85rem 1rem; }
+        .action-center-summary-card small {
+            display: block;
+            color: var(--text-muted);
+            margin-bottom: 0.25rem;
+        }
+        .action-center-summary-card strong { font-size: 1.45rem; }
+        .action-center-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .action-center-card {
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+            padding: 1rem;
+            border-left-width: 5px;
+        }
+        .action-center-card.critical { border-left-color: #DC2626; }
+        .action-center-card.attention { border-left-color: #D97706; }
+        .action-center-card.plan { border-left-color: #2563EB; }
+        .action-center-card-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 0.75rem;
+        }
+        .action-center-card h4 { margin: 0; }
+        .action-center-card p {
+            margin: 0;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+        .action-center-severity {
+            flex: 0 0 auto;
+            padding: 0.2rem 0.5rem;
+            border-radius: 999px;
+            background: #F1F5F9;
+            font-size: 0.72rem;
+            font-weight: 700;
+        }
+        .action-center-card button { align-self: flex-start; margin-top: auto; }
+        .action-center-state {
+            display: none;
+            padding: 2rem 1rem;
+            text-align: center;
+            color: var(--text-muted);
+        }
+        .daily-close-panel {
+            display: none;
+            margin: 0 0 1.1rem;
+            padding: 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            background: #F8FAFC;
+        }
+        .daily-close-head,
+        .daily-close-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .daily-close-head h4 { margin: 0 0 0.25rem; }
+        .daily-close-head p { margin: 0; color: var(--text-muted); }
+        .daily-close-metrics {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.75rem;
+            margin: 0.9rem 0;
+        }
+        .daily-close-metric {
+            padding: 0.75rem;
+            border-radius: 10px;
+            background: #fff;
+            border: 1px solid var(--border-color);
+        }
+        .daily-close-metric small { display:block; color:var(--text-muted); }
+        .daily-close-metric strong { font-size:1.2rem; }
+        .daily-close-list { display: grid; gap: 0.55rem; }
+        .daily-close-row {
+            padding: 0.7rem 0.8rem;
+            border-radius: 10px;
+            background: #fff;
+            border: 1px solid var(--border-color);
+        }
+        .daily-close-row-main { min-width: 0; }
+        .daily-close-row-main strong { display:block; }
+        .daily-close-row-main small { color:var(--text-muted); }
+        .daily-close-status {
+            flex: 0 0 auto;
+            padding: 0.22rem 0.55rem;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            background: #E2E8F0;
+        }
+        .daily-close-status.blocking { color:#991B1B; background:#FEE2E2; }
+        .daily-close-status.attention { color:#92400E; background:#FEF3C7; }
+        .daily-close-status.clear { color:#166534; background:#DCFCE7; }
+
         @media (max-width: 760px) {
-            .doi-soat-list { grid-template-columns: 1fr; }
+            .doi-soat-list,
+            .action-center-summary,
+            .action-center-list,
+            .daily-close-metrics { grid-template-columns: 1fr; }
+            .daily-close-row { align-items:flex-start; flex-direction:column; }
         }
 
         @media (max-width: 480px) {
@@ -264,61 +380,182 @@
     </style>
        
 </head>
-<body>
-    <div class="nav-bar">
-        <img class="logo" src="img/logo.png" alt="Logo FSelling">   
-        <div class="flex-row" style="gap: 1rem; align-items: center;">
-            <label class="language-switcher">
-                <span data-i18n="common.language">Ngôn ngữ</span>
-                <select data-language-selector data-i18n-aria-label="common.language">
-                    <option value="vi" data-i18n="common.language.vi">Tiếng Việt</option>
-                    <option value="en" data-i18n="common.language.en">English</option>
-                </select>
-            </label>
-            <!-- MỘT ô chọn cửa hàng cho cả trang. Trước đây mỗi tab có ô riêng
-                 (9 ô trên một trang) và mỗi tab giữ biến trạng thái riêng, nên
-                 đổi cửa hàng ở tab này rồi sang tab khác vẫn thấy số của cửa
-                 hàng cũ — người dùng tưởng phần mềm hỏng. -->
-            <label id="oChonCuaHangChung" style="display: none; align-items: center; gap: 0.4rem; margin-right: 0.75rem;">
-                <span style="font-size: 0.85rem; color: var(--text-muted); white-space: nowrap;" data-i18n="seller.fields.shop">Cửa hàng</span>
-                <select id="shopChungSelect" onchange="doiCuaHangChung(this.value)" style="margin-bottom: 0; min-width: 11rem;"></select>
-            </label>
-            <button id="btnBackAdmin" class="btn-outline" onclick="navigateToPage('/admin')" style="display:none; align-items:center; gap:0.3rem;"><i class="ph ph-arrow-left"></i> <span data-i18n="seller.nav.back_admin">Về Admin</span></button>
-            <button id="btnOpenPos" onclick="openPosShopSelector()" style="display: flex; align-items: center; gap: 0.3rem; background: var(--primary);"><i class="ph ph-shopping-cart"></i> <span data-i18n="seller.nav.open_pos">Mở POS Bán Hàng</span></button>
-            <button class="btn-outline" onclick="showChangePasswordModal()" style="display: flex; align-items: center; gap: 0.3rem;"><i class="ph ph-key"></i> <span data-i18n="common.change_password">Đổi mật khẩu</span></button>
-            <button class="btn-outline" onclick="logout()" style="display: flex; align-items: center; gap: 0.3rem;"><i class="ph ph-sign-out"></i> <span data-i18n="common.logout">Đăng xuất</span></button>
-        </div>
-    </div>
+<body class="seller-page">
+    <section id="firstRunShell" class="first-run-shell" hidden aria-labelledby="firstRunTitle">
+        <header class="first-run-header">
+            <img class="first-run-logo" src="/img/logo.png" alt="F-Selling">
+            <div class="first-run-header-actions">
+                <label class="language-switcher">
+                    <span data-i18n="common.language">Ngôn ngữ</span>
+                    <select data-language-selector data-i18n-aria-label="common.language">
+                        <option value="vi" data-i18n="common.language.vi">Tiếng Việt</option>
+                        <option value="en" data-i18n="common.language.en">English</option>
+                    </select>
+                </label>
+                <button id="firstRunLogout" type="button" class="btn-outline" onclick="logout()" data-i18n="common.logout">Đăng xuất</button>
+            </div>
+        </header>
+        <div class="first-run-card">
+            <p id="firstRunProgress" class="first-run-progress" aria-live="polite" data-i18n="seller.first_run.progress_shop">Bước 1/3</p>
+            <h1 id="firstRunTitle" data-i18n="seller.first_run.step_shop.title">Bắt đầu với cửa hàng của mình</h1>
+            <p data-i18n="seller.first_run.step_shop.description">Chỉ cần hai thông tin để mở quầy. Những phần còn lại có thể bổ sung sau.</p>
 
-    <div class="container" style="max-width: 1200px; margin: 2rem auto;">
-        
-        <!-- Tabs Header -->
-        <div class="tabs-wrapper">
-            <button class="tab-btn active" data-main-tab="dashboard" onclick="switchTab('dashboard', this)"><i class="ph ph-chart-bar"></i> <span data-i18n="seller.tabs.dashboard">Thống Kê</span></button>
-            <button class="tab-btn" id="tabDoiSoat" data-main-tab="reconciliation" onclick="switchTab('reconciliation', this)">
-                <i class="ph ph-warning-diamond"></i> <span data-i18n="seller.tabs.reconciliation">Cần Đối Soát</span>
-                <span id="doiSoatBadge" class="doi-soat-badge" data-i18n-aria-label="seller.reconciliation.badge_aria">0</span>
-            </button>
-            <button class="tab-btn" data-main-tab="assistant" onclick="switchTab('assistant', this)"><i class="ph ph-chat-circle-dots"></i> <span data-i18n="seller.tabs.assistant">Trợ Lý</span></button>
-            <button class="tab-btn" data-main-tab="warehouse" onclick="switchTab('warehouse', this)"><i class="ph ph-package"></i> <span data-i18n="seller.tabs.warehouse">Kho Hàng</span></button>
-            <!-- Phiếu nhập chứa giá nhập và công nợ nên mặc định ẩn. applyRoleUI
-                 chỉ mở cho chủ shop; server vẫn là lớp chặn quyền thật. -->
-            <button class="tab-btn" id="tabPurchasing" data-main-tab="purchasing" onclick="switchTab('purchasing', this)" style="display:none;"><i class="ph ph-truck"></i> <span data-i18n="seller.tabs.purchasing">Nhập Hàng</span></button>
-            <!-- Chi phí và lãi ròng cùng vòng bí mật với giá vốn (biết lãi ròng
-                 là suy ngược ra được giá vốn) nên mặc định ẩn; applyRoleUI chỉ
-                 mở cho chủ shop. Server vẫn là lớp chặn quyền thật. -->
-            <button class="tab-btn" id="tabCashflow" data-main-tab="cashflow" onclick="switchTab('cashflow', this)" style="display:none;"><i class="ph ph-wallet"></i> <span data-i18n="seller.tabs.cashflow">Dòng Tiền</span></button>
-            <button class="tab-btn" data-main-tab="kiemke" onclick="switchTab('kiemke', this)"><i class="ph ph-clipboard-text"></i> <span data-i18n="seller.tabs.stocktake">Kiểm Kê</span></button>
-            <button class="tab-btn" data-main-tab="voucher" onclick="switchTab('voucher', this)"><i class="ph ph-ticket"></i> <span data-i18n="seller.tabs.vouchers">Khuyến Mãi</span></button>
-            <button class="tab-btn" data-main-tab="customers" onclick="switchTab('customers', this)"><i class="ph ph-users"></i> <span data-i18n="seller.tabs.customers">Khách Hàng</span></button>
-            <button class="tab-btn" id="tabLoyalty" data-main-tab="loyalty" onclick="switchTab('loyalty', this)" style="display:none;"><i class="ph ph-star"></i> <span data-i18n="seller.tabs.loyalty">Tích Điểm</span></button>
-            <button class="tab-btn" id="tabSubscription" data-main-tab="subscription" onclick="switchTab('subscription', this)" style="display:none;"><i class="ph ph-crown"></i> <span data-i18n="subscription.seller.tab">Gói cước</span></button>
-            <button class="tab-btn" data-main-tab="nhatky" onclick="switchTab('nhatky', this)"><i class="ph ph-clock-counter-clockwise"></i> <span data-i18n="seller.tabs.activity">Ai Làm Gì</span></button>
-            <button class="tab-btn" data-main-tab="settings" onclick="switchTab('settings', this)"><i class="ph ph-sliders"></i> <span data-i18n="seller.tabs.settings">Cài Đặt</span></button>
-        </div>
+            <form id="firstRunShopForm" class="first-run-form">
+                <label class="first-run-field" for="firstRunShopName">
+                    <span data-i18n="seller.first_run.shop_name">Tên cửa hàng</span>
+                    <input id="firstRunShopName" name="name" type="text" autocomplete="organization" required>
+                </label>
+                <label class="first-run-field" for="firstRunShopPhone">
+                    <span data-i18n="seller.first_run.shop_phone">Số điện thoại</span>
+                    <input id="firstRunShopPhone" name="phone" type="tel" autocomplete="tel" required>
+                </label>
+                <p class="first-run-form-error" role="alert" aria-live="assertive"></p>
+                <div class="first-run-actions">
+                    <button type="submit" class="btn-primary" data-i18n="seller.first_run.create_shop">Tạo cửa hàng và tiếp tục</button>
+                </div>
+            </form>
 
+            <form id="firstRunProductForm" class="first-run-form" hidden>
+                <h2 data-i18n="seller.first_run.step_product.title">Thêm một món đang có trong cửa hàng</h2>
+                <p data-i18n="seller.first_run.step_product.description">Nhập đúng mặt hàng và số lượng thực đang có.</p>
+                <label class="first-run-field" for="firstRunProductName">
+                    <span data-i18n="seller.first_run.product_name">Tên sản phẩm</span>
+                    <input id="firstRunProductName" name="name" type="text" required>
+                </label>
+                <label class="first-run-field" for="firstRunProductPrice">
+                    <span data-i18n="seller.first_run.product_price">Giá bán (đồng)</span>
+                    <input id="firstRunProductPrice" name="price" type="number" inputmode="numeric" min="1" placeholder="10000" data-i18n-placeholder="seller.first_run.product_price_placeholder" required>
+                </label>
+                <label class="first-run-field" for="firstRunProductStock">
+                    <span data-i18n="seller.first_run.product_stock">Số lượng đang có</span>
+                    <input id="firstRunProductStock" name="stock" type="number" inputmode="numeric" min="1" placeholder="10" data-i18n-placeholder="seller.first_run.product_stock_placeholder" required>
+                </label>
+                <p class="first-run-form-error" role="alert" aria-live="assertive"></p>
+                <div class="first-run-actions">
+                    <button type="submit" class="btn-primary" data-i18n="seller.first_run.save_product">Lưu mặt hàng</button>
+                </div>
+            </form>
+
+            <section id="firstRunProductSummary" hidden aria-labelledby="firstRunProductSummaryTitle">
+                <h2 id="firstRunProductSummaryTitle" data-i18n="seller.first_run.step_sale.title">Mở quầy bán hàng</h2>
+                <p data-i18n="seller.first_run.step_sale.description">Kiểm tra mặt hàng rồi mở quầy để bán đơn đầu tiên.</p>
+                <div class="first-run-actions">
+                    <button id="firstRunOpenPos" type="button" class="btn-primary" data-i18n="seller.first_run.open_pos">Mở quầy và bán đơn đầu tiên</button>
+                    <button id="firstRunEditProduct" type="button" class="btn-outline" data-i18n="seller.first_run.edit_product">Sửa lại mặt hàng</button>
+                </div>
+            </section>
+
+            <div class="first-run-actions">
+                <button id="firstRunSkip" type="button" class="btn-outline" data-i18n="seller.first_run.skip">Để sau, vào quản lý</button>
+                <button id="firstRunHelp" type="button" class="btn-outline" aria-controls="firstRunLocalHelp" aria-expanded="false" data-i18n="seller.first_run.help">Không biết làm? Hỏi Trợ lý</button>
+            </div>
+            <section id="firstRunLocalHelp" class="first-run-local-help" hidden aria-labelledby="firstRunLocalHelpTitle">
+                <h2 id="firstRunLocalHelpTitle" data-i18n="seller.first_run.local_help_title">Hướng dẫn bắt đầu</h2>
+                <p data-i18n="seller.first_run.local_help">Điền tên cửa hàng dễ nhận ra và số điện thoại bạn đang dùng. Sau đó thêm một mặt hàng thật đang có để mở quầy.</p>
+                <p><span data-i18n="seller.first_run.support_zalo">Hỗ trợ Zalo:</span> <span data-i18n="seller.first_run.support_phone">Điện thoại:</span> 0774867057</p>
+            </section>
+        </div>
+    </section>
+
+    <div id="sellerAppShell" class="seller-app-shell">
+        <aside class="seller-sidebar" id="sellerSidebar" data-i18n-aria-label="seller.nav.navigation" aria-label="Chức năng quản trị">
+            <div class="seller-brand-row">
+                <img class="logo" src="img/logo.png" alt="Logo FSelling">
+                <button class="seller-nav-close" type="button" onclick="setSellerNavigation(false)" data-i18n-aria-label="seller.nav.close_menu" aria-label="Đóng menu">
+                    <i class="ph ph-x"></i>
+                </button>
+            </div>
+
+            <button id="btnOpenPos" class="seller-open-pos" onclick="openPosShopSelector()"><i class="ph ph-shopping-cart"></i> <span data-i18n="seller.nav.open_pos">Mở POS bán hàng</span></button>
+
+            <nav class="tabs-wrapper" data-i18n-aria-label="seller.nav.navigation" aria-label="Chức năng">
+                <section class="seller-nav-group">
+                    <h2 data-i18n="seller.nav.group.overview">Tổng quan</h2>
+                    <button class="tab-btn active" data-main-tab="dashboard" onclick="switchTab('dashboard', this)" aria-current="page"><i class="ph ph-chart-bar"></i> <span data-i18n="seller.tabs.dashboard">Thống kê</span></button>
+                    <button class="tab-btn" id="tabActionCenter" data-main-tab="action-center" onclick="switchTab('action-center', this)" style="display:none;">
+                        <i class="ph ph-list-checks"></i> <span data-i18n="seller.tabs.action_center">Cần xử lý</span>
+                        <span id="actionCenterBadge" class="doi-soat-badge" data-i18n-aria-label="seller.action_center.badge_aria">0</span>
+                    </button>
+                    <button class="tab-btn" id="tabDoiSoat" data-main-tab="reconciliation" onclick="switchTab('reconciliation', this)">
+                        <i class="ph ph-arrows-left-right"></i> <span data-i18n="seller.tabs.reconciliation">Đối soát</span>
+                        <span id="doiSoatBadge" class="doi-soat-badge" data-i18n-aria-label="seller.reconciliation.badge_aria">0</span>
+                    </button>
+                </section>
+
+                <section class="seller-nav-group">
+                    <h2 data-i18n="seller.nav.group.operations">Vận hành</h2>
+                    <button class="tab-btn" data-main-tab="warehouse" onclick="switchTab('warehouse', this)"><i class="ph ph-package"></i> <span data-i18n="seller.tabs.warehouse">Kho hàng</span></button>
+                    <!-- Phiếu nhập chứa giá nhập và công nợ nên mặc định ẩn. applyRoleUI
+                         chỉ mở cho chủ shop; server vẫn là lớp chặn quyền thật. -->
+                    <button class="tab-btn" id="tabPurchasing" data-main-tab="purchasing" onclick="switchTab('purchasing', this)" style="display:none;"><i class="ph ph-truck"></i> <span data-i18n="seller.tabs.purchasing">Nhập hàng</span></button>
+                    <button class="tab-btn" data-main-tab="kiemke" onclick="switchTab('kiemke', this)"><i class="ph ph-clipboard-text"></i> <span data-i18n="seller.tabs.stocktake">Kiểm kê</span></button>
+                </section>
+
+                <section class="seller-nav-group">
+                    <h2 data-i18n="seller.nav.group.sales_customers">Bán hàng &amp; khách</h2>
+                    <button class="tab-btn" data-main-tab="customers" onclick="switchTab('customers', this)"><i class="ph ph-users"></i> <span data-i18n="seller.tabs.customers">Khách hàng</span></button>
+                    <button class="tab-btn" data-main-tab="voucher" onclick="switchTab('voucher', this)"><i class="ph ph-ticket"></i> <span data-i18n="seller.tabs.vouchers">Khuyến mãi</span></button>
+                    <button class="tab-btn" id="tabLoyalty" data-main-tab="loyalty" onclick="switchTab('loyalty', this)" style="display:none;"><i class="ph ph-star"></i> <span data-i18n="seller.tabs.loyalty">Tích điểm</span></button>
+                </section>
+
+                <section class="seller-nav-group">
+                    <h2 data-i18n="seller.nav.group.management">Quản lý</h2>
+                    <!-- Chi phí và lãi ròng cùng vòng bí mật với giá vốn (biết lãi ròng
+                         là suy ngược ra được giá vốn) nên mặc định ẩn; applyRoleUI chỉ
+                         mở cho chủ shop. Server vẫn là lớp chặn quyền thật. -->
+                    <button class="tab-btn" id="tabCashflow" data-main-tab="cashflow" onclick="switchTab('cashflow', this)" style="display:none;"><i class="ph ph-wallet"></i> <span data-i18n="seller.tabs.cashflow">Dòng tiền</span></button>
+                    <button class="tab-btn" data-main-tab="nhatky" onclick="switchTab('nhatky', this)"><i class="ph ph-clock-counter-clockwise"></i> <span data-i18n="seller.tabs.activity">Nhật ký hoạt động</span></button>
+                </section>
+
+                <div class="seller-nav-utilities">
+                    <button class="tab-btn" data-main-tab="assistant" onclick="switchTab('assistant', this)"><i class="ph ph-chat-circle-dots"></i> <span data-i18n="seller.tabs.assistant">Trợ lý</span></button>
+                    <button class="tab-btn" id="tabSubscription" data-main-tab="subscription" onclick="switchTab('subscription', this)" style="display:none;"><i class="ph ph-crown"></i> <span data-i18n="subscription.seller.tab">Gói cước</span></button>
+                    <button class="tab-btn" data-main-tab="settings" onclick="switchTab('settings', this)"><i class="ph ph-sliders"></i> <span data-i18n="seller.tabs.settings">Cài đặt</span></button>
+                </div>
+
+                <div class="seller-account-actions">
+                    <label class="language-switcher">
+                        <span data-i18n="common.language">Ngôn ngữ</span>
+                        <select data-language-selector data-i18n-aria-label="common.language">
+                            <option value="vi" data-i18n="common.language.vi">Tiếng Việt</option>
+                            <option value="en" data-i18n="common.language.en">English</option>
+                        </select>
+                    </label>
+                    <button id="btnBackAdmin" class="seller-sidebar-action" onclick="navigateToPage('/admin')" style="display:none;"><i class="ph ph-arrow-left"></i> <span data-i18n="seller.nav.back_admin">Về Admin</span></button>
+                    <button class="seller-sidebar-action" onclick="showChangePasswordModal()"><i class="ph ph-key"></i> <span data-i18n="common.change_password">Đổi mật khẩu</span></button>
+                    <button class="seller-sidebar-action" onclick="logout()"><i class="ph ph-sign-out"></i> <span data-i18n="common.logout">Đăng xuất</span></button>
+                </div>
+            </nav>
+        </aside>
+
+        <button id="sellerNavScrim" class="seller-nav-scrim" type="button" onclick="setSellerNavigation(false)" tabindex="-1" data-i18n-aria-label="seller.nav.close_menu" aria-label="Đóng menu"></button>
+
+        <div class="seller-workspace">
+            <header class="nav-bar">
+                <button id="sellerNavToggle" class="seller-nav-toggle" type="button" onclick="setSellerNavigation(true)" aria-controls="sellerSidebar" aria-expanded="false" data-i18n-aria-label="seller.nav.open_menu" aria-label="Mở menu">
+                    <i class="ph ph-list"></i>
+                </button>
+                <div class="seller-page-context">
+                    <small data-i18n="seller.nav.management_area">Quản trị cửa hàng</small>
+                    <strong id="sellerPageTitle" data-i18n="seller.tabs.dashboard">Thống kê</strong>
+                </div>
+                <div class="seller-nav-spacer"></div>
+                <!-- MỘT ô chọn cửa hàng cho cả trang. Trước đây mỗi tab có ô riêng
+                     và giữ trạng thái riêng, khiến người dùng tưởng phần mềm hỏng. -->
+                <label id="oChonCuaHangChung" style="display: none; align-items: center; gap: 0.4rem;">
+                    <span data-i18n="seller.fields.shop">Cửa hàng</span>
+                    <select id="shopChungSelect" onchange="doiCuaHangChung(this.value)"></select>
+                </label>
+            </header>
+
+            <main class="container seller-main">
         <!-- TAB 1: THỐNG KÊ (DASHBOARD) -->
         <div id="dashboard" class="tab-content active glass-card">
+            <aside id="firstRunResumeCard" class="first-run-resume" hidden aria-labelledby="firstRunResumeTitle">
+                <h3 id="firstRunResumeTitle" data-i18n="seller.first_run.resume_title">Tiếp tục thiết lập</h3>
+                <p id="firstRunResumeText" aria-live="polite"></p>
+                <button id="firstRunResumeAction" type="button" class="btn-primary"></button>
+            </aside>
             <div id="dashboardShopSelector" style="margin-bottom: 2rem;">
                 <h3 style="margin-bottom: 1rem;"><i class="ph ph-storefront"></i> <span data-i18n="seller.dashboard.choose_shop">Chọn Cửa Hàng Xem Thống Kê</span></h3>
                 <div id="dashShopList" style="display: flex; gap: 1rem; flex-wrap: wrap;"></div>
@@ -441,6 +678,48 @@
             </div>
         </div>
 
+        <!-- Action Center chỉ tổng hợp và điều hướng; mọi mutation vẫn ở màn gốc. -->
+        <div id="action-center" class="tab-content glass-card">
+            <div class="doi-soat-toolbar">
+                <div>
+                    <h3 style="margin-bottom:0.35rem;"><i class="ph ph-list-checks"></i> <span data-i18n="seller.action_center.title">Cần xử lý hôm nay</span></h3>
+                    <p style="margin:0; color:var(--text-muted); font-size:0.88rem; line-height:1.55;" data-i18n="seller.action_center.description">Một nơi để thấy việc cần chú ý; bấm xem sẽ mở đúng màn xử lý và không tự thay đổi dữ liệu.</p>
+                </div>
+                <button class="btn-outline" type="button" onclick="loadActionCenter()">
+                    <i class="ph ph-arrows-clockwise"></i> <span data-i18n="seller.actions.reload">Tải lại</span>
+                </button>
+            </div>
+
+            <div class="action-center-summary">
+                <div class="action-center-summary-card"><small data-i18n="seller.action_center.critical">Khẩn cấp</small><strong id="actionCenterCritical">0</strong></div>
+                <div class="action-center-summary-card"><small data-i18n="seller.action_center.attention">Cần chú ý</small><strong id="actionCenterAttention">0</strong></div>
+                <div class="action-center-summary-card"><small data-i18n="seller.action_center.plan">Kế hoạch</small><strong id="actionCenterPlan">0</strong></div>
+            </div>
+
+            <section id="dailyClosePanel" class="daily-close-panel" aria-live="polite">
+                <div class="daily-close-head">
+                    <div>
+                        <h4><i class="ph ph-calendar-check"></i> <span data-i18n="seller.daily_close.title">Kiểm tra cuối ngày</span></h4>
+                        <p><span data-i18n="seller.daily_close.description">Checklist chỉ đọc từ dữ liệu hiện tại; xử lý vẫn thực hiện ở màn nghiệp vụ gốc.</span> <span id="dailyCloseDate"></span></p>
+                    </div>
+                    <span id="dailyCloseStatus" class="daily-close-status"></span>
+                </div>
+                <div class="daily-close-metrics">
+                    <div class="daily-close-metric"><small data-i18n="seller.daily_close.revenue">Doanh thu hôm nay</small><strong id="dailyCloseRevenue">0 ₫</strong></div>
+                    <div class="daily-close-metric"><small data-i18n="seller.daily_close.orders">Đơn hôm nay</small><strong id="dailyCloseOrders">0</strong></div>
+                </div>
+                <div id="dailyCloseList" class="daily-close-list"></div>
+            </section>
+
+            <div id="actionCenterLoading" class="action-center-state"><i class="ph ph-spinner-gap"></i> <span data-i18n="seller.action_center.loading">Đang tổng hợp việc cần xử lý...</span></div>
+            <div id="actionCenterError" class="action-center-state">
+                <i class="ph ph-warning-circle"></i> <span id="actionCenterErrorText" data-i18n="seller.action_center.error">Không tải được danh sách.</span>
+                <button class="btn-outline" type="button" onclick="loadActionCenter()" data-i18n="seller.action_center.retry">Thử lại</button>
+            </div>
+            <div id="actionCenterEmpty" class="action-center-state"><i class="ph ph-check-circle" style="display:block; color:var(--success); font-size:2.2rem; margin-bottom:0.45rem;"></i><span data-i18n="seller.action_center.empty">Hiện không có việc nào cần xử lý.</span></div>
+            <div id="actionCenterList" class="action-center-list"></div>
+        </div>
+
         <!-- TAB: CẦN ĐỐI SOÁT -->
         <div id="reconciliation" class="tab-content glass-card">
             <div class="doi-soat-toolbar">
@@ -505,25 +784,44 @@
         <!-- L3: hỏi đáp báo cáo. Máy KHÔNG tự viết câu lệnh lấy dữ liệu — nó
              chỉ chọn một báo cáo có sẵn rồi gọi lại, nên số ở đây luôn khớp với
              số ở các màn khác. Xem bẫy 38 trong KIEN_TRUC.md. -->
-        <div id="assistant" class="tab-content glass-card">
-            <div id="assistantShopSelector" style="margin-bottom: 1.5rem;">
-                <h3 style="margin-bottom: 1rem;"><i class="ph ph-chat-circle-dots"></i> <span data-i18n="seller.assistant.title">Hỏi gì về cửa hàng cũng được</span></h3>
-                <p style="color:#64748B; font-size:0.85rem;" data-i18n="seller.assistant.subtitle">Gõ câu hỏi bằng tiếng Việt như đang nhắn tin. Trả lời lấy từ đúng các báo cáo trong app, không phải máy tự đoán.</p>
-                <div id="assistantShopList" style="display:flex; gap:1rem; flex-wrap:wrap; margin-top:1rem;"></div>
+        <div id="assistant" class="tab-content glass-card assistant-panel">
+            <div id="assistantShopSelector" class="assistant-intro">
+                <div class="assistant-intro-copy">
+                    <span class="assistant-eyebrow" data-i18n="seller.assistant.eyebrow">TRỢ LÝ CỬA HÀNG</span>
+                    <h3><i class="ph ph-chat-circle-dots"></i> <span data-i18n="seller.assistant.title">Hỏi gì về cửa hàng cũng được</span></h3>
+                    <p data-i18n="seller.assistant.subtitle">Gõ hoặc nói như đang nhắn tin. Bạn cũng có thể nói “mở bán hàng” để đi đúng màn hình.</p>
+                    <div id="assistantSafety" class="assistant-safety">
+                        <i class="ph ph-shield-check" aria-hidden="true"></i>
+                        <span data-i18n="seller.assistant.safety">Chỉ xem báo cáo hoặc đưa bạn tới đúng màn hình — không tự sửa hay xóa dữ liệu.</span>
+                    </div>
+                </div>
+                <div id="assistantShopList" class="assistant-shop-list"></div>
             </div>
 
-            <div id="assistantBody" style="display:none;">
-                <div id="assistantChat" style="min-height:220px; max-height:420px; overflow-y:auto; padding:1rem; border:1px solid var(--border-color); border-radius:12px; margin-bottom:1rem;"></div>
+            <div id="assistantBody" class="assistant-body" style="display:none;">
+                <section id="assistantFeedbackSummary" class="assistant-feedback-summary" hidden aria-live="polite">
+                    <strong data-i18n="seller.assistant.quality_title">Chất lượng câu trả lời</strong>
+                    <div id="assistantFeedbackSummaryBody"></div>
+                </section>
+                <div id="assistantChat" class="assistant-chat" role="log" aria-live="polite"
+                     aria-relevant="additions" data-i18n-aria-label="seller.assistant.chat_label"
+                     aria-label="Cuộc trò chuyện với trợ lý"></div>
 
-                <div id="assistantSuggestions" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.8rem;"></div>
+                <div class="assistant-starters">
+                    <p class="assistant-starter-title" data-i18n="seller.assistant.starter_title">Bạn có thể hỏi nhanh</p>
+                    <div id="assistantSuggestions" class="assistant-suggestions"></div>
+                </div>
 
-                <form id="assistantForm" onsubmit="guiCauHoi(event)" style="display:flex; gap:0.5rem;">
+                <div id="assistantStatus" class="assistant-request-status" role="status" aria-live="polite" hidden></div>
+
+                <form id="assistantForm" class="assistant-form" onsubmit="guiCauHoi(event)">
                     <input
                         id="assistantInput"
                         type="text"
                         maxlength="200"
                         autocomplete="off"
-                        style="flex:1; margin-bottom:0;"
+                        data-i18n-aria-label="seller.assistant.input_label"
+                        aria-label="Câu hỏi cho trợ lý"
                         data-i18n-placeholder="seller.assistant.placeholder"
                         placeholder="Ví dụ: hôm nay bán được bao nhiêu?">
                     <!-- Nút mic: JS ẨN HẲN nút này khi trình duyệt không nghe
@@ -531,21 +829,22 @@
                          qua HTTPS). Để một cái nút bấm vào không ra gì còn tệ
                          hơn là không có nút. -->
                     <button type="button" id="assistantMic" onclick="batTatNgheTroLy()"
-                            style="display:none; white-space:nowrap;" class="btn-outline"
-                            data-i18n-title="seller.assistant.mic_hint" title="Bấm rồi nói">
+                            style="display:none;" class="btn-outline assistant-mic"
+                            data-i18n-title="seller.assistant.mic_hint" title="Bấm rồi nói"
+                            data-i18n-aria-label="seller.assistant.mic_hint" aria-label="Bấm rồi nói">
                         <i class="ph ph-microphone"></i>
                     </button>
-                    <button type="submit" id="assistantSend" style="white-space:nowrap;">
+                    <button type="submit" id="assistantSend" disabled>
                         <i class="ph ph-paper-plane-right"></i> <span data-i18n="seller.assistant.send">Hỏi</span>
                     </button>
                 </form>
 
-                <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap; margin-top:0.6rem;">
-                    <label style="margin:0; display:flex; align-items:center; gap:0.4rem; font-size:0.85rem;">
-                        <input type="checkbox" id="assistantSpeak" onchange="doiDocTraLoi()" style="margin:0;">
+                <div class="assistant-voice-options">
+                    <label>
+                        <input type="checkbox" id="assistantSpeak" onchange="doiDocTraLoi()">
                         <span data-i18n="seller.assistant.read_aloud">Đọc câu trả lời thành tiếng</span>
                     </label>
-                    <small id="assistantVoiceNote" style="color:#64748B; font-size:0.75rem;"></small>
+                    <small id="assistantVoiceNote"></small>
                 </div>
             </div>
         </div>
@@ -626,6 +925,48 @@
                         <span data-i18n="seller.warehouse.write_offs">Hàng Đã Hủy</span>
                     </button>
                 </div>
+
+                <section id="productImportPanel" class="product-import-panel" hidden>
+                    <div class="product-import-heading">
+                        <div>
+                            <span class="product-import-eyebrow" data-i18n="seller.product_import.eyebrow">Dành cho chủ shop</span>
+                            <h3><i class="ph ph-file-xls"></i> <span data-i18n="seller.product_import.title">Nhập nhiều sản phẩm từ Excel/CSV</span></h3>
+                            <p data-i18n="seller.product_import.description">Xem trước từng dòng trước khi thêm vào kho. Sản phẩm đã có sẽ được bỏ qua, không ghi đè.</p>
+                        </div>
+                        <a class="btn-outline product-import-template" href="/templates/fselling-mau-nhap-san-pham.xlsx" download>
+                            <i class="ph ph-download-simple"></i>
+                            <span data-i18n="seller.product_import.download_template">Tải file mẫu</span>
+                        </a>
+                    </div>
+
+                    <div class="product-import-note" role="note">
+                        <i class="ph ph-info"></i>
+                        <span data-i18n="seller.product_import.template_warning">File mẫu có 3 dòng minh họa: hãy xóa các dòng này trước khi nhập. Chấp nhận .xlsx/.csv, tối đa 2 MB và 1.000 sản phẩm.</span>
+                    </div>
+
+                    <div class="product-import-controls">
+                        <label class="product-import-file" for="productImportFile">
+                            <i class="ph ph-paperclip"></i>
+                            <span id="productImportFileLabel" data-i18n="seller.product_import.choose_file">Chọn file từ máy</span>
+                            <input id="productImportFile" type="file" accept=".xlsx,.csv" onchange="chonFileImportSanPham(this.files && this.files[0])">
+                        </label>
+                        <button id="productImportPreview" type="button" class="btn-outline" onclick="xemTruocImportSanPham()">
+                            <i class="ph ph-eye"></i>
+                            <span data-i18n="seller.product_import.preview">Xem trước</span>
+                        </button>
+                        <button id="productImportCommit" type="button" onclick="xacNhanImportSanPham()" disabled>
+                            <i class="ph ph-check-circle"></i>
+                            <span data-i18n="seller.product_import.commit">Nhập vào kho</span>
+                        </button>
+                        <button id="productImportUndo" type="button" class="btn-outline product-import-undo" onclick="hoanTacImportSanPham()" hidden>
+                            <i class="ph ph-arrow-counter-clockwise"></i>
+                            <span data-i18n="seller.product_import.undo">Hoàn tác lần nhập</span>
+                        </button>
+                    </div>
+
+                    <div id="productImportStatus" class="product-import-status" role="status" aria-live="polite"></div>
+                    <div id="productImportResults" class="product-import-results" hidden></div>
+                </section>
 
                 <!-- Products Sub-content -->
                 <div class="modal-body-split" id="warehouseProductsSection">
@@ -813,6 +1154,7 @@
                                 <th data-i18n="seller.forecast.days_left">Đủ bán</th>
                                 <th data-i18n="seller.forecast.reorder">Nên nhập</th>
                                 <th data-i18n="seller.forecast.supplier">Gọi cho ai</th>
+                                <th data-i18n="seller.forecast.purchase_action">Lập phiếu</th>
                             </tr></thead>
                             <tbody id="forecastList"></tbody>
                         </table>
@@ -959,6 +1301,9 @@
                 <button class="tab-btn active" id="purchaseSubTabReceipts" type="button" onclick="switchPurchasingSubTab('receipts')">
                     <i class="ph ph-receipt"></i> <span data-i18n="seller.purchasing.receipts_tab">Phiếu nhập</span>
                 </button>
+                <button class="tab-btn" id="purchaseSubTabOrders" type="button" onclick="switchPurchasingSubTab('orders')">
+                    <i class="ph ph-clipboard-text"></i> <span data-i18n="seller.purchasing.orders_tab">Đơn đặt hàng</span>
+                </button>
                 <button class="tab-btn" id="purchaseSubTabSuppliers" type="button" onclick="switchPurchasingSubTab('suppliers')">
                     <i class="ph ph-address-book"></i> <span data-i18n="seller.purchasing.suppliers_tab">Nhà cung cấp</span>
                 </button>
@@ -1080,6 +1425,88 @@
                     </table>
                 </div>
                 <div id="purchaseReceiptsEmpty" class="purchase-empty" style="display:none;" data-i18n="seller.purchasing.no_receipts">Chưa có phiếu nhập nào.</div>
+            </section>
+
+            <section id="purchaseOrdersPanel" style="display:none;">
+                <div class="purchase-toolbar">
+                    <div>
+                        <h3 data-i18n="seller.purchasing.orders_title">Đơn đặt hàng nhà cung cấp</h3>
+                        <p data-i18n="seller.purchasing.orders_hint">Đơn đang đặt được tính là hàng đang về; chưa làm thay đổi tồn kho, công nợ hay tiền.</p>
+                    </div>
+                    <div class="purchase-toolbar-actions">
+                        <button class="btn-outline" type="button" onclick="loadPurchaseOrders()"><i class="ph ph-arrows-clockwise"></i> <span data-i18n="common.refresh">Tải lại</span></button>
+                        <button type="button" onclick="openPurchaseOrderForm()"><i class="ph ph-plus-circle"></i> <span data-i18n="seller.purchasing.new_order">Tạo đơn đặt hàng</span></button>
+                    </div>
+                </div>
+
+                <div id="purchaseOrderEditor" class="purchase-editor" style="display:none;">
+                    <div class="purchase-editor-heading">
+                        <div>
+                            <h3 id="purchaseOrderFormTitle" data-i18n="seller.purchasing.new_order">Tạo đơn đặt hàng</h3>
+                            <p data-i18n="seller.purchasing.order_form_hint">Chỉ ghi mặt hàng và số lượng cần đặt. Giá nhập, lô và hạn sử dụng được khai khi hàng thực sự về.</p>
+                        </div>
+                        <button class="btn-outline" type="button" onclick="closePurchaseOrderForm()"><i class="ph ph-x"></i> <span data-i18n="common.close">Đóng</span></button>
+                    </div>
+                    <div id="purchaseOrderRetryNotice" class="purchase-retry-notice" style="display:none;" data-i18n="seller.purchasing.order_retry_notice">Chưa biết máy chủ đã nhận đơn hay chưa. Bấm Thử lại để gửi đúng đơn và mã thao tác cũ.</div>
+                    <div class="purchase-form-grid">
+                        <div class="form-group">
+                            <label for="purchaseOrderSupplierSelect" data-i18n="seller.purchasing.supplier_required">Nhà cung cấp *</label>
+                            <select id="purchaseOrderSupplierSelect"></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="purchaseOrderExpectedDate" data-i18n="seller.purchasing.expected_date">Ngày dự kiến nhận</label>
+                            <input id="purchaseOrderExpectedDate" type="date">
+                        </div>
+                        <div class="form-group purchase-full-row">
+                            <label for="purchaseOrderNote" data-i18n="seller.fields.note">Ghi chú</label>
+                            <textarea id="purchaseOrderNote" rows="2"></textarea>
+                        </div>
+                    </div>
+                    <div class="purchase-line-picker">
+                        <div class="form-group">
+                            <label for="purchaseOrderProductSearch" data-i18n="seller.purchasing.search_product">Tìm sản phẩm</label>
+                            <input id="purchaseOrderProductSearch" type="search" autocomplete="off" oninput="filterPurchaseOrderProductOptions()" data-i18n-placeholder="seller.purchasing.search_product_placeholder" placeholder="Gõ tên, mã sản phẩm hoặc mã vạch">
+                        </div>
+                        <div class="form-group purchase-product-select-group">
+                            <label for="purchaseOrderProductSelect" data-i18n="seller.purchasing.choose_product">Chọn sản phẩm</label>
+                            <select id="purchaseOrderProductSelect"></select>
+                        </div>
+                        <button type="button" onclick="addPurchaseOrderLine()"><i class="ph ph-plus"></i> <span data-i18n="seller.purchasing.add_to_order">Thêm vào đơn</span></button>
+                    </div>
+                    <div class="table-responsive-product">
+                        <table class="db-table purchase-lines-table">
+                            <thead><tr>
+                                <th data-i18n="seller.table.product">Sản phẩm</th>
+                                <th data-i18n="seller.table.quantity_short">SL đặt</th>
+                                <th data-i18n="seller.table.actions">Hành động</th>
+                            </tr></thead>
+                            <tbody id="purchaseOrderLines"></tbody>
+                        </table>
+                    </div>
+                    <div id="purchaseOrderNoLines" class="purchase-empty" data-i18n="seller.purchasing.order_no_lines">Chưa có sản phẩm nào trong đơn.</div>
+                    <div class="purchase-editor-footer">
+                        <div></div>
+                        <div class="purchase-editor-actions">
+                            <button class="btn-outline" id="purchaseOrderCancelEditButton" type="button" onclick="closePurchaseOrderForm()" data-i18n="common.cancel">Hủy</button>
+                            <button id="purchaseOrderSaveButton" type="button" onclick="savePurchaseOrderDraft()"><i class="ph ph-floppy-disk"></i> <span data-purchase-order-action-label="save" data-i18n="seller.purchasing.save_order_draft">Lưu đơn nháp</span></button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="db-table">
+                        <thead><tr>
+                            <th data-i18n="seller.purchasing.order_code">Mã đơn</th>
+                            <th data-i18n="seller.purchasing.supplier">Nhà cung cấp</th>
+                            <th data-i18n="seller.purchasing.expected_date">Dự kiến nhận</th>
+                            <th data-i18n="seller.purchasing.items_count">Số dòng hàng</th>
+                            <th data-i18n="seller.table.status">Trạng thái</th>
+                            <th data-i18n="seller.table.actions">Hành động</th>
+                        </tr></thead>
+                        <tbody id="purchaseOrdersList"></tbody>
+                    </table>
+                </div>
+                <div id="purchaseOrdersEmpty" class="purchase-empty" style="display:none;" data-i18n="seller.purchasing.no_orders">Chưa có đơn đặt hàng nào.</div>
             </section>
 
             <section id="purchaseSuppliersSection" style="display:none;">
@@ -1619,6 +2046,8 @@
                             <option value="CASHIER" data-i18n="common.role.cashier">Thu ngân</option>
                             <option value="WAREHOUSE" data-i18n="common.role.warehouse">Kho</option>
                             <option value="MANAGER" data-i18n="common.role.manager">Quản lý</option>
+                            <option value="KITCHEN" data-i18n="common.role.kitchen">Bếp</option>
+                            <option value="BAR" data-i18n="common.role.bar">Bar</option>
                         </select>
                     </div>
                     <button onclick="taoNhanVien()"><i class="ph ph-user-plus"></i> <span data-i18n="seller.staff.add">Thêm nhân viên</span></button>
@@ -1660,20 +2089,20 @@
                         <div class="input-wrapper input-wrapper-shop"><i class="ph ph-storefront"></i><input type="text" id="shopName" placeholder="VD: Hộ Kinh Doanh F-Selling" data-i18n-placeholder="seller.shops.business_name_placeholder" required></div>
                     </div>
                     <div class="form-group">
-                        <label data-i18n="seller.shops.business_address_required">Địa chỉ kinh doanh *</label>
-                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-map-pin"></i><input type="text" id="shopAddress" placeholder="VD: 123 Nguyễn Văn Cừ, Quận 5, TP.HCM" data-i18n-placeholder="seller.shops.business_address_placeholder" required></div>
+                        <label data-i18n="seller.shops.business_address">Địa chỉ kinh doanh</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-map-pin"></i><input type="text" id="shopAddress" placeholder="VD: 123 Nguyễn Văn Cừ, Quận 5, TP.HCM" data-i18n-placeholder="seller.shops.business_address_placeholder"></div>
                     </div>
                     <div class="form-group">
-                        <label data-i18n="seller.shops.tax_code_required">Mã số thuế *</label>
-                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-identification-card"></i><input type="text" id="shopTaxCode" placeholder="VD: 0312345678" data-i18n-placeholder="seller.shops.tax_code_placeholder" required></div>
+                        <label data-i18n="seller.shops.tax_code">Mã số thuế</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-identification-card"></i><input type="text" id="shopTaxCode" placeholder="VD: 0312345678" data-i18n-placeholder="seller.shops.tax_code_placeholder"></div>
                     </div>
                     <div class="form-group">
                         <label data-i18n="seller.fields.phone_required">Số điện thoại *</label>
                         <div class="input-wrapper input-wrapper-shop"><i class="ph ph-phone"></i><input type="text" id="shopPhone" placeholder="VD: 0901234567" data-i18n-placeholder="seller.shops.phone_placeholder" required></div>
                     </div>
                     <div class="form-group">
-                        <label data-i18n="seller.fields.email_required">Email *</label>
-                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-envelope"></i><input type="email" id="shopEmail" placeholder="VD: lienhe@cuahang.com" data-i18n-placeholder="seller.shops.email_placeholder" required></div>
+                        <label data-i18n="seller.fields.email">Email</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-envelope"></i><input type="email" id="shopEmail" placeholder="VD: lienhe@cuahang.com" data-i18n-placeholder="seller.shops.email_placeholder"></div>
                     </div>
                 </div>
 
@@ -1684,18 +2113,26 @@
                     </h3>
                     
                     <div class="form-group">
-                        <label data-i18n="seller.shops.bank_required">Ngân hàng *</label>
+                        <label data-i18n="seller.shops.bank">Ngân hàng</label>
                         <div class="input-wrapper input-wrapper-shop"><i class="ph ph-buildings"></i>
-                            <select id="bankCode" style="width: 100%; border: none; outline: none; padding-left: 2.5rem;" required></select>
+                            <select id="bankCode" style="width: 100%; border: none; outline: none; padding-left: 2.5rem;"></select>
                         </div>
                     </div>
                     <div class="form-group">
-                        <label data-i18n="seller.shops.bank_account_required">Số tài khoản nhận tiền *</label>
-                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-list-numbers"></i><input type="text" id="bankAcc" placeholder="VD: 10123456789" data-i18n-placeholder="seller.shops.bank_account_placeholder" required></div>
+                        <label data-i18n="seller.shops.bank_account">Số tài khoản nhận tiền</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-list-numbers"></i><input type="text" id="bankAcc" placeholder="VD: 10123456789" data-i18n-placeholder="seller.shops.bank_account_placeholder"></div>
                     </div>
                     <div class="form-group">
-                        <label data-i18n="seller.shops.account_name_required">Tên chủ tài khoản *</label>
-                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-user"></i><input type="text" id="bankAccName" placeholder="VD: NGUYEN VAN A" data-i18n-placeholder="seller.shops.account_name_placeholder" required></div>
+                        <label data-i18n="seller.shops.account_name">Tên chủ tài khoản</label>
+                        <div class="input-wrapper input-wrapper-shop"><i class="ph ph-user"></i><input type="text" id="bankAccName" placeholder="VD: NGUYEN VAN A" data-i18n-placeholder="seller.shops.account_name_placeholder"></div>
+                    </div>
+
+                    <div id="shopFnbSetting" class="form-group" hidden>
+                        <label class="fnb-setting-label" for="shopFnbEnabled">
+                            <input id="shopFnbEnabled" type="checkbox" onchange="updateFnbSetting(this)" disabled>
+                            <span data-i18n="seller.shops.fnb_label">Bán tại bàn</span>
+                        </label>
+                        <small data-i18n="seller.shops.fnb_hint">Bật sơ đồ bàn và phục vụ tại bàn; POS bán tại quầy vẫn giữ nguyên.</small>
                     </div>
                     
                     <button id="btnSaveShop" onclick="saveShop()" style="width: 100%; margin-top: 1.5rem; font-size: 1.05rem;">
@@ -1704,6 +2141,8 @@
                     <button class="btn-outline" onclick="closeShopForm()" style="width: 100%; margin-top: 0.5rem;" data-i18n="common.cancel">Hủy</button>
                 </div>
             </div>
+        </div>
+            </main>
         </div>
     </div>
 
@@ -2196,17 +2635,18 @@
     </div>
 
     <script src="/js/vendor/i18next-26.3.6.min.js?v=20260731-i18n4"></script>
-    <script src="/js/locales/common.js?v=20260802-han-su-dung"></script>
-    <script src="/js/locales/seller.js?v=20260809-tro-ly-giong-noi"></script>
+    <script src="/js/locales/common.js?v=20260901-fnb-r1b"></script>
+    <script src="/js/locales/seller.js?v=20260825-assistant-guided-tasks-r1-1&amp;onboarding=20260828-r2-1&amp;uat=20260829-p1&amp;fnb=20260901-r1a"></script>
     <script src="/js/locales/subscriptions.js?v=20260807-goi-cuoc-f3"></script>
     <script src="/js/i18n.js?v=20260731-i18n4"></script>
-    <script src="/js/api.js?v=20260807-admin-nhap-hang"></script>
+<script src="/js/api.js?v=20260812-i09-f1-c1&g=20260813-i09-g2h2&fnb=20260901-r1a"></script>
     <!-- barcode.js phải nạp trước seller.js: seller.js gọi BarcodeScanner.batDau() ngay khi chạy. -->
     <script src="/js/barcode.js?v=20260731-i18n4"></script>
     <script src="/js/barcode-camera.js?v=20260731-i18n4"></script>
     <script src="/js/doc-tien.js?v=20260731-i18n4"></script>
-    <script src="/js/seller.js?v=20260809-tro-ly-giong-noi"></script>
-    <script src="/js/purchasing.js?v=20260807-nha-cung-cap-ui-f9"></script>
+    <script src="/js/onboarding-r2.js?v=20260828-r2-1&amp;uat=20260829-p1"></script>
+    <script src="/js/seller.js?v=20260825-assistant-guided-tasks-r1-1&amp;onboarding=20260828-r2-1&amp;fnb=20260901-r1b"></script>
+    <script src="/js/purchasing.js?v=20260822-order-actions-a11y-r2"></script>
     <!-- Nạp SAU seller.js: expenses.js dùng apiCall/showToast/showCustomConfirm
          và các helper định dạng tiền của trang. -->
     <script src="/js/expenses.js?v=20260808-dong-tien-k1"></script>

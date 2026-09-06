@@ -1,11 +1,15 @@
+from decimal import Decimal
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
+from ..core.numeric_limits import MAX_SAFE_QUANTITY, MAX_SAFE_VND
+from .money import ExactVND, SignedExactVND
+
 
 class ProductCreate(BaseModel):
     name: str
-    price: float
+    price: SignedExactVND = Field(le=MAX_SAFE_VND)
     category_id: int
     image_url: Optional[str] = None
 
@@ -18,15 +22,14 @@ class CategoryUpdate(BaseModel):
 class VoucherCreate(BaseModel):
     code: str
     discount_type: str
-    discount_value: float
-    min_order_value: float = 0
-    max_discount: float = 0
+    discount_value: Decimal
+    min_order_value: SignedExactVND = Field(default=0, le=MAX_SAFE_VND)
+    max_discount: SignedExactVND = Field(default=0, le=MAX_SAFE_VND)
     usage_limit: int = -1
     expires_at: Optional[str] = None
 
-
 class StockAdjust(BaseModel):
-    delta: int  # >0 nhập kho, <0 xuất kho
+    delta: int = Field(ge=-MAX_SAFE_QUANTITY, le=MAX_SAFE_QUANTITY)
     # Điều chỉnh kho thủ công nằm ngoài phiếu nhập, nên bắt buộc nói rõ lý do
     # để lịch sử không còn những dòng tăng/giảm tồn không thể đối chiếu.
     reason: str = Field(min_length=1, max_length=500)
@@ -34,7 +37,7 @@ class StockAdjust(BaseModel):
     # None = không khai (giữ nguyên giá vốn cũ); 0 = hàng tặng, là một đơn giá
     # thật và phải kéo bình quân xuống. JSON body giữ được sự khác biệt đó, khác
     # với form multipart nơi field rỗng rơi về default.
-    unit_cost: Optional[float] = None
+    unit_cost: Optional[SignedExactVND] = Field(default=None, le=MAX_SAFE_VND)
     # F5: hạn sử dụng của lô đang nhập, dạng 'YYYY-MM-DD'. BẮT BUỘC khi nhập
     # hàng cho sản phẩm đã bật theo dõi lô; bỏ qua với sản phẩm khác.
     expiry_date: Optional[str] = None
@@ -73,6 +76,11 @@ class StocktakeItem(BaseModel):
     counted: Optional[int] = None
     stock_snapshot: Optional[int] = None
     batches: Optional[List[StocktakeBatchCount]] = None
+    # Durable evidence can change without changing any batch quantity.  The
+    # stocktake endpoint supplies this opaque token - `i05:<sha256>` for tracked
+    # products, `i09c:<sha256>` for the non-batch ones - and the client must echo
+    # it so apply cannot close a newer offline deficit (including ABA).
+    offline_deficit_snapshot: Optional[str] = Field(default=None, max_length=72)
 
 
 class StocktakeApply(BaseModel):
