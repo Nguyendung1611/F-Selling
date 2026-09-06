@@ -927,26 +927,27 @@ async function testCheckoutFailureRecovery() {
         rejected.cleanup();
     }
 
-    const offline = new Error('offline');
-    const ambiguous = await mountedFnbHarness({
-        openCheckout: true,
-        payReplies: [offline],
-    });
-    try {
-        ambiguous.elements.fnbCashTendered.value = '130000';
-        ambiguous.elements.fnbPayForm.emit('submit');
-        await ambiguous.settle();
-        ambiguous.elements.fnbPayForm.controls.forEach(control =>
-            assert.equal(control.disabled, true));
+    for (const error of [new Error('offline'), fnbError('SERVER_ERROR', 'server error', 500)]) {
+        const ambiguous = await mountedFnbHarness({ openCheckout: true, payReplies: [error] });
+        try {
+            ambiguous.elements.fnbCashTendered.value = '130000';
+            ambiguous.elements.fnbPayForm.emit('submit');
+            await ambiguous.settle();
+            ambiguous.elements.fnbPayForm.controls.forEach(control =>
+                assert.equal(control.disabled, true));
+            const originalBody = structuredClone(
+                ambiguous.calls.find(call => call.endpoint === '/fnb/checks/1/pay').body,
+            );
 
-        ambiguous.elements.fnbCashTendered.value = '999999';
-        ambiguous.elements.fnbPayForm.emit('submit');
-        await ambiguous.settle();
-        const payments = ambiguous.calls.filter(call => call.endpoint === '/fnb/checks/1/pay');
-        assert.equal(payments.length, 2);
-        assert.deepEqual(payments[1].body, payments[0].body);
-    } finally {
-        ambiguous.cleanup();
+            ambiguous.elements.fnbCashTendered.value = '999999';
+            ambiguous.elements.fnbPayForm.emit('submit');
+            await ambiguous.settle();
+            const payments = ambiguous.calls.filter(call => call.endpoint === '/fnb/checks/1/pay');
+            assert.equal(payments.length, 2);
+            assert.deepEqual(payments[1].body, originalBody);
+        } finally {
+            ambiguous.cleanup();
+        }
     }
 }
 
