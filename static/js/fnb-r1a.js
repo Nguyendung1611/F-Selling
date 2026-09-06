@@ -662,6 +662,7 @@
         let lastTableTrigger = null;
         let setupAllowed = false;
         let pendingCancelLineId = null;
+        let pendingCancelSessionRevision = null;
         let approvalDialogGeneration = 0;
         let selectedCheckId = null;
         let customers = [];
@@ -700,6 +701,7 @@
             elements.fnbCancelReason.value = '';
             elements.fnbCancelResolution.value = 'WASTE';
             pendingCancelLineId = null;
+            pendingCancelSessionRevision = null;
         }
 
         function closeApprovalAfterConflict() {
@@ -998,8 +1000,16 @@
                 }
                 live('fnb.state.poll_error');
             } else if (event.type === 'session') {
+                const staleApproval = elements.fnbApprovalDialog.open
+                    && pendingCancelSessionRevision !== null
+                    && Number(event.value?.revision) !== pendingCancelSessionRevision;
                 renderSession(event.value, event.draft);
-                sessionStatus(event.saved ? t('fnb.session.saved') : '');
+                if (staleApproval) {
+                    closeApprovalAfterConflict();
+                    sessionStatus(t('fnb.cancel.changed'));
+                } else {
+                    sessionStatus(event.saved ? t('fnb.session.saved') : '');
+                }
             } else if (event.type === 'session-closed' || event.type === 'session-cancelled') {
                 if (elements.fnbCheckoutDialog.open) elements.fnbCheckoutDialog.close();
                 closeSession();
@@ -1230,6 +1240,7 @@
                     ].includes(code)) return;
                     resetApprovalDialog();
                     pendingCancelLineId = id;
+                    pendingCancelSessionRevision = Number(controller.getState().session?.revision);
                     elements.fnbApprovalDialog.showModal();
                     elements.fnbCancelResolution.focus();
                 });
@@ -1403,9 +1414,14 @@
             event.preventDefault();
             const current = controller.getState().session;
             if (!current || !pendingCancelLineId) return;
+            if (Number(current.revision) !== pendingCancelSessionRevision) {
+                closeApprovalAfterConflict();
+                sessionStatus(t('fnb.cancel.changed'));
+                return;
+            }
             const lineId = Number(pendingCancelLineId);
             const sessionId = Number(current.id);
-            const sessionRevision = Number(current.revision);
+            const sessionRevision = pendingCancelSessionRevision;
             const shopId = Number(elements.fnbShopSelect.value);
             const approverUsername = elements.fnbApproverUsername.value;
             const pin = elements.fnbApprovalPin.value;

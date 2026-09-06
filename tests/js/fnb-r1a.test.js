@@ -543,6 +543,7 @@ async function mountedFnbHarness(options = {}) {
     const calls = [];
     let opened = false;
     let hideSession = false;
+    let floorSessionRevision = 3;
     const setGlobal = (key, value) => Object.defineProperty(globalThis, key, {
         configurable: true, writable: true, value,
     });
@@ -571,7 +572,8 @@ async function mountedFnbHarness(options = {}) {
         if (endpoint.startsWith('/fnb/floor')) {
             const value = floor();
             if (opened && !hideSession) value.areas[0].tables[0] = {
-                ...value.areas[0].tables[0], state: 'SERVING', session: { id: 30, revision: 3 },
+                ...value.areas[0].tables[0], state: 'SERVING',
+                session: { id: 30, revision: floorSessionRevision },
             };
             return value;
         }
@@ -581,6 +583,7 @@ async function mountedFnbHarness(options = {}) {
             opened = true;
             return session();
         }
+        if (endpoint === '/fnb/sessions/30') return session(floorSessionRevision);
         if (endpoint === '/fnb/sessions/30/checks') return checkReplies.shift();
         if (endpoint === '/fnb/checks/1/pay') {
             const reply = payReplies.length ? payReplies.shift() : {
@@ -631,6 +634,10 @@ async function mountedFnbHarness(options = {}) {
             document.emit('click', { target });
         },
         emitOnline: () => (globalListeners.get('online') || []).forEach(handler => handler()),
+        refreshSession(revision) {
+            floorSessionRevision = revision;
+            (globalListeners.get('online') || []).forEach(handler => handler());
+        },
         emitPagehide: () => (globalListeners.get('pagehide') || []).forEach(handler => handler()),
         hideSession: () => { hideSession = true; },
         settle,
@@ -812,6 +819,28 @@ async function testApprovalEndpointConflict() {
         elements.fnbApprovalForm.emit('submit');
         await settle();
         assert.equal(calls.filter(call => call.endpoint === '/fnb/manager-approvals').length, 1);
+    });
+}
+
+async function testApprovalClosesAfterBackgroundRevisionChange() {
+    await withCancellation({}, async harness => {
+        const { elements, calls, settle } = harness;
+        elements.fnbApprovalPin.value = '2468';
+        elements.fnbCancelReason.value = 'Quyết định cũ';
+        elements.fnbCancelResolution.value = 'RESTOCK';
+
+        harness.refreshSession(4);
+        await settle();
+
+        assert.ok(calls.some(call => call.endpoint === '/fnb/sessions/30'), JSON.stringify(calls));
+        assert.deepEqual(approvalState(elements), {
+            open: false, pin: '', reason: '', resolution: 'WASTE', status: '',
+        });
+        assert.equal(elements.fnbSessionStatus.textContent, 'fnb.cancel.changed');
+        elements.fnbApprovalForm.emit('submit');
+        await settle();
+        assert.equal(calls.filter(call => call.endpoint === '/fnb/manager-approvals').length, 0);
+        assert.equal(calls.filter(call => call.endpoint.endsWith('/cancel-line')).length, 1);
     });
 }
 
@@ -1006,6 +1035,7 @@ Promise.resolve()
     .then(testCheckoutUsesLatestCheckAndSessionRevisions)
     .then(testCancellationApprovalDialogLifecycle)
     .then(testApprovalAsyncRace)
+    .then(testApprovalClosesAfterBackgroundRevisionChange)
     .then(testApprovalEndpointConflict)
     .then(testCheckoutCashBehavior)
     .then(testCheckoutFailureRecovery)

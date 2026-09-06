@@ -60,7 +60,7 @@ def test_fnb_page_and_assets_are_wired(client):
     assert "/css/fnb-r1a.css?v=20260905-safety-r1" in html
     assert 'aria-describedby="fnbCashTenderedHelp fnbCashTenderedError"' in html
     assert "/js/locales/fnb.js?v=20260905-safety-r1" in html
-    assert "/js/fnb-r1a.js?v=20260906-checkout-recovery" in html
+    assert "/js/fnb-r1a.js?v=20260906-approval-refresh" in html
     source = (ROOT / "static/js/fnb-r1a.js").read_text(encoding="utf-8")
     assert "values.voucher_code = voucherCode" in source
     assert "values.loyalty_points_to_use = loyaltyPoints" in source
