@@ -215,6 +215,58 @@ async function testSingleFlightRetryAndDefinitiveFailure() {
     assert.notEqual(rejectedBodies[0].operation_id, rejectedBodies[1].operation_id);
 }
 
+async function testCancelDecisionRequiredClearsPendingWithoutDraft() {
+    const deps = makeDeps({
+        request: async endpoint => {
+            if (endpoint.startsWith('/fnb/floor')) return floor();
+            const error = new Error('Cần chọn cách xử lý tồn');
+            error.status = 400;
+            error.code = 'FNB_CANCELLATION_DECISION_REQUIRED';
+            error.detail = { code: error.code };
+            throw error;
+        },
+    });
+    const controller = createController(deps);
+    await controller.selectShop(1);
+    controller.seedSession(session());
+
+    await assert.rejects(controller.cancelLine(40, 1));
+
+    assert.equal(controller.getState().pendingMutation, null);
+    assert.equal(controller.getState().recoverableDraft, null);
+    assert.equal(deps.renders.at(-1).type, 'cancel-action-required');
+    assert.equal(deps.renders.at(-1).attempt.line_id, 40);
+}
+
+async function testCancelConflictRequiresFreshUserDecision() {
+    const latest = { ...session(8), lines: [{
+        ...session(8).lines[0], state_version: 10,
+    }] };
+    const deps = makeDeps({
+        request: async endpoint => {
+            if (endpoint.startsWith('/fnb/floor')) return floor();
+            const error = new Error('Món vừa thay đổi');
+            error.status = 409;
+            error.code = 'FNB_LINE_CHANGED';
+            error.detail = { code: error.code, snapshot: latest };
+            throw error;
+        },
+    });
+    const controller = createController(deps);
+    await controller.selectShop(1);
+    controller.seedSession(session(7));
+
+    await assert.rejects(controller.cancelLine(40, 1, {
+        resolution: 'WASTE', reason: 'Món đã chế biến',
+    }));
+
+    assert.deepEqual(controller.getState().session, latest);
+    assert.equal(controller.getState().pendingMutation, null);
+    assert.equal(controller.getState().recoverableDraft, null);
+    assert.equal(deps.renders.at(-1).type, 'cancel-conflict');
+    assert.equal(deps.renders.some(event => event.type === 'conflict'), false);
+}
+
 async function testLatestRevisionBodies() {
     const calls = [];
     const deps = makeDeps({
@@ -592,6 +644,8 @@ Promise.resolve()
     .then(testSessionAnnouncementsOnlyFollowMutations)
     .then(testConflictKeepsDraftAndUsesAuthoritativeSnapshot)
     .then(testSingleFlightRetryAndDefinitiveFailure)
+    .then(testCancelDecisionRequiredClearsPendingWithoutDraft)
+    .then(testCancelConflictRequiresFreshUserDecision)
     .then(testLatestRevisionBodies)
     .then(testStationUpdateUsesCurrentFloorRevision)
     .then(testSetupMutationsAndAccess)

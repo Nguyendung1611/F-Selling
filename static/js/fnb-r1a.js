@@ -237,6 +237,17 @@
             return status >= 400 && status < 500;
         }
 
+        function errorCode(error) {
+            return error?.code || error?.detail?.code || '';
+        }
+
+        function isCancelActionRequired(mutation, error) {
+            return mutation.action === 'cancel-line' && [
+                'FNB_CANCELLATION_DECISION_REQUIRED',
+                'FNB_APPROVAL_REQUIRED',
+            ].includes(errorCode(error));
+        }
+
         function performPending() {
             if (!state.pendingMutation) return Promise.resolve();
             if (state.pendingMutation.inFlight && pendingPromise) return pendingPromise;
@@ -296,7 +307,30 @@
                     await loadFloor(true);
                     return result;
                 } catch (error) {
-                    const code = error?.code || error?.detail?.code;
+                    const code = errorCode(error);
+                    if (
+                        mutation.action === 'cancel-line'
+                        && (code === 'FNB_SESSION_CHANGED' || code === 'FNB_LINE_CHANGED')
+                        && error?.detail?.snapshot
+                    ) {
+                        state.session = error.detail.snapshot;
+                        state.recoverableDraft = null;
+                        clearPending();
+                        deps.render({ type: 'cancel-conflict', value: state.session, error });
+                        throw error;
+                    }
+                    if (isCancelActionRequired(mutation, error)) {
+                        const attempt = clone(mutation.attempt);
+                        state.recoverableDraft = null;
+                        clearPending();
+                        deps.render({
+                            type: 'cancel-action-required',
+                            value: state.session,
+                            error,
+                            attempt,
+                        });
+                        throw error;
+                    }
                     if (
                         (code === 'FNB_SESSION_CHANGED' || code === 'FNB_LINE_CHANGED')
                         && error?.detail?.snapshot
