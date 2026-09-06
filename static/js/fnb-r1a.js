@@ -664,6 +664,7 @@
         let lastTableTrigger = null;
         let setupAllowed = false;
         let pendingCancelLineId = null;
+        let approvalDialogGeneration = 0;
         let selectedCheckId = null;
         let customers = [];
         let lastPaymentResult = null;
@@ -695,6 +696,7 @@
         }
 
         function resetApprovalDialog() {
+            approvalDialogGeneration += 1;
             elements.fnbApprovalPin.value = '';
             elements.fnbApprovalStatus.textContent = '';
             elements.fnbCancelReason.value = '';
@@ -1403,32 +1405,61 @@
             event.preventDefault();
             const current = controller.getState().session;
             if (!current || !pendingCancelLineId) return;
+            const lineId = Number(pendingCancelLineId);
+            const sessionId = Number(current.id);
+            const sessionRevision = Number(current.revision);
+            const shopId = Number(elements.fnbShopSelect.value);
+            const approverUsername = elements.fnbApproverUsername.value;
+            const pin = elements.fnbApprovalPin.value;
+            const resolution = elements.fnbCancelResolution.value;
             const reason = elements.fnbCancelReason.value.trim();
             if (!reason) {
                 elements.fnbApprovalStatus.textContent = t('fnb.cancel.reason_required');
                 elements.fnbCancelReason.focus();
                 return;
             }
+            const approvalAttempt = ++approvalDialogGeneration;
             elements.fnbApprovalStatus.textContent = t('fnb.state.pending');
             try {
                 const approval = await apiCall('/fnb/manager-approvals', 'POST', {
-                    shop_id: Number(elements.fnbShopSelect.value),
-                    approver_username: elements.fnbApproverUsername.value,
-                    pin: elements.fnbApprovalPin.value,
+                    shop_id: shopId,
+                    approver_username: approverUsername,
+                    pin,
                     action: 'CANCEL_SENT_LINE', entity_type: 'SESSION',
-                    entity_id: Number(current.id), revision: Number(current.revision),
+                    entity_id: sessionId, revision: sessionRevision,
                 });
-                await controller.cancelLine(pendingCancelLineId, 1, {
-                    resolution: elements.fnbCancelResolution.value,
+                if (approvalAttempt !== approvalDialogGeneration) return;
+                const latest = controller.getState().session;
+                if (
+                    Number(latest?.id) !== sessionId
+                    || Number(latest?.revision) !== sessionRevision
+                ) {
+                    closeApprovalAfterConflict();
+                    sessionStatus(t('fnb.cancel.changed'));
+                    return;
+                }
+                await controller.cancelLine(lineId, 1, {
+                    resolution,
                     reason,
                     approval_token: approval.approval_token,
                 });
+                if (approvalAttempt !== approvalDialogGeneration) return;
                 resetApprovalDialog();
                 elements.fnbApprovalDialog.close();
             } catch (error) {
+                if (approvalAttempt !== approvalDialogGeneration) return;
                 const code = error?.code || error?.detail?.code;
+                if (code === 'FNB_SESSION_CHANGED' || code === 'FNB_LINE_CHANGED') {
+                    const snapshot = error?.detail?.snapshot;
+                    if (snapshot) {
+                        controller.seedSession(snapshot);
+                        renderSession(snapshot, null);
+                    }
+                    closeApprovalAfterConflict();
+                    sessionStatus(t('fnb.cancel.changed'));
+                    return;
+                }
                 elements.fnbApprovalPin.value = '';
-                if (code === 'FNB_SESSION_CHANGED' || code === 'FNB_LINE_CHANGED') return;
                 elements.fnbApprovalStatus.textContent = error.message;
             }
         });

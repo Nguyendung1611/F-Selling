@@ -781,6 +781,93 @@ async function testCancellationApprovalDialogLifecycle() {
     }
 }
 
+async function testApprovalEndpointConflict() {
+    const latest = {
+        ...session(9),
+        tables: [{ id: 20, name: 'Bàn mới', state_version: 6 }],
+    };
+    await withCancellation({
+        approvalReplies: [fnbError('FNB_SESSION_CHANGED', 'Phiên vừa thay đổi', 409, latest)],
+    }, async ({ elements, calls, settle }) => {
+        elements.fnbApprovalPin.value = '2468';
+        elements.fnbCancelReason.value = 'Món đã làm';
+        elements.fnbApprovalForm.emit('submit');
+        await settle();
+        assert.equal(calls.filter(call => call.endpoint.endsWith('/cancel-line')).length, 1);
+        assert.equal(elements.fnbSessionTitle.textContent, 'Bàn mới');
+        assert.equal(elements.fnbSessionStatus.textContent, 'fnb.cancel.changed');
+        assert.deepEqual(approvalState(elements), {
+            open: false, pin: '', reason: '', resolution: 'WASTE', status: '',
+        });
+        elements.fnbApprovalPin.value = '2468';
+        elements.fnbCancelReason.value = 'Không được gửi lại';
+        elements.fnbApprovalForm.emit('submit');
+        await settle();
+        assert.equal(calls.filter(call => call.endpoint === '/fnb/manager-approvals').length, 1);
+    });
+}
+
+async function testApprovalAsyncRace() {
+    for (const outcome of ['error', 'success']) {
+        let resolveApproval;
+        let rejectApproval;
+        const pendingApproval = new Promise((resolve, reject) => {
+            resolveApproval = resolve;
+            rejectApproval = reject;
+        });
+        await withCancellation({
+            cancelReplies: [
+                fnbError('FNB_APPROVAL_REQUIRED', 'Action required', 403),
+                session(4),
+            ],
+            approvalReplies: [pendingApproval],
+        }, async harness => {
+            const { elements, calls, settle } = harness;
+            elements.fnbApprovalPin.value = '2468';
+            elements.fnbCancelReason.value = 'Yêu cầu cũ';
+            elements.fnbApprovalForm.emit('submit');
+            await settle();
+            elements.fnbApprovalDialog.close();
+            harness.clickAction('cancel-line', 41);
+            await settle();
+            elements.fnbApprovalPin.value = '9999';
+            elements.fnbCancelReason.value = 'Yêu cầu mới';
+            elements.fnbCancelResolution.value = 'RESTOCK';
+            if (outcome === 'success') resolveApproval({ approval_token: 'old-token' });
+            else rejectApproval(fnbError('FNB_APPROVAL_INVALID', 'PIN cũ sai', 403));
+            await settle();
+            assert.equal(calls.filter(call => call.endpoint.endsWith('/cancel-line')).length, 2, outcome);
+            assert.deepEqual(approvalState(elements), {
+                open: true, pin: '9999', reason: 'Yêu cầu mới', resolution: 'RESTOCK', status: '',
+            }, outcome);
+        });
+    }
+
+    let resolveCurrentApproval;
+    const currentApproval = new Promise(resolve => { resolveCurrentApproval = resolve; });
+    await withCancellation({
+        cancelReplies: [session(4)],
+        approvalReplies: [currentApproval],
+    }, async ({ elements, calls, settle }) => {
+        elements.fnbApprovalPin.value = '2468';
+        elements.fnbCancelReason.value = '  Yêu cầu ban đầu  ';
+        elements.fnbCancelResolution.value = 'WASTE';
+        elements.fnbApprovalForm.emit('submit');
+        await settle();
+        elements.fnbCancelReason.value = 'Yêu cầu bị sửa';
+        elements.fnbCancelResolution.value = 'RESTOCK';
+        resolveCurrentApproval({ approval_token: 'current-token' });
+        await settle();
+        const approvals = calls.filter(call => call.endpoint === '/fnb/manager-approvals');
+        const cancellations = calls.filter(call => call.endpoint.endsWith('/cancel-line'));
+        assert.equal(approvals[0].body.entity_id, 30);
+        assert.equal(approvals[0].body.revision, 3);
+        assert.equal(cancellations[1].body.line_id, 40);
+        assert.equal(cancellations[1].body.reason, 'Yêu cầu ban đầu');
+        assert.equal(cancellations[1].body.resolution, 'WASTE');
+    });
+}
+
 async function testCheckoutCashBehavior() {
     const harness = await mountedFnbHarness({ openCheckout: true });
     const { elements, calls, paymentMethod, emitOnline, settle } = harness;
@@ -870,5 +957,7 @@ Promise.resolve()
     .then(testSetupMutationsAndAccess)
     .then(testCheckoutUsesLatestCheckAndSessionRevisions)
     .then(testCancellationApprovalDialogLifecycle)
+    .then(testApprovalAsyncRace)
+    .then(testApprovalEndpointConflict)
     .then(testCheckoutCashBehavior)
     .then(() => process.stdout.write('fnb-r1a controller ok\n'));
