@@ -480,7 +480,7 @@ function fakeCheckoutElement(id, paymentMethod) {
         querySelector(selector) {
             return selector.includes('fnbPaymentMethod') ? paymentMethod : null;
         },
-        querySelectorAll() { return []; },
+        querySelectorAll() { return this.controls || []; },
         closest() { return this; },
         matches() { return false; },
         focus() { this.focused = true; },
@@ -539,6 +539,7 @@ async function mountedFnbHarness(options = {}) {
     ];
     const cancelReplies = [...(options.cancelReplies || [])];
     const approvalReplies = [...(options.approvalReplies || [])];
+    const payReplies = [...(options.payReplies || [])];
     const calls = [];
     let opened = false;
     let hideSession = false;
@@ -581,10 +582,14 @@ async function mountedFnbHarness(options = {}) {
             return session();
         }
         if (endpoint === '/fnb/sessions/30/checks') return checkReplies.shift();
-        if (endpoint === '/fnb/checks/1/pay') return {
-            session_revision: 3, session_status: 'OPEN', checks: [second], check: first,
-            order: { qr_url: 'receipt-one' },
-        };
+        if (endpoint === '/fnb/checks/1/pay') {
+            const reply = payReplies.length ? payReplies.shift() : {
+                session_revision: 3, session_status: 'OPEN', checks: [second], check: first,
+                order: { qr_url: 'receipt-one' },
+            };
+            if (reply instanceof Error) throw reply;
+            return reply;
+        }
         if (endpoint === '/fnb/sessions/30/cancel-line') {
             if (!cancelReplies.length) throw new Error(`Unexpected endpoint ${endpoint}`);
             const reply = cancelReplies.shift();
@@ -600,6 +605,9 @@ async function mountedFnbHarness(options = {}) {
         throw new Error(`Unexpected endpoint ${endpoint}`);
     });
     const source = require.resolve('../../static/js/fnb-r1a.js');
+    element('fnbPayForm').controls = [
+        element('fnbCashTendered'), element('fnbCashExact'), element('fnbPayButton'),
+    ];
     delete require.cache[source];
     require(source);
     const settle = async () => {
@@ -903,6 +911,45 @@ async function testCheckoutCashBehavior() {
     }
 }
 
+async function testCheckoutFailureRecovery() {
+    const rejected = await mountedFnbHarness({
+        openCheckout: true,
+        payReplies: [fnbError('FNB_CASH_SHORT', 'Tiền khách đưa chưa đủ', 400)],
+    });
+    try {
+        rejected.elements.fnbCashTendered.value = '0';
+        rejected.elements.fnbPayForm.emit('submit');
+        await rejected.settle();
+        assert.equal(rejected.elements.fnbCheckoutStatus.textContent, 'Tiền khách đưa chưa đủ');
+        rejected.elements.fnbPayForm.controls.forEach(control =>
+            assert.equal(control.disabled, false));
+    } finally {
+        rejected.cleanup();
+    }
+
+    const offline = new Error('offline');
+    const ambiguous = await mountedFnbHarness({
+        openCheckout: true,
+        payReplies: [offline],
+    });
+    try {
+        ambiguous.elements.fnbCashTendered.value = '130000';
+        ambiguous.elements.fnbPayForm.emit('submit');
+        await ambiguous.settle();
+        ambiguous.elements.fnbPayForm.controls.forEach(control =>
+            assert.equal(control.disabled, true));
+
+        ambiguous.elements.fnbCashTendered.value = '999999';
+        ambiguous.elements.fnbPayForm.emit('submit');
+        await ambiguous.settle();
+        const payments = ambiguous.calls.filter(call => call.endpoint === '/fnb/checks/1/pay');
+        assert.equal(payments.length, 2);
+        assert.deepEqual(payments[1].body, payments[0].body);
+    } finally {
+        ambiguous.cleanup();
+    }
+}
+
 assert.equal(
     escapeHtml('<img src=x onerror=alert(1)>'),
     '&lt;img src=x onerror=alert(1)&gt;',
@@ -960,4 +1007,5 @@ Promise.resolve()
     .then(testApprovalAsyncRace)
     .then(testApprovalEndpointConflict)
     .then(testCheckoutCashBehavior)
+    .then(testCheckoutFailureRecovery)
     .then(() => process.stdout.write('fnb-r1a controller ok\n'));

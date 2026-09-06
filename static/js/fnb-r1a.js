@@ -308,6 +308,8 @@
                     return result;
                 } catch (error) {
                     const code = errorCode(error);
+                    const definitive = isDefinitive4xx(error);
+                    if (definitive) clearPending();
                     if (
                         mutation.action === 'cancel-line'
                         && (code === 'FNB_SESSION_CHANGED' || code === 'FNB_LINE_CHANGED')
@@ -316,7 +318,6 @@
                         clearDraft();
                         state.session = error.detail.snapshot;
                         state.recoverableDraft = null;
-                        clearPending();
                         deps.render({ type: 'cancel-conflict', value: state.session, error });
                         throw error;
                     }
@@ -324,7 +325,6 @@
                         const attempt = clone(mutation.attempt);
                         clearDraft();
                         state.recoverableDraft = null;
-                        clearPending();
                         deps.render({
                             type: 'cancel-action-required',
                             value: state.session,
@@ -374,9 +374,7 @@
                             draft: state.recoverableDraft,
                         });
                     }
-                    if (isDefinitive4xx(error)) {
-                        clearPending();
-                    } else if (state.pendingMutation) {
+                    if (!definitive && state.pendingMutation) {
                         state.pendingMutation.inFlight = false;
                         pendingPromise = null;
                     }
