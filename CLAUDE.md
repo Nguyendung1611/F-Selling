@@ -25,8 +25,21 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   `PAID`. Thiếu tiền → `UNRECONCILED`. Tiền RA (`transferType: out`, số tiền âm)
   → từ chối. Payload không có số tiền → từ chối. Đừng gộp "số tiền = 0" với
   "không có số tiền", đó là hai ca khác nhau.
-- Giao dịch bị từ chối **vẫn trả HTTP 200**. Trả 4xx/5xx thì ngân hàng retry vô
-  hạn. Lý do ghi vào `SystemLog` và khóa `rejected_order_ids`.
+- Webhook `ORDER` có account number thì **phải khớp `Shop.bank_account_no` durable
+  của chính đơn**: lấy shop write lock, refresh order rồi đọc lại account trước
+  khi quyết định mismatch và trước mọi side effect tài chính. Đường update account
+  cũng dùng chính lock đó. Sai account → `ACCOUNT_MISMATCH`, không
+  `OrderPayment`, không `BANK_UNAPPLIED`, không đổi trạng thái/refund/loyalty;
+  vẫn trả HTTP 200 và đưa id vào `rejected_order_ids`. Khi so bỏ số 0 đầu.
+  Payload thiếu account number tạm giữ hành vi tương thích cũ — đây là residual
+  risk có chủ đích, không được lặng lẽ đổi provider contract trong cùng lát cắt.
+- Business rejection **chỉ trả HTTP 200 sau khi audit đã commit bền vững**.
+  Compatible duplicate trả 200 và không nhân ledger/audit. Canonical idempotency
+  key (provider + account + event) được tra toàn cục; cùng key nhưng khác
+  order/amount/event là collision xác định được: không áp
+  tiền, ghi `WEBHOOK_XUNG_DOT_IDEMPOTENCY` an toàn rồi trả 200/rejected. Nếu
+  ledger/audit/flush/commit lỗi, hoặc IntegrityError không có durable winner,
+  phải rollback và trả 5xx để ngân hàng retry.
 - Webhook **chỉ được đụng vào trạng thái trong `WEBHOOK_PAY_FROM`**, kiểm
   **trước khi ghi ledger**. Đơn `DEBT` bị từ chối — tiền vào cho đơn nợ mà tự
   đổi trạng thái là làm mất dấu khoản phải thu. Danh sách đó phải liệt kê đủ
@@ -34,8 +47,14 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
 - Tiền về cho đơn nợ ghi thành bút toán **`BANK_UNAPPLIED`** để nổi lên màn Đối
   Soát. Nó **không phải khoản thu**: không cộng `paid_amount`, không vào két,
   giao diện không hiện dấu `+`. Và nó dùng **chung khóa idempotency** với bút
-  toán thật — khóa riêng thì ngân hàng gửi lại sau khi đã thu nợ tay sẽ đẻ ra
-  khoản chờ hoàn ảo.
+  toán thật. Raw transaction fallback chỉ tra **trong chính order hiện tại**, qua
+  cả `BANK_IN` lẫn `BANK_UNAPPLIED`, kể cả provider/envelope đổi — thiếu lớp này
+  thì retry sau khi đã thu nợ tay sẽ đẻ ra khoản chờ hoàn ảo. Raw ID phải strip
+  thống nhất khi tạo key/lưu/tra/so sánh nhưng không bao giờ được coi là unique
+  giữa provider, account hoặc shop.
+- Mỗi bank event là **một transaction riêng** gồm ledger, status/refund,
+  loyalty và audit bắt buộc. Item trước trong batch có thể đã durable; item sau
+  lỗi làm cả HTTP request trả 5xx, và retry toàn batch phải idempotent.
 - Giá và tổng tiền **luôn tính lại từ database**, không tin số client gửi.
 
 **Đơn hàng & kho**
@@ -98,13 +117,14 @@ Mỗi luật dưới đây đều đã từng bị vi phạm và gây hậu qu�
   7 tiếng, `date.today()` đổi theo múi giờ máy deploy. Hàng còn bán được, hàng
   được phép hủy và màn cảnh báo hạn phải dùng **chung một mốc** — lệch nhau là
   có lô vừa không bán được vừa chưa hủy được. Xem bẫy 36 trong `KIEN_TRUC.md`.
-- `run_migrations()` **cố ý nuốt mọi lỗi** để chạy lặp lại được. Nên thêm unique
-  index thì phải khai vào `_REQUIRED_INDEXES`, nếu không lệnh tạo index thất bại
-  sẽ trôi qua im lặng và ràng buộc bị hổng mà không ai biết.
+- Schema production chỉ đổi qua `python -m fselling.migration.cli`. Web startup
+  chỉ verify checksum/control fingerprint/linear journal/schema; mismatch phải
+  fail-closed. Không gọi `create_all()` hay dựng lại migration broad-catch trong
+  bootstrap. Revision đã phát hành không import model/service/helper mutable.
 - `log_system_action()` gọi `commit()`, làm **expire** mọi ORM object. Còn trả
   object về client thì phải `db.refresh(obj)` sau đó.
-- Migration dọn dữ liệu (như `dedupe_product_codes`) phải chạy **trước**
-  `run_migrations()`.
+- Dedupe/backfill legacy chỉ chạy trong revision Alembic self-contained và được
+  verifier kiểm trong cùng `BEGIN IMMEDIATE`; không gọi lại helper bootstrap cũ.
 
 **Route**
 
@@ -209,7 +229,7 @@ lỗi giúp. Bộ test chạy ở máy là lưới an toàn duy nhất — càng
 
 | File | Nội dung |
 |---|---|
-| `KIEN_TRUC.md` | Kiến trúc + 40 bẫy khi viết service. **Đọc trước khi sửa backend** |
+| `KIEN_TRUC.md` | Kiến trúc + 41 bẫy khi viết service. **Đọc trước khi sửa backend** |
 | `QUY_TRINH_LAM_VIEC.md` | Quy trình sửa → test → nhìn thử → commit → push |
 | `HUONG_DAN_SU_DUNG.md` | Hướng dẫn cho người dùng cuối |
 | `DEPLOY_FLY.md` | Deploy lên Fly.io (xem cảnh báo secret ở trên) |

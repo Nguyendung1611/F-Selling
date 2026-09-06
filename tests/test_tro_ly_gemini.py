@@ -14,17 +14,19 @@ from fselling.core import thoi_gian
 from fselling.core.database import SessionLocal
 from fselling.services import assistant_service, gemini_service, subscription_service
 
-CAU_LA = "kể tui nghe chuyện buôn bán"
+# Unknown to the local matcher, but still contains enough generic retail
+# context to pass the privacy boundary and exercise the fake provider.
+CAU_LA = "món nào khách khoái nhất"
 
 
 @pytest.fixture(autouse=True)
 def _don_bo_nho():
-    """Cache và bộ đếm phút nằm trong RAM nên phải dọn giữa các test."""
-    assistant_service._NHO_CAU_HOI.clear()
+    """Bộ đếm phút nằm trong RAM nên phải dọn giữa các test."""
     assistant_service._DAU_VET_PHUT.clear()
+    gemini_service._reset_circuit_for_tests()
     yield
-    assistant_service._NHO_CAU_HOI.clear()
     assistant_service._DAU_VET_PHUT.clear()
+    gemini_service._reset_circuit_for_tests()
 
 
 @pytest.fixture
@@ -66,6 +68,25 @@ def test_bo_test_khong_bao_gio_goi_gemini_that():
 
     assert os.environ.get("GEMINI_API_KEY") == ""
     assert gemini_service.dang_bat() is False
+
+
+def test_co_key_nhung_kill_switch_tat_thi_khong_goi_gemini(client, monkeypatch):
+    goi = {"so_lan": 0}
+
+    def _khong_duoc_goi(*args, **kwargs):
+        goi["so_lan"] += 1
+        raise AssertionError("Kill switch OFF mà vẫn gọi Gemini")
+
+    monkeypatch.setattr(gemini_service, "GEMINI_API_KEY", "key-gia")
+    monkeypatch.setattr(gemini_service, "GEMINI_ENABLED", False, raising=False)
+    monkeypatch.setattr(gemini_service, "phan_loai", _khong_duoc_goi)
+    ctx_full = seller_with_shop(client)
+    ctx = {"shop_id": ctx_full["shop_id"], "token": ctx_full["token"]}
+
+    body = _hoi(client, ctx, CAU_LA).json()
+    assert gemini_service.dang_bat() is False
+    assert body["hieu_duoc"] is False
+    assert goi["so_lan"] == 0
 
 
 # ---------- Lớp 1: chưa cắm key thì tính năng không tồn tại ----------
@@ -110,12 +131,31 @@ def test_cau_la_thi_moi_goi_va_tra_loi_dung_khoang_ai_chon(client, gemini_gia, s
     assert "tháng trước" in body["tra_loi"].lower()
 
 
-# ---------- Lớp: nhớ câu đã hỏi ----------
-def test_hoi_lai_y_het_thi_khong_ton_them_luot(client, gemini_gia, shop_pro):
+# ---------- Không cache câu hỏi xuyên shop ----------
+def test_hoi_lai_y_het_van_kiem_tra_lai_quyen(client, gemini_gia, shop_pro):
     _hoi(client, shop_pro, CAU_LA)
     _hoi(client, shop_pro, CAU_LA)
     _hoi(client, shop_pro, CAU_LA.upper())      # khác hoa thường vẫn là một câu
 
+    assert gemini_gia["so_lan"] == 3
+
+
+def test_ket_qua_shop_pro_khong_ro_ri_sang_shop_free(client, gemini_gia, monkeypatch):
+    pro = seller_with_shop(client)
+    free = seller_with_shop(client)
+
+    def _chi_shop_pro(db, shop_id, **kwargs):
+        if shop_id != pro["shop_id"]:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=403, detail="Pro only")
+        return {}
+
+    monkeypatch.setattr(subscription_service, "require_pro", _chi_shop_pro)
+    pro_ctx = {"shop_id": pro["shop_id"], "token": pro["token"]}
+    free_ctx = {"shop_id": free["shop_id"], "token": free["token"]}
+
+    assert _hoi(client, pro_ctx, CAU_LA).json()["hieu_duoc"] is True
+    assert _hoi(client, free_ctx, CAU_LA).json()["hieu_duoc"] is False
     assert gemini_gia["so_lan"] == 1
 
 
@@ -146,7 +186,6 @@ def test_bo_dem_nam_trong_db_nen_restart_khong_reset(client, gemini_gia, shop_pr
         _hoi(client, shop_pro, f"{CAU_LA} {i}")
 
     # Giả lập restart: xóa sạch mọi thứ đang nằm trong bộ nhớ tiến trình.
-    assistant_service._NHO_CAU_HOI.clear()
     assistant_service._DAU_VET_PHUT.clear()
 
     _hoi(client, shop_pro, f"{CAU_LA} sau khi restart")
@@ -210,6 +249,17 @@ def test_chuoi_rac_khong_ton_luot(client, gemini_gia, shop_pro):
     assert gemini_gia["so_lan"] == 0
 
 
+def test_cau_khong_hieu_khong_bi_ghi_nguyen_van_vao_log(client, monkeypatch):
+    marker = "PII-0900000000-khach-nguyen-van-a"
+    logs = []
+    monkeypatch.setattr(assistant_service, "log_to_file", logs.append)
+    ctx_full = seller_with_shop(client)
+    ctx = {"shop_id": ctx_full["shop_id"], "token": ctx_full["token"]}
+
+    assert _hoi(client, ctx, marker).status_code == 200
+    assert all(marker not in message for message in logs)
+
+
 # ---------- Hàng rào cuối: giá trị lạ từ AI bị chặn ----------
 def test_ai_bia_ra_bao_cao_khong_co_that_thi_coi_nhu_chua_hieu(client, shop_pro, monkeypatch):
     monkeypatch.setattr(gemini_service, "dang_bat", lambda: True)
@@ -249,7 +299,7 @@ def test_gemini_service_loai_gia_tri_ngoai_danh_sach(monkeypatch):
             lambda req, timeout=None: _GiaResponse(chu),
         )
         return gemini_service.phan_loai(
-            "abc", ["DOANH_THU", "SO_DON"], ["HOM_NAY", "THANG_TRUOC"]
+            "bua ni quan thu vao", ["DOANH_THU", "SO_DON"], ["HOM_NAY", "THANG_TRUOC"]
         )
 
     assert _tra('{"y_dinh":"DOANH_THU","khoang":"HOM_NAY"}') == ("DOANH_THU", "HOM_NAY")
@@ -269,7 +319,9 @@ def test_gemini_treo_thi_tra_loi_chua_hieu_chu_khong_vo(monkeypatch):
         raise TimeoutError("qua gio")
 
     monkeypatch.setattr(gemini_service.urllib.request, "urlopen", _treo)
-    assert gemini_service.phan_loai("abc", ["DOANH_THU"], ["HOM_NAY"]) is None
+    assert gemini_service.phan_loai(
+        "bua ni quan thu vao", ["DOANH_THU"], ["HOM_NAY"]
+    ) is None
 
 
 def test_prompt_khong_chua_du_lieu_cua_hang():

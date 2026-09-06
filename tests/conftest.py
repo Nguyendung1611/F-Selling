@@ -3,8 +3,9 @@
 Nguyên tắc:
 - Không bao giờ chạm vào DB thật: DB_PATH trỏ vào file tạm.
 - Không gửi email thật: send_otp_email luôn bị thay bằng fake.
-- Không gọi mạng: VietQR chỉ là chuỗi URL, webhook secret được monkeypatch, và
-  `GEMINI_API_KEY` bị xóa nên trợ lý không bao giờ gọi ra Google thật.
+- Không gọi mạng: QR sales mặc định OFF; test REPORT_ONLY chỉ dùng adapter mock
+  nội bộ, webhook secret được monkeypatch, và `GEMINI_API_KEY` bị xóa nên trợ
+  lý không bao giờ gọi ra Google thật.
 """
 from __future__ import annotations
 
@@ -50,6 +51,9 @@ os.environ["LOG_FILE"] = str(_TMP / "request_log.txt")
 os.environ["SECRET_KEY"] = "test-secret-key-chi-dung-cho-test"
 os.environ["ADMIN_INITIAL_PASSWORD"] = "AdminTest@2026"
 os.environ["ALLOWED_ORIGINS"] = "http://testserver"
+# I10-B fail-closed: mọi test không chủ ý bật seam mock đều giữ hành vi v0.
+os.environ["QR_SALES_MODE"] = "OFF"
+os.environ["QR_WEBHOOK_MODE"] = "OFF"
 # Chặn mọi khả năng gửi mail thật
 os.environ["SMTP_USER"] = ""
 os.environ["SMTP_PASSWORD"] = ""
@@ -59,6 +63,9 @@ os.environ["SMTP_PASSWORD"] = ""
 # Test nào cần tầng dự phòng thì tự monkeypatch `gemini_service` (xem
 # `tests/test_tro_ly_gemini.py`) - đó mới là cách kiểm nó.
 os.environ["GEMINI_API_KEY"] = ""
+os.environ["GEMINI_ENABLED"] = ""
+os.environ["GEMINI_MODEL"] = "gemini-3.5-flash-lite"
+os.environ["TTS_SERVER_ENABLED"] = ""
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -67,7 +74,20 @@ from fastapi.testclient import TestClient  # noqa: E402
 from fselling.core import bootstrap  # noqa: E402
 from fselling.core.database import SessionLocal  # noqa: E402
 from fselling.main import create_app  # noqa: E402
+from fselling.migration.coordinator import MigrationCoordinator  # noqa: E402
+from fselling.migration.topology import StaticInventory  # noqa: E402
 from fselling.services import auth_service, email_service  # noqa: E402
+
+# Schema mutation belongs to the explicit test operator setup, never to web
+# import/startup.  The target is the unique temporary DB declared above.
+_TEST_MIGRATIONS = MigrationCoordinator(
+    os.environ["DB_PATH"],
+    inventory_provider=StaticInventory(),
+)
+_TEST_MIGRATIONS.init()
+_TEST_MIGRATIONS.upgrade("head")
+_TEST_MIGRATIONS.verify()
+bootstrap.initialize_application_data()
 
 SELLER_PASSWORD = "Seller@2026"
 ADMIN_PASSWORD = os.environ["ADMIN_INITIAL_PASSWORD"]
@@ -117,8 +137,15 @@ def app():
 
     @asynccontextmanager
     async def _noop_lifespan(_app):
-        bootstrap.initialize()
-        yield
+        _app.state.schema_ready = False
+        report = _TEST_MIGRATIONS.verify()
+        _app.state.schema_verification = report.as_dict()
+        _app.state.schema_revision = report.current_revision
+        _app.state.schema_ready = True
+        try:
+            yield
+        finally:
+            _app.state.schema_ready = False
 
     return create_app(lifespan_handler=_noop_lifespan)
 
@@ -264,3 +291,68 @@ def new_staff(client, owner_ctx: dict, staff_role: str = "MANAGER") -> tuple:
     assert res.status_code == 200, res.text
     token = login(client, username, STAFF_PASSWORD)
     return username, token
+
+
+def enable_fnb(client, ctx: dict) -> dict:
+    response = client.patch(
+        f"/api/fnb/shops/{ctx['shop_id']}/settings",
+        json={
+            "enabled": True,
+            "expected_revision": 0,
+            "operation_id": f"enable-{uuid.uuid4().hex}",
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def create_fnb_area(
+    client, ctx: dict, name: str = "Khu A", sort_order: int = 0
+) -> dict:
+    floor = client.get(
+        "/api/fnb/floor",
+        params={"shop_id": ctx["shop_id"]},
+        headers=auth(ctx["token"]),
+    ).json()
+    response = client.post(
+        "/api/fnb/areas",
+        json={
+            "shop_id": ctx["shop_id"],
+            "name": name,
+            "sort_order": sort_order,
+            "expected_revision": floor["fnb_revision"],
+            "operation_id": f"area-{uuid.uuid4().hex}",
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def create_fnb_table(
+    client,
+    ctx: dict,
+    area_id: int,
+    name: str = "Bàn 1",
+    sort_order: int = 0,
+) -> dict:
+    floor = client.get(
+        "/api/fnb/floor",
+        params={"shop_id": ctx["shop_id"]},
+        headers=auth(ctx["token"]),
+    ).json()
+    response = client.post(
+        "/api/fnb/tables",
+        json={
+            "shop_id": ctx["shop_id"],
+            "area_id": area_id,
+            "name": name,
+            "sort_order": sort_order,
+            "expected_revision": floor["fnb_revision"],
+            "operation_id": f"table-{uuid.uuid4().hex}",
+        },
+        headers=auth(ctx["token"]),
+    )
+    assert response.status_code == 200, response.text
+    return response.json()

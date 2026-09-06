@@ -1,7 +1,7 @@
 // POS dùng chung cho chủ shop (SELLER) và nhân viên (STAFF).
 (function () {
     const role = localStorage.getItem('role');
-    if(role !== 'SELLER' && role !== 'STAFF') redirectToLogin();
+    if(role !== 'SELLER' && role !== 'STAFF' && role !== 'ADMIN') redirectToLogin();
 })();
 let allShops = [];
 let currentShopId = parseInt(localStorage.getItem('currentShopId'));
@@ -47,6 +47,7 @@ let voucherMessageRaw = '';
 let shiftBarState = 'loading';
 let shiftBarMessage = '';
 let lastPaymentStatus = null;
+let firstRunSaleSuccessShown = false;
 
 const POS_CHECKOUT_STORAGE_PREFIX = 'fselling.pos.checkout.v2';
 const POS_MOVEMENT_STORAGE_PREFIX = 'fselling.pos.movement.v1';
@@ -66,6 +67,300 @@ function dinhDangSoPOS(value) {
         return window.FSellingI18n.formatNumber(value, { maximumFractionDigits: 0 });
     }
     return Math.round(Number(value) || 0).toLocaleString('vi-VN');
+}
+
+// ── I10-D: QR v1 presentation lifecycle owner ─────────────────────────────────
+//
+// Owns the ephemeral display state for one active v1 transfer intent.
+// NEVER persists intent metadata — the canonical reference lives on the server.
+//
+// State machine:
+//   null          → no v1 intent active
+//   'loading'     → fetching authenticated metadata for the current order
+//   'rendered'    → object-URL image active, total shown
+//   'manual'      → render unavailable, sanitised bank fields shown
+//   'hidden'      → underpayment evidence; image+fields cleared
+//   'unavailable' → recovery failed; polite message shown
+//
+// Cleanup is idempotent and MUST be called on every path that ends a transfer
+// session: PAID, CANCELLED, reset, shop change, logout, 404, and pagehide.
+
+let _qr1OrderId = null;          // order this state belongs to
+let _qr1Generation = 0;          // monotonically increasing stale-response fence
+let _qr1Controller = null;       // active AbortController for in-flight fetches
+let _qr1ObjectUrl = null;         // current blob URL — revoke exactly once
+let _qr1State = null;            // 'loading'|'rendered'|'manual'|'hidden'|'unavailable'|null
+let _qr1Fingerprint = null;       // last serialised fingerprint shown; avoids re-render
+
+function _qr1GetToken() {
+    return (typeof getToken === 'function') ? getToken() : null;
+}
+
+function _qr1Cleanup() {
+    if (_qr1Controller) {
+        _qr1Controller.abort();
+        _qr1Controller = null;
+    }
+    if (_qr1ObjectUrl) {
+        URL.revokeObjectURL(_qr1ObjectUrl);
+        _qr1ObjectUrl = null;
+    }
+    _qr1Generation++;
+    _qr1OrderId = null;
+    _qr1State = null;
+    _qr1Fingerprint = null;
+    const img = document.getElementById('qrImage');
+    if (img) img.src = '';
+    const statusEl = document.getElementById('qr1Status');
+    if (statusEl) statusEl.innerText = '';
+    const manualEl = document.getElementById('qr1Manual');
+    if (manualEl) manualEl.style.display = 'none';
+    const bCode = document.getElementById('qr1BankCode');
+    const acctNo = document.getElementById('qr1AccountNo');
+    const acctName = document.getElementById('qr1AccountName');
+    const ref = document.getElementById('qr1Reference');
+    if (bCode) bCode.textContent = '';
+    if (acctNo) acctNo.textContent = '';
+    if (acctName) acctName.textContent = '';
+    if (ref) ref.textContent = '';
+}
+
+function _qr1ClearManual() {
+    const manualEl = document.getElementById('qr1Manual');
+    if (manualEl) manualEl.style.display = 'none';
+    const bCode = document.getElementById('qr1BankCode');
+    const acctNo = document.getElementById('qr1AccountNo');
+    const acctName = document.getElementById('qr1AccountName');
+    const ref = document.getElementById('qr1Reference');
+    if (bCode) bCode.textContent = '';
+    if (acctNo) acctNo.textContent = '';
+    if (acctName) acctName.textContent = '';
+    if (ref) ref.textContent = '';
+}
+
+function _qr1RefreshLabels() {
+    // Re-apply status text and image alt from current state after language change.
+    // No network, no object-URL, no mutation of payload.
+    if (_qr1State === 'loading') {
+        const el = document.getElementById('qr1Status');
+        if (el) el.textContent = dich('pos.payment.v1_loading');
+    } else if (_qr1State === 'hidden') {
+        const el = document.getElementById('qr1Status');
+        if (el) el.textContent = dich('pos.payment.v1_hidden');
+    } else if (_qr1State === 'unavailable') {
+        const el = document.getElementById('qr1Status');
+        if (el) el.textContent = dich('pos.payment.v1_unavailable');
+    }
+    if (_qr1State === 'rendered') {
+        const img = document.getElementById('qrImage');
+        if (img) img.alt = dich('pos.payment.v1_img_alt');
+    }
+}
+
+// Internal: revoke owned URL and clear image/status without touching order/generation.
+// Used when entering a new display state so old image/loading text never lingers.
+function _qr1ClearVisuals() {
+    if (_qr1ObjectUrl) {
+        URL.revokeObjectURL(_qr1ObjectUrl);
+        _qr1ObjectUrl = null;
+    }
+    const img = document.getElementById('qrImage');
+    if (img) img.src = '';
+    const statusEl = document.getElementById('qr1Status');
+    if (statusEl) statusEl.innerText = '';
+}
+
+function _qr1RenderManual(intent) {
+    // Display sanitised instruction fields only — never HTML.
+    _qr1ClearVisuals();
+    _qr1ClearManual();
+    const manualEl = document.getElementById('qr1Manual');
+    if (manualEl) manualEl.style.display = 'block';
+    const bCode = document.getElementById('qr1BankCode');
+    const acctNo = document.getElementById('qr1AccountNo');
+    const acctName = document.getElementById('qr1AccountName');
+    const ref = document.getElementById('qr1Reference');
+    if (bCode) bCode.textContent = intent.bank_code || '';
+    if (acctNo) acctNo.textContent = intent.bank_account_no || '';
+    if (acctName) acctName.textContent = intent.bank_account_name || '';
+    if (ref) ref.textContent = intent.canonical_reference || '';
+    _qr1State = 'manual';
+}
+
+function _qr1RenderUnavailable() {
+    // Clear image/URL and account/reference fields before showing unavailable status.
+    // Does not call _qr1Cleanup so _qr1OrderId/_qr1Generation stay valid.
+    _qr1ClearVisuals();
+    _qr1ClearManual();
+    _qr1State = 'unavailable';
+    const el = document.getElementById('qr1Status');
+    if (el) el.textContent = dich('pos.payment.v1_unavailable');
+}
+
+function _qr1RenderBlob(blob, intent) {
+    if (_qr1ObjectUrl) {
+        URL.revokeObjectURL(_qr1ObjectUrl);
+        _qr1ObjectUrl = null;
+    }
+    _qr1ObjectUrl = URL.createObjectURL(blob);
+    const img = document.getElementById('qrImage');
+    if (img) {
+        img.src = _qr1ObjectUrl;
+        img.alt = dich('pos.payment.v1_img_alt');
+    }
+    const statusEl = document.getElementById('qr1Status');
+    if (statusEl) statusEl.innerText = '';
+    _qr1ClearManual();
+    _qr1State = 'rendered';
+}
+
+async function _qr1FetchAndRender(intent, orderId, generation) {
+    // Stale: wrong generation or order → silent, abandon.
+    if (generation !== _qr1Generation || _qr1OrderId !== orderId) return;
+    // Per-request identity fence: one local controller per call.
+    // Abort predecessor first, then claim identity before any await.
+    if (_qr1Controller) _qr1Controller.abort();
+    const localController = new AbortController();
+    _qr1Controller = localController;
+
+    // Render is payment instruction only; never evidence of payment.
+    if (!intent.capability?.render_available) {
+        if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) return;
+        _qr1RenderManual(intent);
+        // Only clear global if we still own it.
+        if (_qr1Controller === localController) _qr1Controller = null;
+        return;
+    }
+
+    const endpoint = intent.capability.render_endpoint;
+    if (
+        typeof endpoint !== 'string' ||
+        endpoint !== `/api/orders/${orderId}/qr/render`
+    ) {
+        if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) return;
+        _qr1RenderUnavailable();
+        if (_qr1Controller === localController) _qr1Controller = null;
+        return;
+    }
+
+    const token = _qr1GetToken();
+    if (!token) {
+        if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) return;
+        _qr1RenderUnavailable();
+        if (_qr1Controller === localController) _qr1Controller = null;
+        return;
+    }
+
+    let blob;
+    try {
+        const res = await fetch(endpoint, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: 'image/png',
+            },
+            signal: localController.signal,
+            cache: 'no-store',
+            credentials: 'omit',
+            redirect: 'error',
+        });
+        if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) return;
+        if (!res.ok) throw new Error('non-ok');
+        const ct = res.headers.get('content-type') || '';
+        if (ct !== 'image/png') throw new Error('wrong-type');
+        blob = await res.blob();
+        if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) return;
+        if (blob.size === 0 || blob.size > 512 * 1024) throw new Error('size');
+        if (blob.type !== 'image/png') throw new Error('type-mismatch');
+    } catch (_) {
+        if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) return;
+        _qr1RenderManual(intent);
+        if (_qr1Controller === localController) _qr1Controller = null;
+        return;
+    }
+
+    if (generation !== _qr1Generation || _qr1OrderId !== orderId || _qr1Controller !== localController) {
+        if (_qr1Controller === localController) _qr1Controller = null;
+        return;
+    }
+    _qr1RenderBlob(blob, intent);
+    if (_qr1Controller === localController) _qr1Controller = null;
+}
+
+// Exposed for call-sites that need to inject a v1 intent at display time.
+// Never persists intent to sessionStorage.
+function qr1ShowTransient(intent, orderId, serverTotalVnd) {
+    _qr1Cleanup();
+    _qr1OrderId = orderId;
+    const gen = _qr1Generation;
+    const el = document.getElementById('qr1Status');
+    if (el) el.textContent = dich('pos.payment.v1_loading');
+    _qr1State = 'loading';
+    const totalEl = document.getElementById('qrTotalTxt');
+    if (totalEl) totalEl.innerText = dinhDangTien(serverTotalVnd);
+    _qr1Fingerprint = _qr1FingerprintFor(intent);
+    _qr1FetchAndRender(intent, orderId, gen);
+}
+
+// Canonical hidden-state transition: aborts controller, clears visuals+manual,
+// preserves _qr1OrderId so identical repeated hidden polls are ignored by fingerprint
+// while a genuine later metadata change is still observable.
+function _qr1RenderHidden(metadataFingerprint) {
+    if (_qr1Controller) {
+        _qr1Controller.abort();
+        _qr1Controller = null;
+    }
+    // Revoke BEFORE clearVisuals so we control the exact sequence.
+    if (_qr1ObjectUrl) {
+        URL.revokeObjectURL(_qr1ObjectUrl);
+        _qr1ObjectUrl = null;
+    }
+    _qr1ClearVisuals();
+    _qr1ClearManual();
+    _qr1Fingerprint = metadataFingerprint;
+    _qr1State = 'hidden';
+    const el = document.getElementById('qr1Status');
+    if (el) el.textContent = dich('pos.payment.v1_hidden');
+}
+
+// Builds fingerprint from any qr_intent-like object; keeps the shape in one place.
+function _qr1FingerprintFor(intent) {
+    return JSON.stringify({
+        cv: intent.contract_version,
+        amt: intent.expected_vnd,
+        ref: intent.canonical_reference,
+        hidden: Boolean(intent.hidden),
+    });
+}
+
+// Called on reload of a transfer_pending order with no persisted qr_url.
+// Fetches authenticated metadata once; does NOT poll or re-render every 5 s.
+async function _qr1RecoverV1(orderId) {
+    _qr1Cleanup();
+    _qr1OrderId = orderId;
+    const gen = _qr1Generation;
+    const el = document.getElementById('qr1Status');
+    if (el) el.textContent = dich('pos.payment.v1_loading');
+    _qr1State = 'loading';
+    try {
+        const metadata = await apiCall(`/orders/${orderId}/qr`);
+        // Stale: order changed or cleanup ran while we awaited.
+        if (gen !== _qr1Generation || _qr1OrderId !== orderId) return;
+        if (!metadata || !metadata.contract_version) {
+            _qr1RenderUnavailable();
+            return;
+        }
+        if (metadata.hidden) {
+            _qr1RenderHidden(_qr1FingerprintFor(metadata));
+            return;
+        }
+        const fingerprint = _qr1FingerprintFor(metadata);
+        _qr1Fingerprint = fingerprint;
+        _qr1FetchAndRender(metadata, orderId, gen);
+    } catch (_) {
+        if (gen !== _qr1Generation || _qr1OrderId !== orderId) return;
+        _qr1RenderUnavailable();
+    }
 }
 
 function htmlNut(icon, key, options = {}) {
@@ -163,6 +458,57 @@ function laLoi4xx(error) {
     return Number(error?.status) >= 400 && Number(error?.status) < 500;
 }
 
+function currentShopHasTransferAccount() {
+    const shop = allShops.find(item => Number(item.id) === Number(currentShopId));
+    return ['bank_code', 'bank_account_no', 'bank_account_name']
+        .every(field => String(shop?.[field] || '').trim());
+}
+
+function setTransferCapability(available, fallbackToCash = true) {
+    const button = document.getElementById('btnMethodQR');
+    const label = document.getElementById('btnMethodQRLabel');
+    const hint = document.getElementById('qrSetupHint');
+    const setupLink = hint?.querySelector('a');
+    if (setupLink) {
+        const query = new URLSearchParams(window.location.search);
+        setupLink.href = query.get('onboarding') === 'r2'
+            ? '/seller?setup=bank&onboarding=r2'
+            : '/seller?setup=bank';
+    }
+    if (button) {
+        button.disabled = !available;
+        button.setAttribute('aria-disabled', String(!available));
+        button.title = available ? '' : dich('pos.payment.bank_setup_hint');
+    }
+    if (label) {
+        const key = available
+            ? 'pos.payment.transfer'
+            : 'pos.payment.transfer_setup_required';
+        label.dataset.i18n = key;
+        label.innerText = dich(key);
+    }
+    if (hint) hint.hidden = available;
+    if (!available && fallbackToCash && paymentMethod === 'transfer') {
+        apDungPhuongThucThanhToan('cash');
+    }
+}
+
+function updateTransferCapability() {
+    setTransferCapability(currentShopHasTransferAccount());
+}
+
+function updateFnbCapability() {
+    const shop = allShops.find(item => Number(item.id) === Number(currentShopId));
+    const button = document.getElementById('btnTableService');
+    if (button) button.hidden = !Boolean(shop?.fnb_enabled);
+}
+
+function openTableService() {
+    if (!currentShopId) return;
+    localStorage.setItem('currentShopId', String(currentShopId));
+    navigateToPage('/fnb');
+}
+
 async function loadShop() {
     try {
         const res = await apiCall('/shops');
@@ -192,6 +538,11 @@ async function loadShop() {
             localStorage.setItem('currentShopId', currentShopId);
             sel.value = currentShopId;
         }
+        updateTransferCapability();
+        updateFnbCapability();
+        // Capability is independent from catalog success: a warm POS shell must
+        // know whether a legacy receipt may be persisted before it can go offline.
+        await taiChinhSachOfflinePOS();
         await Promise.all([
             loadCategories(),
             loadProducts(),
@@ -199,6 +550,11 @@ async function loadShop() {
             loadLoyaltyProgram()
         ]);
         phucHoiCheckoutDangDo();
+        const query = new URLSearchParams(window.location.search);
+        const receiptId = Number(query.get('receipt'));
+        if (!pendingCheckoutState && Number.isSafeInteger(receiptId) && receiptId > 0) {
+            await hienHoaDon(receiptId, null, true);
+        }
     } catch(e) {
         showToast(e.message || dich('pos.order.load_shops_error'));
     }
@@ -216,10 +572,14 @@ async function changeShopPOS() {
         document.getElementById('shopSelect').value = String(currentShopId);
         return showToast(dich('pos.order.close_shift_before_shop'));
     }
+    salesHistoryR1?.resetForShopChange();
     currentShopId = shopMoi;
     localStorage.setItem('currentShopId', currentShopId);
     resetPOS();
+    updateTransferCapability();
+    updateFnbCapability();
     loyaltyProgram = null;
+    await taiChinhSachOfflinePOS();
     await Promise.all([
         loadCategories(),
         loadProducts(),
@@ -227,6 +587,8 @@ async function changeShopPOS() {
         loadLoyaltyProgram()
     ]);
 }
+
+document.getElementById('btnTableService')?.addEventListener('click', openTableService);
 
 async function loadProducts() {
     if(!currentShopId) return;
@@ -236,7 +598,15 @@ async function loadProducts() {
         filterAndRenderProducts();
         // Chụp lại danh mục để còn bán được khi mất mạng. Không có bản chụp thì
         // màn POS trống trơn và hàng chờ offline có cũng vô nghĩa.
-        OfflineBan?.luuAnhChupSanPham(currentShopId, products);
+        await OfflineBan?.luuAnhChupSanPham(currentShopId, products);
+        // F1: bind exact catalog response vào credential lease. Issue bị tắt,
+        // mất quyền/Pro hoặc digest chạy đua với catalog đều chỉ làm v1 không
+        // usable; trước cutoff luồng v0 bên dưới vẫn là fallback tương thích.
+        await OfflineBan?.prepareV1({
+            shop_id: Number(currentShopId),
+            username: localStorage.getItem('username') || '',
+            products: res
+        }).catch(() => null);
     } catch (e) {
         const chup = await OfflineBan?.docAnhChupSanPham(currentShopId).catch(() => null);
         if (chup && chup.length) {
@@ -256,6 +626,15 @@ async function loadCategories() {
         categories = res.filter(c => c.is_active !== false);
         renderCategories();
     } catch (e) { console.error(e); }
+}
+
+async function taiChinhSachOfflinePOS(force = false) {
+    const shopId = Number(currentShopId);
+    const username = localStorage.getItem('username') || '';
+    if (!window.OfflineBan || window.OfflineBan.dangOffline()
+        || !Number.isSafeInteger(shopId) || shopId < 1 || !username) return null;
+    // Do not let catalog/lease failures erase a stricter durable policy.
+    return window.OfflineBan.refreshContractPolicy({ shop_id: shopId, username }, force).catch(() => null);
 }
 
 // ===== Điểm khách thân thiết =====
@@ -699,12 +1078,32 @@ function applyLoyaltyPoints() {
     updateUI();
 }
 
+function displayPosCategoryName(name) {
+    return name === 'Chưa phân loại'
+        ? dich('pos.category.uncategorized')
+        : name;
+}
+
 function renderCategories() {
     const container = document.getElementById('categoryFilter');
     if(!container) return;
+    if (categories.length > 7) {
+        container.classList.add('category-filter--select');
+        container.innerHTML = `
+            <select aria-label="${escapeHtml(dich('pos.products.all_categories'))}"
+                    onchange="filterByCategory(this.value ? Number(this.value) : null)">
+                <option value="">${dichHtml('pos.products.all_categories')}</option>
+                ${categories.map(c => `
+                    <option value="${c.id}" ${currentCategoryId === c.id ? 'selected' : ''}>
+                        ${escapeHtml(displayPosCategoryName(c.name))}
+                    </option>`).join('')}
+            </select>`;
+        return;
+    }
+    container.classList.remove('category-filter--select');
     container.innerHTML = `<button class="category-btn ${!currentCategoryId ? 'active' : ''}" onclick="filterByCategory(null)">${dichHtml('pos.products.all_categories')}</button>`;
     categories.forEach(c => {
-        container.innerHTML += `<button class="category-btn ${currentCategoryId === c.id ? 'active' : ''}" onclick="filterByCategory(${c.id})">${escapeHtml(c.name)}</button>`;
+        container.innerHTML += `<button class="category-btn ${currentCategoryId === c.id ? 'active' : ''}" onclick="filterByCategory(${c.id})">${escapeHtml(displayPosCategoryName(c.name))}</button>`;
     });
 }
 
@@ -725,8 +1124,6 @@ function filterAndRenderProducts() {
     }
     renderProducts(filtered);
 }
-
-const ANH_SP_MAC_DINH = 'https://placehold.co/150x150/1E293B/FFF?text=SP';
 
 /**
  * Gom danh sách đã lọc thành các ô sẽ hiện trên lưới.
@@ -776,25 +1173,29 @@ function khoangGia(sanPham) {
 function renderProducts(list) {
     const grid = document.getElementById('productGrid');
     grid.innerHTML = '';
+    if (!list.length) {
+        grid.innerHTML = `<div class="empty-products"><i class="ph ph-magnifying-glass"></i></div>`;
+        return;
+    }
     gomONhom(list).forEach(o => {
         const dai = o.nhom !== null && o.sanPham.length > 1;
         const dau = o.sanPham[0];
         const tongTon = o.sanPham.reduce((s, p) => s + (Number(p.stock) || 0), 0);
         const ten = dai ? o.nhom : dau.name;
-        const imgUrl = dau.image_url ? dau.image_url : ANH_SP_MAC_DINH;
-        const div = document.createElement('div');
-        div.className = 'product-card';
-        div.innerHTML = `
-            <div class="product-stock" style="color: white;">${dichHtml('pos.products.stock', { count: tongTon })}</div>
-            <img src="${imgUrl}" onerror="this.src='https://via.placeholder.com/150x150?text=Error'" class="product-img">
-            <div class="product-info">
-                <div class="product-name" title="${escapeHtml(ten)}">${escapeHtml(ten)}</div>
-                <div class="product-price">${escapeHtml(khoangGia(o.sanPham))}</div>
-                ${dai ? `<div style="font-size:0.72rem; color:#94A3B8;">${dichHtml('pos.variants.count', { count: o.sanPham.length })}</div>` : ''}
-            </div>
+        const tenDanhMuc = categories.find(c => c.id === dau.category_id)?.name || '';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'product-card';
+        button.innerHTML = `
+            <span class="product-category">
+                ${escapeHtml(tenDanhMuc)}${dai ? ` · ${dichHtml('pos.variants.count', { count: o.sanPham.length })}` : ''}
+            </span>
+            <span class="product-name" title="${escapeHtml(ten)}">${escapeHtml(ten)}</span>
+            <span class="product-price">${escapeHtml(khoangGia(o.sanPham))}</span>
+            <span class="product-stock ${tongTon <= 10 ? 'low' : ''}">${dichHtml('pos.products.stock', { count: tongTon })}</span>
         `;
-        div.onclick = () => (dai ? moChonBienThe(o) : addToCart(dau));
-        grid.appendChild(div);
+        button.onclick = () => (dai ? moChonBienThe(o) : addToCart(dau));
+        grid.appendChild(button);
     });
 }
 
@@ -1055,9 +1456,79 @@ async function applyVoucher() {
     }
 }
 
+const posMobileCartMedia = window.matchMedia('(max-width: 900px)');
+
+function dongGioHangMobile(traFocus = true) {
+    const checkout = document.getElementById('posCheckoutColumn');
+    const backdrop = document.getElementById('posCartBackdrop');
+    const dock = document.getElementById('posCartDock');
+    checkout?.classList.remove('is-mobile-open');
+    document.body.classList.remove('pos-cart-sheet-open');
+    if (backdrop) backdrop.hidden = true;
+    if (dock) dock.setAttribute('aria-expanded', 'false');
+    if (posMobileCartMedia.matches) checkout?.setAttribute('inert', '');
+    else checkout?.removeAttribute('inert');
+    if (traFocus && dock && !dock.hidden) dock.focus();
+}
+
+function moGioHangMobile() {
+    if (!posMobileCartMedia.matches || !cart.length) return;
+    const checkout = document.getElementById('posCheckoutColumn');
+    const backdrop = document.getElementById('posCartBackdrop');
+    const dock = document.getElementById('posCartDock');
+    checkout?.removeAttribute('inert');
+    checkout?.classList.add('is-mobile-open');
+    document.body.classList.add('pos-cart-sheet-open');
+    if (backdrop) backdrop.hidden = false;
+    if (dock) dock.setAttribute('aria-expanded', 'true');
+    document.getElementById('btnCloseCartMobile')?.focus();
+}
+
+function capNhatGioHangResponsivePOS() {
+    const checkout = document.getElementById('posCheckoutColumn');
+    const dock = document.getElementById('posCartDock');
+    const count = cart.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    const receiptVisible = Boolean(
+        duLieuHoaDonHienTai
+        && document.getElementById('hoaDonSection')?.style.display !== 'none'
+    );
+    const empty = cart.length === 0 && !receiptVisible;
+    checkout?.classList.toggle('is-cart-empty', empty);
+
+    if (dock) {
+        dock.hidden = cart.length === 0;
+        document.getElementById('posCartDockCount').innerText = dich(
+            'pos.cart.mobile_count',
+            { count: dinhDangSoPOS(count) }
+        );
+        document.getElementById('posCartDockTotal').innerText = dinhDangTien(total);
+    }
+
+    if (!posMobileCartMedia.matches) {
+        checkout?.removeAttribute('inert');
+        checkout?.classList.remove('is-mobile-open');
+        document.body.classList.remove('pos-cart-sheet-open');
+        const backdrop = document.getElementById('posCartBackdrop');
+        if (backdrop) backdrop.hidden = true;
+        return;
+    }
+    if (empty) dongGioHangMobile(false);
+    else if (!checkout?.classList.contains('is-mobile-open')) {
+        checkout?.setAttribute('inert', '');
+    }
+}
+
 function updateUI() {
     const container = document.getElementById('cartContainer');
     container.innerHTML = '';
+    if (!cart.length) {
+        container.innerHTML = `
+            <div class="cart-empty">
+                <i class="ph ph-shopping-cart-simple" aria-hidden="true"></i>
+                <strong>${dichHtml('pos.cart.empty_action')}</strong>
+                <span>${dichHtml('pos.cart.empty_hint')}</span>
+            </div>`;
+    }
     cart.forEach((item, index) => {
         // Hiện cả phép nhân lẫn thành tiền: quét nhanh nhiều món thì không ai
         // nhớ đã quét mấy lần món nào, nhìn thành tiền là thấy ngay bất thường.
@@ -1086,6 +1557,7 @@ function updateUI() {
     capNhatHopDiem();
     renderCashQuickAmounts();
     capNhatTienKhachDua();
+    capNhatGioHangResponsivePOS();
 }
 
 function setMethod(m) {
@@ -1094,6 +1566,11 @@ function setMethod(m) {
     }
     if (checkoutOperationId && !currentOrderId) {
         return showToast(dich('pos.checkout.method_retry_first'));
+    }
+    if (m === 'transfer' && !currentShopHasTransferAccount()) {
+        setTransferCapability(false, false);
+        showToast(dich('pos.payment.bank_setup_required'));
+        return;
     }
     apDungPhuongThucThanhToan(m, true);
 }
@@ -1357,18 +1834,16 @@ function renderCashQuickAmounts() {
     const box = document.getElementById('cashQuickAmounts');
     if (!box) return;
     const canThu = Math.max(0, Math.round(Number(total) || 0));
-    const moc = [
-        canThu,
-        Math.ceil(canThu / 50000) * 50000,
-        Math.ceil(canThu / 100000) * 100000,
-        Math.ceil(canThu / 500000) * 500000
+    const choices = [
+        { amount: canThu, label: `${dichHtml('pos.cash.enough')}${escapeHtml(dinhDangTien(canThu))}` },
+        ...[10000, 20000, 50000, 100000, 200000].map(amount => ({
+            amount,
+            label: escapeHtml(dinhDangTien(amount))
+        }))
     ];
-    const amounts = [...new Set(moc)].filter(n => n >= canThu).slice(0, 4);
-    if (!amounts.length) amounts.push(0);
-    box.innerHTML = amounts.map((amount, index) => `
-        <button type="button" onclick="datTienKhachDua(${amount})">
-            ${index === 0 ? dichHtml('pos.cash.enough') : ''}${escapeHtml(dinhDangTien(amount))}
-        </button>`).join('');
+    box.innerHTML = choices.map(({ amount, label }) => `
+        <button type="button" onclick="datTienKhachDua(${amount})">${label}</button>
+    `).join('');
 }
 
 function datTienKhachDua(amount) {
@@ -1410,12 +1885,15 @@ function capNhatNutCheckout() {
     const thieuTien = paymentMethod === 'cash' && cashTenderedAmount < total;
     const donQRDangCho = currentOrderId !== null && !pendingCashOrderId;
     button.disabled = checkoutBusy || voucherBusy || !activeShift || cart.length === 0 || thieuTien || donQRDangCho;
-    button.innerHTML = pendingCashOrderId
-        ? htmlNut('ph-arrow-clockwise', 'pos.checkout.retry_cash')
-        : (checkoutOperationId
-            ? htmlNut('ph-arrow-clockwise', 'pos.checkout.retry_create')
-            : htmlNut('ph-check-circle', 'pos.checkout.complete'));
-    if (!activeShift) button.title = dich('pos.checkout.open_shift_title');
+    button.innerHTML = checkoutBusy
+        ? htmlNut('ph-spinner-gap ph-spin', 'pos.processing')
+        : (pendingCashOrderId
+            ? htmlNut('ph-arrow-clockwise', 'pos.checkout.retry_cash')
+            : (checkoutOperationId
+                ? htmlNut('ph-arrow-clockwise', 'pos.checkout.retry_create')
+                : htmlNut('ph-check-circle', 'pos.checkout.complete')));
+    if (checkoutBusy) button.title = dich('pos.processing');
+    else if (!activeShift) button.title = dich('pos.checkout.open_shift_title');
     else if (cart.length === 0) button.title = dich('pos.cart.empty');
     else if (thieuTien) button.title = dich('pos.checkout.cash_short_title');
     else if (donQRDangCho) button.title = dich('pos.checkout.waiting_title');
@@ -1546,9 +2024,16 @@ function phucHoiCheckoutDangDo() {
     updateUI();
 
     if (state.phase === 'transfer_pending' && currentOrderId) {
-        if (state.qr_url) document.getElementById('qrImage').src = state.qr_url;
-        document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total ?? total);
         document.getElementById('qrSection').style.display = 'block';
+        if (state.qr_url) {
+            document.getElementById('qrImage').src = state.qr_url;
+            document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total ?? total);
+        } else {
+            // v1: fetch authenticated metadata once, then attempt render.
+            let _qr1V1Branch = true;  // I10-D v1 reload anchor
+            document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total ?? total);
+            _qr1RecoverV1(currentOrderId);
+        }
         startPaymentPolling();
         showToast(dich('pos.payment.restored_transfer', { id: currentOrderId }));
     } else if (state.phase === 'cash_pending' && currentOrderId) {
@@ -1588,6 +2073,7 @@ function capNhatThanhCa(state = activeShift ? 'open' : 'closed', message = '') {
         meta.innerText = dich('pos.shift.server_status');
         openButton.style.display = 'none';
         movementButton.style.display = 'none';
+        document.getElementById('btnDoiSoat').style.display = 'none';
         closeButton.style.display = 'none';
     } else if (state === 'open' && activeShift) {
         const nguoiMo = activeShift.opened_by_username
@@ -1600,6 +2086,7 @@ function capNhatThanhCa(state = activeShift ? 'open' : 'closed', message = '') {
         });
         openButton.style.display = 'none';
         movementButton.style.display = '';
+        document.getElementById('btnDoiSoat').style.display = '';
         closeButton.style.display = '';
     } else if (state === 'error') {
         text.innerText = dich('pos.shift.unknown');
@@ -1612,6 +2099,7 @@ function capNhatThanhCa(state = activeShift ? 'open' : 'closed', message = '') {
         meta.innerText = dich('pos.shift.not_open_help');
         openButton.style.display = '';
         movementButton.style.display = 'none';
+        document.getElementById('btnDoiSoat').style.display = 'none';
         closeButton.style.display = 'none';
     }
     capNhatNutCheckout();
@@ -1967,24 +2455,50 @@ function xacNhan(tieuDe, noiDung) {
         const modal = document.getElementById('xacNhanModal');
         const nutOk = document.getElementById('xnDongY');
         const nutHuy = document.getElementById('xnHuy');
+        const focusTruoc = document.activeElement;
         document.getElementById('xnTieuDe').innerText = tieuDe;
         document.getElementById('xnNoiDung').innerText = noiDung;
         modal.style.display = 'flex';
+        modal.setAttribute('aria-hidden', 'false');
 
         const dong = (ketQua) => {
             modal.style.display = 'none';
+            modal.setAttribute('aria-hidden', 'true');
             nutOk.onclick = null;
             nutHuy.onclick = null;
             modal.onclick = null;
-            document.removeEventListener('keydown', khiNhanPhim);
+            document.removeEventListener('keydown', khiNhanPhim, true);
+            if (focusTruoc && focusTruoc.isConnected && typeof focusTruoc.focus === 'function') {
+                focusTruoc.focus();
+            }
             resolve(ketQua);
         };
-        const khiNhanPhim = (e) => { if (e.key === 'Escape') dong(false); };
+        const khiNhanPhim = (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                dong(false);
+                return;
+            }
+            if (e.key !== 'Tab') return;
+            const controls = [nutHuy, nutOk].filter(control => !control.disabled);
+            if (!controls.length) return;
+            const current = document.activeElement;
+            const index = controls.indexOf(current);
+            const nextIndex = e.shiftKey
+                ? (index <= 0 ? controls.length - 1 : index - 1)
+                : (index === controls.length - 1 ? 0 : index + 1);
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            controls[nextIndex].focus();
+        };
 
         nutOk.onclick = () => dong(true);
         nutHuy.onclick = () => dong(false);
         modal.onclick = (e) => { if (e.target === modal) dong(false); };
-        document.addEventListener('keydown', khiNhanPhim);
+        // Capture before the business-modal Escape listener, so cancelling a
+        // nested confirmation never discards the still-editable recovery form.
+        document.addEventListener('keydown', khiNhanPhim, true);
         nutOk.focus();
     });
 }
@@ -2145,11 +2659,15 @@ async function guiYeuCauTaoDonDangDo(state) {
         state.phase = 'transfer_pending';
         state.qr_url = res.qr_url || state.qr_url || null;
         luuCheckoutDangDo(state);
-        if (state.qr_url) document.getElementById('qrImage').src = state.qr_url;
         total = state.server_total;
         updateUI();
-        document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total);
         document.getElementById('qrSection').style.display = 'block';
+        if (res.qr_intent) {
+            qr1ShowTransient(res.qr_intent, currentOrderId, state.server_total);
+        } else if (state.qr_url) {
+            document.getElementById('qrImage').src = state.qr_url;
+            document.getElementById('qrTotalTxt').innerText = dinhDangTien(state.server_total);
+        }
         showToast(dich('pos.checkout.created_transfer'));
         DocTien.chuanBiSoTien(res.total);
         startPaymentPolling();
@@ -2188,22 +2706,303 @@ async function guiYeuCauTaoDonDangDo(state) {
     await hoanTatTienMatDangCho(state);
 }
 
-/** Cập nhật con số phiếu đang chờ gửi trên thanh trạng thái. */
+function identityDongBoPOS() {
+    return {
+        shop_id: Number(currentShopId),
+        username: localStorage.getItem('username') || ''
+    };
+}
+
+function soTrangThaiDongBo(summary, state) {
+    return Number(summary?.state_counts?.[state] || 0);
+}
+
+/** View model chỉ dùng dữ liệu đã sanitize từ F2; không bao giờ cầm phiếu/token. */
+function moHinhTrangThaiOffline(v0Cho, v0Loi, v1, offline) {
+    const ready = soTrangThaiDongBo(v1, 'DRAFT') + soTrangThaiDongBo(v1, 'READY');
+    const syncing = soTrangThaiDongBo(v1, 'SYNCING');
+    const retrying = soTrangThaiDongBo(v1, 'RETRYABLE');
+    const blocked = soTrangThaiDongBo(v1, 'BLOCKED_RECOVERABLE');
+    const quarantined = soTrangThaiDongBo(v1, 'QUARANTINED');
+    const pending = Number(v0Cho || 0) + ready + syncing + retrying + blocked;
+    const hard = v1?.paused && v1.pause_kind === 'HARD';
+    const transient = v1?.paused && v1.pause_kind === 'TRANSIENT';
+    const status = Number(v1?.error?.http_status);
+    let messageKey = offline ? 'pos.offline.panel_offline'
+        : 'pos.offline.panel_waiting';
+    if (hard && status === 401) messageKey = 'pos.offline.panel_login';
+    else if (hard && (status === 402 || status === 403)) messageKey = 'pos.offline.panel_owner';
+    else if (blocked || quarantined || v0Loi) messageKey = 'pos.offline.panel_attention';
+    else if (syncing) messageKey = 'pos.offline.panel_syncing';
+    else if (transient) messageKey = 'pos.offline.panel_retry';
+    else if (!offline && !pending) messageKey = 'pos.offline.panel_synced';
+    return {
+        v0Cho: Number(v0Cho || 0), v0Loi: Number(v0Loi || 0), ready, syncing,
+        retrying, blocked, quarantined, pending, hard, transient,
+        retryAt: v1?.retry_at || null, errorCode: v1?.error?.code || null,
+        messageKey, catalogSavedAt: v1?.catalog_saved_at || null,
+        leaseExpiresAt: v1?.lease_expires_at || null
+    };
+}
+
+function themDongTrangThaiOffline(container, label, value) {
+    const wrap = document.createElement('div');
+    const dt = document.createElement('dt');
+    const dd = document.createElement('dd');
+    dt.textContent = label;
+    dd.textContent = dinhDangSoPOS(value);
+    wrap.append(dt, dd);
+    container.appendChild(wrap);
+}
+
+async function taiTrangThaiOfflinePOS() {
+    if (!window.OfflineBan || !Number.isSafeInteger(Number(currentShopId))) {
+        return moHinhTrangThaiOffline(0, 0, null, Boolean(window.OfflineBan?.dangOffline()));
+    }
+    const [legacy, v1] = await Promise.all([
+        OfflineBan.demLegacyLocal(currentShopId),
+        OfflineBan.getOfflineStatusV1(identityDongBoPOS())
+    ]);
+    return moHinhTrangThaiOffline(legacy.pending_v0, legacy.blocked_v0, v1, OfflineBan.dangOffline());
+}
+
+function capNhatNoiDungTrangThaiOffline(model) {
+    const message = document.getElementById('offlineStatusMessage');
+    const counts = document.getElementById('offlineStatusCounts');
+    const meta = document.getElementById('offlineStatusMeta');
+    const actions = document.getElementById('offlineStatusActions');
+    if (!message || !counts || !meta || !actions) return;
+    message.textContent = dich(model.messageKey, {
+        time: model.retryAt ? dinhDangNgayGio(model.retryAt) : ''
+    });
+    counts.replaceChildren();
+    themDongTrangThaiOffline(counts, dich('pos.offline.count_v1_pending'), model.ready + model.syncing + model.retrying);
+    themDongTrangThaiOffline(counts, dich('pos.offline.count_v0_pending'), model.v0Cho);
+    themDongTrangThaiOffline(counts, dich('pos.offline.count_v1_blocked'), model.blocked + model.quarantined);
+    themDongTrangThaiOffline(counts, dich('pos.offline.count_v0_blocked'), model.v0Loi);
+    themDongTrangThaiOffline(counts, dich('pos.offline.count_syncing'), model.syncing);
+    const details = [];
+    if (model.catalogSavedAt) details.push(dich('pos.offline.catalog_saved', { time: dinhDangNgayGio(model.catalogSavedAt) }));
+    if (model.leaseExpiresAt) details.push(dich('pos.offline.lease_expires', { time: dinhDangNgayGio(model.leaseExpiresAt) }));
+    if (model.errorCode) details.push(dich('pos.offline.safe_error', { code: model.errorCode }));
+    meta.textContent = details.join(' · ');
+    actions.replaceChildren();
+    if (model.transient && !OfflineBan.dangOffline()) {
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.textContent = dich('pos.offline.retry_now');
+        retry.addEventListener('click', async function () {
+            retry.disabled = true;
+            await OfflineBan.resumeSyncV1(identityDongBoPOS());
+            await capNhatHuyHieuOffline();
+            retry.disabled = false;
+        });
+        actions.appendChild(retry);
+    }
+    if (localStorage.getItem('role') !== 'STAFF' && !OfflineBan.dangOffline()) {
+        const recovery = document.createElement('button');
+        recovery.type = 'button';
+        recovery.textContent = dich('pos.offline.recovery_open');
+        recovery.addEventListener('click', taiPhucHoiOffline);
+        actions.appendChild(recovery);
+    }
+}
+
+function clearRecoveryPanel() {
+    const panel = document.getElementById('offlineRecoveryPanel');
+    if (panel) { panel.replaceChildren(); panel.hidden = true; }
+    return panel;
+}
+
+function taiXuongPhieuPhucHoi(response) {
+    return response.blob().then(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'offline-recovery.json';
+        a.rel = 'noopener';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+    });
+}
+
+async function xuatPhieuLocalPhucHoi(receipt) {
+    const response = await apiCall(`/offline/recovery/${currentShopId}/export`, 'POST', { receipt });
+    await taiXuongPhieuPhucHoi(response);
+}
+
+function themNhapPhieuPhucHoi(panel, onImported) {
+    const picker = document.createElement('input');
+    picker.type = 'file'; picker.accept = 'application/json,.json'; picker.hidden = true;
+    picker.setAttribute('aria-label', dich('pos.offline.recovery_import_file'));
+    const trigger = document.createElement('button');
+    trigger.type = 'button'; trigger.textContent = dich('pos.offline.recovery_import_file');
+    trigger.addEventListener('click', () => picker.click());
+    picker.addEventListener('change', async () => {
+        const file = picker.files && picker.files[0];
+        picker.value = '';
+        if (!file) return;
+        if (file.size > 64 * 1024) return showToast(dich('pos.offline.recovery_file_large'));
+        trigger.disabled = true;
+        try {
+            const documentValue = JSON.parse(await file.text());
+            const imported = await apiCall(`/offline/recovery/${currentShopId}/import`, 'POST', documentValue);
+            showToast(dich('pos.offline.recovery_imported'));
+            await onImported(imported && imported.offline_uuid);
+        } catch (e) {
+            showToast(e.message || dich('pos.offline.recovery_error'));
+        } finally {
+            trigger.disabled = false;
+        }
+    });
+    panel.append(trigger, picker);
+}
+
+function appendRecoveryDetail(panel, candidate) {
+    const detail = document.createElement('div');
+    detail.className = 'offline-recovery-detail';
+    const heading = document.createElement('strong');
+    heading.textContent = dich('pos.offline.recovery_detail', {
+        version: candidate.contract_version, state: candidate.state
+    });
+    detail.appendChild(heading);
+    const help = document.createElement('p');
+    help.textContent = candidate.direct_legacy_resolution
+        ? dich('pos.offline.recovery_direct_help')
+        : dich('pos.offline.recovery_file_help');
+    detail.appendChild(help);
+    if (candidate.direct_legacy_resolution && Array.isArray(candidate.issues)) {
+        const reason = document.createElement('textarea');
+        reason.rows = 3; reason.maxLength = 500; reason.placeholder = dich('pos.offline.recovery_reason');
+        detail.appendChild(reason);
+        const controls = [];
+        candidate.issues.forEach(issue => {
+            const label = document.createElement('label');
+            label.textContent = `${issue.product_name || dich('pos.offline.recovery_line')} · ${dich('pos.offline.recovery_action')}`;
+            const select = document.createElement('select');
+            const unknown = document.createElement('option'); unknown.value = 'ACCEPT_UNKNOWN'; unknown.textContent = dich('pos.offline.recovery_accept'); select.appendChild(unknown);
+            products.filter(p => p.is_active !== false).forEach(product => {
+                const option = document.createElement('option'); option.value = `MAP:${product.id}`; option.textContent = `${product.code || product.id} — ${product.name}`; select.appendChild(option);
+            });
+            label.appendChild(select); detail.appendChild(label);
+            controls.push({ issue, select });
+        });
+        const resolve = document.createElement('button'); resolve.type = 'button'; resolve.textContent = dich('pos.offline.recovery_resolve');
+        resolve.addEventListener('click', async () => {
+            const normalizedReason = reason.value.trim();
+            if (normalizedReason.length < 10) return showToast(dich('pos.offline.recovery_reason_required'));
+            const confirmed = await xacNhan(dich('pos.offline.recovery_confirm_title'), dich('pos.offline.recovery_confirm_body'));
+            if (!confirmed) return;
+            resolve.disabled = true;
+            try {
+                const line_resolutions = controls.map(({ issue, select }) => select.value.startsWith('MAP:')
+                    ? { item_ordinal: issue.item_ordinal, action: 'MAP', product_id: Number(select.value.slice(4)) }
+                    : { item_ordinal: issue.item_ordinal, action: 'ACCEPT_UNKNOWN' });
+                await apiCall(`/offline/recovery/${currentShopId}/candidates/${encodeURIComponent(candidate.offline_uuid)}/resolve`, 'POST', {
+                    state_version: candidate.state_version, reason: normalizedReason, line_resolutions
+                });
+                showToast(dich('pos.offline.recovery_done')); await taiPhucHoiOffline(); await capNhatHuyHieuOffline();
+            } catch (e) { showToast(e.message || dich('pos.offline.recovery_error')); resolve.disabled = false; }
+        });
+        detail.appendChild(resolve);
+    }
+    panel.appendChild(detail);
+}
+
+async function taiPhucHoiOffline(offset = 0, importedUuid = null) {
+    const panel = clearRecoveryPanel();
+    if (!panel || localStorage.getItem('role') === 'STAFF' || !Number.isSafeInteger(Number(currentShopId))) return;
+    panel.hidden = false;
+    const loading = document.createElement('p'); loading.textContent = dich('pos.offline.recovery_loading'); panel.appendChild(loading);
+    themNhapPhieuPhucHoi(panel, uuid => taiPhucHoiOffline(0, uuid));
+    try {
+        const [server, local] = await Promise.all([
+            apiCall(`/offline/recovery/${currentShopId}/candidates?limit=25&offset=${Math.max(0, Number(offset) || 0)}`),
+            OfflineBan.localReceiptsForRecovery(identityDongBoPOS())
+        ]);
+        panel.replaceChildren();
+        const exportLocal = document.createElement('button'); exportLocal.type = 'button'; exportLocal.textContent = dich('pos.offline.recovery_export_local');
+        exportLocal.disabled = !local.length;
+        exportLocal.addEventListener('click', async () => {
+            exportLocal.disabled = true;
+            try { await xuatPhieuLocalPhucHoi(local[0]); } catch (e) { showToast(e.message || dich('pos.offline.recovery_error')); }
+            exportLocal.disabled = false;
+        });
+        panel.appendChild(exportLocal);
+        themNhapPhieuPhucHoi(panel, uuid => taiPhucHoiOffline(0, uuid));
+        const stocktake = document.createElement('p');
+        stocktake.className = 'offline-recovery-stocktake';
+        stocktake.textContent = dich('pos.offline.recovery_stocktake');
+        panel.appendChild(stocktake);
+        const list = document.createElement('div'); list.className = 'offline-recovery-list';
+        const items = Array.isArray(server.items) ? server.items : [];
+        if (!items.length) { const empty = document.createElement('p'); empty.textContent = dich('pos.offline.recovery_empty'); list.appendChild(empty); }
+        let importedControl = null;
+        items.forEach(candidate => {
+            const row = document.createElement('div'); row.className = 'offline-recovery-item';
+            const text = document.createElement('span'); text.textContent = `${candidate.offline_uuid} · v${candidate.contract_version} · ${candidate.state}`;
+            const open = document.createElement('button'); open.type = 'button'; open.textContent = dich('pos.offline.recovery_view');
+            open.addEventListener('click', async () => {
+                const detail = await apiCall(`/offline/recovery/${currentShopId}/candidates/${encodeURIComponent(candidate.offline_uuid)}`);
+                appendRecoveryDetail(panel, detail);
+            });
+            if (candidate.offline_uuid === importedUuid) importedControl = open;
+            row.append(text, open); list.appendChild(row);
+        });
+        panel.appendChild(list);
+        const pager = document.createElement('div'); pager.className = 'offline-recovery-pager';
+        const previous = document.createElement('button'); previous.type = 'button'; previous.textContent = dich('pos.offline.recovery_previous');
+        const currentOffset = Number(server.offset) || 0;
+        previous.disabled = currentOffset <= 0;
+        previous.addEventListener('click', () => taiPhucHoiOffline(Math.max(0, currentOffset - 25)));
+        const next = document.createElement('button'); next.type = 'button'; next.textContent = dich('pos.offline.recovery_next');
+        next.disabled = server.next_offset === null || server.next_offset === undefined;
+        next.addEventListener('click', () => taiPhucHoiOffline(Number(server.next_offset)));
+        pager.append(previous, next); panel.appendChild(pager);
+        if (importedControl) {
+            importedControl.focus();
+            importedControl.click();
+        } else if (importedUuid) {
+            showToast(dich('pos.offline.recovery_imported'));
+        }
+    } catch (e) {
+        panel.replaceChildren();
+        const err = document.createElement('p'); err.textContent = dich('pos.offline.recovery_error'); panel.appendChild(err);
+        themNhapPhieuPhucHoi(panel, uuid => taiPhucHoiOffline(0, uuid));
+        const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = dich('pos.offline.retry_now');
+        retry.addEventListener('click', () => taiPhucHoiOffline(offset)); panel.appendChild(retry);
+    }
+}
+
+async function moModalTrangThaiOffline() {
+    const modal = document.getElementById('offlineStatusModal');
+    if (!modal) return;
+    hienModalCa('offlineStatusModal', 'offlineStatusClose');
+    await capNhatHuyHieuOffline();
+}
+
+function dongModalTrangThaiOffline() {
+    dongModalCa('offlineStatusModal');
+}
+
+/** Cập nhật badge/panel sau mọi callback, nhưng render không bao giờ resume queue. */
 async function capNhatHuyHieuOffline() {
     const o = document.getElementById('offlineBadge');
     if (!o || !window.OfflineBan) return;
     try {
-        const cho = await OfflineBan.demCho(currentShopId);
-        const loi = await OfflineBan.demLoi(currentShopId);
-        if (!cho && !loi && !OfflineBan.dangOffline()) {
+        const model = await taiTrangThaiOfflinePOS();
+        if (!model.pending && !model.v0Loi && !model.quarantined && !OfflineBan.dangOffline()) {
             o.style.display = 'none';
-            return;
+        } else {
+            o.style.display = 'inline-flex';
+            o.textContent = OfflineBan.dangOffline()
+                ? dich('pos.offline.mat_mang', { count: model.pending })
+                : dich('pos.offline.cho_gui', { count: model.pending });
+            o.title = dich(model.messageKey, {
+                time: model.retryAt ? dinhDangNgayGio(model.retryAt) : ''
+            });
         }
-        o.style.display = 'inline-flex';
-        o.innerText = OfflineBan.dangOffline()
-            ? dich('pos.offline.mat_mang', { count: cho })
-            : dich('pos.offline.cho_gui', { count: cho });
-        o.title = loi ? dich('pos.offline.co_phieu_loi', { count: loi }) : '';
+        capNhatNoiDungTrangThaiOffline(model);
     } catch (e) {
         console.warn('[OFFLINE] Không đọc được hàng chờ:', e);
     }
@@ -2233,12 +3032,19 @@ async function luuBanOffline(state) {
     ) {
         throw new Error(dich(khoaThongBaoRetryUuDai(payload)));
     }
-    const phieu = await OfflineBan.luuPhieu(
-        currentShopId,
-        cart,
-        cashTenderedAmount,
-        localStorage.getItem('username') || null
-    );
+    const phieu = await OfflineBan.luuPhieuTuPOS({
+        shop_id: Number(currentShopId),
+        username: localStorage.getItem('username') || '',
+        creation_key: state.operation_id,
+        items: cart,
+        cash_tendered: cashTenderedAmount,
+        device_label: localStorage.getItem('username') || null,
+        payment_method: state.payment_method,
+        voucher_code: payload.voucher_code || null,
+        loyalty_points_to_use: Number(payload.loyalty_points_to_use || 0),
+        qr: false,
+        debt: false
+    });
     xoaCheckoutDangDo();
     checkoutOperationId = null;
     currentOrderId = null;
@@ -2264,6 +3070,12 @@ async function thuTaoDonDangDo(state) {
     try {
         await guiYeuCauTaoDonDangDo(state);
     } catch (e) {
+        if (e.code === 'QR_BANK_ACCOUNT_NOT_CONFIGURED') {
+            setTransferCapability(false, false);
+            luuCheckoutDangDo(state);
+            showToast(dich('pos.payment.bank_setup_required'));
+            return;
+        }
         const coVoucher = Boolean(state.create_payload?.voucher_code);
         const coDungDiem = Number(
             state.create_payload?.loyalty_points_to_use || 0
@@ -2504,6 +3316,7 @@ async function cancelOrder() {
             // Kết quả xác định: order không còn tồn tại. Bỏ khóa durable nhưng
             // giữ giỏ hiện tại để thu ngân có thể kiểm tra và tạo lại.
             stopPaymentPolling();
+            _qr1Cleanup();
             xoaCheckoutDangDo();
             currentOrderId = null;
             pendingCashOrderId = null;
@@ -2532,8 +3345,31 @@ async function kiemTraThanhToan() {
         if(idDon !== currentOrderId) return;
         lastPaymentStatus = statusRes;
 
+        // I10-D: apply v1 qr_intent from poll — only state transitions matter.
+        // Do not re-fetch/re-render the same fingerprint every 5 s.
+        if (statusRes.qr_intent && _qr1OrderId === idDon) {
+            const fingerprint = _qr1FingerprintFor(statusRes.qr_intent);
+            if (fingerprint !== _qr1Fingerprint) {
+                if (statusRes.qr_intent.hidden) {
+                    // Hidden: abort and clear all sensitive details immediately.
+                    _qr1RenderHidden(_qr1FingerprintFor(statusRes.qr_intent));
+                } else {
+                    // Visible: clear visuals, then assign fingerprint only after reactivation.
+                    _qr1ClearVisuals();
+                    _qr1OrderId = idDon;
+                    const gen = _qr1Generation;
+                    const el = document.getElementById('qr1Status');
+                    if (el) el.textContent = dich('pos.payment.v1_loading');
+                    _qr1State = 'loading';
+                    _qr1Fingerprint = _qr1FingerprintFor(statusRes.qr_intent);
+                    _qr1FetchAndRender(statusRes.qr_intent, idDon, gen);
+                }
+            }
+        }
+
         if(statusRes.status === 'PAID') {
             stopPaymentPolling();
+            _qr1Cleanup();
             // Đọc TRƯỚC khi vẽ hóa đơn. Nếu chuyển thừa, vẫn xuất hóa đơn ngay
             // nhưng lời cảnh báo nêu rõ số cần hoàn.
             if(statusRes.refund_pending) {
@@ -2684,7 +3520,7 @@ function stopPaymentPolling() {
  * vẽ sau thì tờ hóa đơn vừa tạo mới không bị dọn mất. Quầy cũng sẵn sàng cho
  * khách tiếp theo ngay trong lúc hóa đơn còn hiển thị.
  */
-async function hienHoaDon(orderId, ketQuaDiemMoiNhat = null) {
+async function hienHoaDon(orderId, ketQuaDiemMoiNhat = null, receiptCopy = false) {
     if (!orderId) return resetPOS();
     let d = null;
     try {
@@ -2709,9 +3545,30 @@ async function hienHoaDon(orderId, ketQuaDiemMoiNhat = null) {
             message: e.message
         }));
     }
+    if (receiptCopy && !['PAID', 'DEBT'].includes(d.status)) {
+        resetPOS();
+        return showToast(dich('pos.sales_history.detail_not_finalized'));
+    }
+    d.receipt_copy = receiptCopy;
     resetPOS();
+    duLieuHoaDonHienTai = d;
     veHoaDon(d);
     document.getElementById('hoaDonSection').style.display = 'block';
+    capNhatGioHangResponsivePOS();
+    if (posMobileCartMedia.matches) moGioHangMobile();
+    showFirstRunSaleSuccess(d);
+}
+
+function showFirstRunSaleSuccess(orderDetail) {
+    const query = new URLSearchParams(window.location.search);
+    if (firstRunSaleSuccessShown || query.get('onboarding') !== 'r2') return;
+    if (!['PAID', 'DEBT'].includes(orderDetail?.status)) return;
+    firstRunSaleSuccessShown = true;
+    document.getElementById('firstRunSaleSuccess').hidden = false;
+}
+
+function dismissFirstRunSaleSuccess() {
+    document.getElementById('firstRunSaleSuccess').hidden = true;
 }
 
 // Hóa đơn là tài liệu giao cho khách tại Việt Nam nên luôn giữ tiếng Việt,
@@ -2738,14 +3595,312 @@ function dinhDangNgayGioHoaDon(value) {
         : fallbackDate.toLocaleString('vi-VN');
 }
 
-function veHoaDon(d) {
-    // Tên thu ngân và tiền thối lấy từ bản ghi server, không lấy theo tài khoản
-    // đang mở trình duyệt (hóa đơn cũ có thể do người khác bán).
-    const nhanVien = d.cashier_username || localStorage.getItem('username') || '—';
+// RECEIPT_ACTIONS_R1_START
+let duLieuHoaDonHienTai = null;
+
+function phuongThucThanhToanHoaDon(d) {
+    if (d.payment_method === 'debt') return 'Ghi nợ';
+    const coChuyenKhoan = Number(d.bank_paid_amount || 0) > 0;
+    const coTienMat = Number(d.cash_paid_amount || 0) > 0;
+    if (coChuyenKhoan && coTienMat) return 'Chuyển khoản + tiền mặt';
+    if (d.payment_method === 'transfer' || coChuyenKhoan) return 'Chuyển khoản';
+    return 'Tiền mặt';
+}
+
+function taoNoiDungHoaDonChiaSe(d) {
     const coChuyenKhoan = Number(d.bank_paid_amount || 0) > 0;
     const coTienMat = Number(d.cash_paid_amount || 0) > 0;
     const coTienKhachDua = d.cash_tendered_amount !== null
         && d.cash_tendered_amount !== undefined;
+    const nhanVien = d.cashier_username || localStorage.getItem('username') || '—';
+    const pttt = phuongThucThanhToanHoaDon(d);
+    const giamBangDiem = Math.max(
+        0,
+        Number(d.loyalty_discount ?? d.loyalty_discount_amount) || 0
+    );
+    const diemDaDung = Math.max(0, Math.trunc(Number(d.loyalty_points_redeemed) || 0));
+    const diemDaNhan = Math.max(0, Math.trunc(Number(d.loyalty_points_earned) || 0));
+    const returnedTotal = Math.max(0, Number(d.returned_total) || 0);
+    const lines = [
+        d.shop_name || 'F-Selling',
+        d.receipt_copy ? 'HÓA ĐƠN BÁN HÀNG · BẢN SAO' : 'HÓA ĐƠN BÁN HÀNG',
+        `Số đơn: #${d.id}`,
+        `Thời gian: ${dinhDangNgayGioHoaDon(d.created_at)}`,
+        `Nhân viên: ${nhanVien}`,
+        `Thanh toán: ${pttt}`
+    ];
+
+    if (d.fnb_table_names?.length) lines.push(`Bàn: ${d.fnb_table_names.join(' + ')}`);
+    if (d.fnb_check_label) lines.push(`Bill: ${d.fnb_check_label}`);
+    if (d.customer?.name) lines.push(`Khách hàng: ${d.customer.name}`);
+    lines.push('------------------------------');
+    (d.items || []).forEach(item => {
+        lines.push(item.product_name || 'Sản phẩm');
+        lines.push(`  ${dinhDangTienHoaDon(item.price)} × ${item.quantity} = ${dinhDangTienHoaDon(item.line_total)}`);
+        if (Number(item.returned_quantity || 0) > 0) {
+            lines.push(`  Đã trả: ${dinhDangSoHoaDon(item.returned_quantity)}`);
+        }
+    });
+    lines.push('------------------------------');
+    lines.push(`Tạm tính: ${dinhDangTienHoaDon(d.subtotal)}`);
+    if (Number(d.discount_amount || 0) > 0) {
+        const ma = d.voucher_code ? ` (${d.voucher_code})` : '';
+        lines.push(`Giảm giá${ma}: - ${dinhDangTienHoaDon(d.discount_amount)}`);
+    }
+    if (giamBangDiem > 0) {
+        lines.push(`Giảm bằng ${dinhDangSoHoaDon(diemDaDung)} điểm: - ${dinhDangTienHoaDon(giamBangDiem)}`);
+    }
+    lines.push(`TỔNG CỘNG: ${dinhDangTienHoaDon(d.total_amount)}`);
+    if (returnedTotal > 0) {
+        lines.push(`ĐÃ HOÀN KHÁCH: - ${dinhDangTienHoaDon(returnedTotal)}`);
+        lines.push(`GIÁ TRỊ CÒN LẠI: ${dinhDangTienHoaDon(Math.max(0, Number(d.total_amount || 0) - returnedTotal))}`);
+    }
+    if (coChuyenKhoan && coTienMat) {
+        lines.push(`Qua ngân hàng: ${dinhDangTienHoaDon(d.bank_paid_amount)}`);
+        lines.push(`Bù tiền mặt: ${dinhDangTienHoaDon(d.cash_paid_amount)}`);
+    }
+    if (coTienKhachDua) {
+        lines.push(`Khách đưa: ${dinhDangTienHoaDon(d.cash_tendered_amount)}`);
+        lines.push(`Tiền thối: ${dinhDangTienHoaDon(d.cash_change_amount || 0)}`);
+    }
+    if (d.refund_pending) {
+        lines.push(`Thực nhận: ${dinhDangTienHoaDon(d.received_amount)}`);
+        lines.push(`CẦN HOÀN KHÁCH: ${dinhDangTienHoaDon(d.refund_due_amount)}`);
+    }
+    if (diemDaNhan > 0) lines.push(`Điểm vừa nhận: +${dinhDangSoHoaDon(diemDaNhan)} điểm`);
+    if (d.loyalty_balance !== null && d.loyalty_balance !== undefined) {
+        lines.push(`Số dư điểm: ${dinhDangSoHoaDon(d.loyalty_balance)} điểm`);
+    }
+    lines.push('Cảm ơn quý khách!');
+    return lines.join('\n');
+}
+
+function xuongDongHoaDonAnh(value, maxLength = 44) {
+    let remaining = String(value ?? '').trimEnd();
+    if (!remaining) return [''];
+    const lines = [];
+    while (remaining.length > maxLength) {
+        let cut = remaining.lastIndexOf(' ', maxLength);
+        if (cut < Math.floor(maxLength / 2)) cut = maxLength;
+        lines.push(remaining.slice(0, cut).trimEnd());
+        remaining = remaining.slice(cut).trimStart();
+    }
+    lines.push(remaining);
+    return lines;
+}
+
+function taoFileHoaDonPng(d) {
+    const canvas = document.createElement('canvas');
+    const width = 720;
+    const padding = 48;
+    const lineHeight = 36;
+    const rows = [];
+    taoNoiDungHoaDonChiaSe(d).split('\n').forEach((line, index) => {
+        xuongDongHoaDonAnh(line).forEach(text => rows.push({
+            text,
+            center: index < 2,
+            bold: index < 2 || text.startsWith('TỔNG CỘNG') || text.startsWith('CẦN HOÀN KHÁCH')
+        }));
+    });
+    rows.push({ text: '', center: false, bold: false });
+    rows.push({ text: `Tạo từ F-Selling · Đơn #${d.id}`, center: true, bold: true, brand: true });
+
+    canvas.width = width;
+    canvas.height = padding * 2 + rows.length * lineHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('CANVAS_UNAVAILABLE');
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.textBaseline = 'top';
+    rows.forEach((row, index) => {
+        ctx.font = `${row.bold ? '700 ' : ''}${index < 2 ? 28 : 24}px ui-monospace, monospace`;
+        ctx.fillStyle = row.brand
+            ? '#C95100'
+            : (row.text.startsWith('CẦN HOÀN KHÁCH') ? '#B42318' : '#132344');
+        ctx.textAlign = row.center ? 'center' : 'left';
+        ctx.fillText(row.text, row.center ? width / 2 : padding, padding + index * lineHeight);
+    });
+    const dataUrl = canvas.toDataURL('image/png');
+    const encoded = dataUrl.split(',', 2)[1];
+    if (!encoded) throw new Error('PNG_UNAVAILABLE');
+    const binary = atob(encoded);
+    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+    return new File([bytes], `hoa-don-${d.id}.png`, { type: 'image/png' });
+}
+
+async function saoChepAnhHoaDon(file) {
+    if (!navigator.clipboard?.write || typeof ClipboardItem !== 'function') return false;
+    try {
+        await navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': file })
+        ]);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+function taiAnhHoaDon(file) {
+    const url = URL.createObjectURL(file);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = file.name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function duPhongChiaSeAnhHoaDon(file) {
+    if (await saoChepAnhHoaDon(file)) {
+        showToast(dich('pos.receipt.image_copied'));
+        return;
+    }
+    try {
+        taiAnhHoaDon(file);
+        showToast(dich('pos.receipt.image_downloaded'));
+    } catch (_) {
+        showToast(dich('pos.receipt.image_error'));
+    }
+}
+
+async function chiaSeHoaDon() {
+    if (!duLieuHoaDonHienTai) {
+        showToast(dich('pos.receipt.not_ready'));
+        return;
+    }
+    const title = `Hóa đơn #${duLieuHoaDonHienTai.id} · ${duLieuHoaDonHienTai.shop_name || 'F-Selling'}`;
+    let file;
+    try {
+        file = await taoFileHoaDonPng(duLieuHoaDonHienTai);
+    } catch (_) {
+        showToast(dich('pos.receipt.share_error'));
+        return;
+    }
+    const payload = { title, files: [file] };
+    if (typeof navigator.share !== 'function' || !navigator.canShare?.({ files: [file] })) {
+        await duPhongChiaSeAnhHoaDon(file);
+        return;
+    }
+    try {
+        await navigator.share(payload);
+    } catch (error) {
+        if (error?.name !== 'AbortError') await duPhongChiaSeAnhHoaDon(file);
+    }
+}
+
+async function saoChepVanBanHoaDon(text) {
+    if (navigator.clipboard?.writeText) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return;
+        } catch (_) {
+            // Trình duyệt có API nhưng có thể chặn quyền; thử lối tương thích.
+        }
+    }
+    const field = document.createElement('textarea');
+    field.value = text;
+    field.setAttribute('readonly', '');
+    field.style.position = 'fixed';
+    field.style.opacity = '0';
+    document.body.appendChild(field);
+    field.focus();
+    field.select();
+    let copied = false;
+    try {
+        copied = document.execCommand('copy');
+    } finally {
+        field.remove();
+    }
+    if (!copied) throw new Error('COPY_UNAVAILABLE');
+}
+
+function coTheSaoChepHoaDon() {
+    return localStorage.getItem('role') !== 'STAFF';
+}
+
+async function saoChepHoaDon() {
+    if (!coTheSaoChepHoaDon()) {
+        showToast(dich('pos.receipt.copy_not_allowed'));
+        return;
+    }
+    if (!duLieuHoaDonHienTai) {
+        showToast(dich('pos.receipt.not_ready'));
+        return;
+    }
+    try {
+        await saoChepVanBanHoaDon(taoNoiDungHoaDonChiaSe(duLieuHoaDonHienTai));
+        showToast(dich('pos.receipt.copied'));
+    } catch (_) {
+        showToast(dich('pos.receipt.copy_error'));
+    }
+}
+
+function inHoaDon() {
+    if (!duLieuHoaDonHienTai) {
+        showToast(dich('pos.receipt.not_ready'));
+        return;
+    }
+    window.print();
+}
+// RECEIPT_ACTIONS_R1_END
+
+let salesHistoryR1 = null;
+
+function chuanBiBanSaoHoaDon(detail) {
+    duLieuHoaDonHienTai = { ...detail, receipt_copy: true };
+    veHoaDon(duLieuHoaDonHienTai);
+}
+
+function moLichSuDon() {
+    if (!currentShopId) return showToast(dich('pos.sales_history.select_shop'));
+    hienModalCa('salesHistoryModal', 'salesHistorySearch');
+    salesHistoryR1.open();
+}
+
+salesHistoryR1 = window.FSellingSalesHistoryR1.mount({
+    request: endpoint => apiCall(endpoint),
+    getShopId: () => currentShopId,
+    t: dich,
+    escapeHtml,
+    money: dinhDangTienHoaDon,
+    dateTime: dinhDangNgayGioHoaDon,
+    closeModal: dongModalCa,
+    goToLogin: () => window.location.assign('/#login'),
+    prepareReceipt: chuanBiBanSaoHoaDon,
+    printReceipt: detail => {
+        chuanBiBanSaoHoaDon(detail);
+        inHoaDon();
+    },
+    shareReceipt: async detail => {
+        chuanBiBanSaoHoaDon(detail);
+        await chiaSeHoaDon();
+    }
+});
+
+function veHoaDon(d) {
+    // Tên thu ngân và tiền thối lấy từ bản ghi server, không lấy theo tài khoản
+    // đang mở trình duyệt (hóa đơn cũ có thể do người khác bán).
+    const nhanVien = d.cashier_username || localStorage.getItem('username') || '—';
+    const copyButton = document.getElementById('btnCopyReceipt');
+    if (copyButton) copyButton.hidden = !coTheSaoChepHoaDon();
+    const closeLabel = document.getElementById('btnCloseReceiptLabel');
+    if (closeLabel) {
+        const key = d.receipt_copy ? 'pos.receipt.close' : 'pos.receipt.new_order';
+        closeLabel.dataset.i18n = key;
+        closeLabel.innerText = dich(key);
+    }
+    const closeIcon = document.getElementById('btnCloseReceiptIcon');
+    if (closeIcon) closeIcon.className = `ph ${d.receipt_copy ? 'ph-x-circle' : 'ph-plus-circle'}`;
+    const coChuyenKhoan = Number(d.bank_paid_amount || 0) > 0;
+    const coTienMat = Number(d.cash_paid_amount || 0) > 0;
+    const coTienKhachDua = d.cash_tendered_amount !== null
+        && d.cash_tendered_amount !== undefined;
+    const fnbContext = `${d.fnb_table_names?.length
+        ? `<div><b>Bàn:</b> ${escapeHtml(d.fnb_table_names.join(' + '))}</div>`
+        : ''}${d.fnb_check_label
+        ? `<div><b>Bill:</b> ${escapeHtml(d.fnb_check_label)}</div>`
+        : ''}`;
     // Hóa đơn chỉ dùng con số server đã ghi vào đơn. Không tính lại theo cấu
     // hình hiện tại vì chủ shop có thể đổi chương trình sau lúc bán.
     const giamBangDiem = Math.max(
@@ -2760,19 +3915,19 @@ function veHoaDon(d) {
         0,
         Math.trunc(Number(d.loyalty_points_earned) || 0)
     );
+    const returnedTotal = Math.max(0, Number(d.returned_total) || 0);
     const coSoDuDiem = d.loyalty_balance !== null
         && d.loyalty_balance !== undefined;
     // Trả hàng có thể làm số dư âm khi điểm đã cộng trước đó đã được khách dùng
     // mất. Phải in đúng số âm để shop nhìn thấy, không che thành 0.
     const soDuDiem = Math.trunc(Number(d.loyalty_balance) || 0);
-    const pttt = coChuyenKhoan && coTienMat
-        ? 'Chuyển khoản + tiền mặt'
-        : (coChuyenKhoan ? 'Chuyển khoản' : 'Tiền mặt');
+    const pttt = phuongThucThanhToanHoaDon(d);
 
     const dongHang = (d.items || []).map(i => `
         <tr>
             <td style="padding:0.25rem 0;">${escapeHtml(i.product_name)}<br>
-                <span style="color:#64748B; font-size:0.8rem;">${dinhDangSoHoaDon(i.price)} × ${i.quantity}</span></td>
+                <span style="color:#64748B; font-size:0.8rem;">${dinhDangSoHoaDon(i.price)} × ${i.quantity}</span>
+                ${Number(i.returned_quantity || 0) > 0 ? `<br><span style="color:#B45309; font-size:0.8rem; font-weight:700;">Đã trả: ${dinhDangSoHoaDon(i.returned_quantity)}</span>` : ''}</td>
             <td style="padding:0.25rem 0; text-align:right; white-space:nowrap; font-weight:600;">${dinhDangTienHoaDon(i.line_total)}</td>
         </tr>`).join('');
 
@@ -2785,6 +3940,10 @@ function veHoaDon(d) {
         tongKet += `<div style="display:flex; justify-content:space-between; color:#6D28D9;"><span>Giảm bằng ${dinhDangSoHoaDon(diemDaDung)} điểm</span><span>- ${dinhDangTienHoaDon(giamBangDiem)}</span></div>`;
     }
     tongKet += `<div style="display:flex; justify-content:space-between; font-size:1.15rem; font-weight:700; margin-top:0.4rem; padding-top:0.4rem; border-top:2px solid #0F172A;"><span>TỔNG CỘNG</span><span>${dinhDangTienHoaDon(d.total_amount)}</span></div>`;
+    if (returnedTotal > 0) {
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#B91C1C; font-weight:700; margin-top:0.35rem;"><span>ĐÃ HOÀN KHÁCH</span><span>- ${dinhDangTienHoaDon(returnedTotal)}</span></div>`;
+        tongKet += `<div style="display:flex; justify-content:space-between; color:#0F766E; font-weight:700;"><span>GIÁ TRỊ CÒN LẠI</span><span>${dinhDangTienHoaDon(Math.max(0, Number(d.total_amount || 0) - returnedTotal))}</span></div>`;
+    }
     if (coChuyenKhoan && coTienMat) {
         tongKet += `<div style="display:flex; justify-content:space-between; margin-top:0.35rem;"><span>Qua ngân hàng</span><span>${dinhDangTienHoaDon(d.bank_paid_amount)}</span></div>`;
         tongKet += `<div style="display:flex; justify-content:space-between;"><span>Bù tiền mặt</span><span>${dinhDangTienHoaDon(d.cash_paid_amount)}</span></div>`;
@@ -2818,14 +3977,15 @@ function veHoaDon(d) {
     document.getElementById('hoaDonNoiDung').innerHTML = `
         <div style="text-align:center; border-bottom:1px dashed #94A3B8; padding-bottom:0.6rem; margin-bottom:0.6rem;">
             <div style="font-weight:700; font-size:1.05rem;">${escapeHtml(d.shop_name || '')}</div>
-            <div style="font-size:0.9rem;">HÓA ĐƠN BÁN HÀNG</div>
+            <div style="font-size:0.9rem;">${d.receipt_copy ? 'HÓA ĐƠN BÁN HÀNG · BẢN SAO' : 'HÓA ĐƠN BÁN HÀNG'}</div>
         </div>
         <div style="font-size:0.85rem; line-height:1.7; margin-bottom:0.6rem;">
             <div><b>Số đơn:</b> #${d.id}</div>
             <div><b>Thời gian:</b> ${dinhDangNgayGioHoaDon(d.created_at)}</div>
             <div><b>Nhân viên:</b> ${escapeHtml(nhanVien)}</div>
             <div><b>Thanh toán:</b> ${pttt}</div>
-            ${d.customer ? `<div><b>Khách hàng:</b> ${escapeHtml(d.customer.name)} (${escapeHtml(d.customer.phone)})</div>` : ''}
+            ${fnbContext}
+            ${d.customer?.name ? `<div><b>Khách hàng:</b> ${escapeHtml(d.customer.name)}</div>` : ''}
         </div>
         <table style="width:100%; border-collapse:collapse; font-size:0.88rem; border-top:1px dashed #94A3B8; border-bottom:1px dashed #94A3B8;">
             ${dongHang}
@@ -2835,12 +3995,16 @@ function veHoaDon(d) {
 }
 
 function dongHoaDon() {
+    duLieuHoaDonHienTai = null;
     document.getElementById('hoaDonSection').style.display = 'none';
+    dismissFirstRunSaleSuccess();
+    capNhatGioHangResponsivePOS();
 }
 
 function resetPOS() {
     stopPaymentPolling();
     dongHoaDon();
+    _qr1Cleanup();
     xoaCheckoutDangDo();
     // Mọi response voucher cũ về sau thời điểm reset đều đã hết giá trị.
     voucherRequestId += 1;
@@ -2872,6 +4036,189 @@ function resetPOS() {
     boChonKhach();  // trả về khách vãng lai cho đơn tiếp theo
     calcCart();
     loadProducts(); // refresh stock
+}
+
+// Wipe transient v1 QR state on pagehide — prevents stale display on BFCache restore.
+window.addEventListener('pagehide', () => {
+    _qr1Cleanup();
+});
+
+// Restore QR display after BFCache restore.
+// - v0: if state.qr_url exists, restore image and total directly (no metadata fetch).
+// - v1: if transfer_pending with no qr_url, call _qr1RecoverV1 once.
+// Auth loss (no token) wipes everything; api.js redirect authority is untouched.
+window.addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    if (!localStorage.getItem('token')) {
+        _qr1Cleanup();
+        return;
+    }
+    const state = docSessionJson(sessionKey('checkout_dang_do'));
+    if (!state || state.phase !== 'transfer_pending') return;
+    if (state.qr_url) {
+        // v0: restore image and total from persisted URL.
+        document.getElementById('qrImage').src = state.qr_url;
+        document.getElementById('qrTotalTxt').innerText =
+            dinhDangTien(state.server_total ?? total);
+    } else if (currentOrderId) {
+        // v1: recover once; do not start another polling interval.
+        _qr1RecoverV1(currentOrderId);
+    }
+});
+
+// ===== Đối Soát ngân hàng =====
+// Tiền về cho đơn nợ: hiện danh sách BANK_UNAPPLIED, cho phép gán vào đơn.
+
+// ponytail: global modal state, singleton per session
+let _doiSoatDangChon = null; // { eventId, soTien }
+
+function dongModalDoiSoat() {
+    const m = document.getElementById('doiSoatModal');
+    if (m) m.style.display = 'none';
+}
+
+function dongModalGanDonNo() {
+    _doiSoatDangChon = null;
+    const m = document.getElementById('ganDonNoModal');
+    if (m) m.style.display = 'none';
+}
+
+async function moModalGanDonNo() {
+    const modal = document.getElementById('ganDonNoModal');
+    const ds = document.getElementById('ganDonNoDanhSach');
+    if (!modal || !ds) return;
+    const ctx = _doiSoatDangChon;
+    if (!ctx) return;
+
+    const soTienLabel = dinhDangTien(ctx.soTien);
+    const tomTat = document.getElementById('ganDonNoSoTien');
+    if (tomTat) tomTat.innerText = `Đang gán ${soTienLabel}`;
+
+    modal.style.display = 'flex';
+    ds.innerHTML = `<div style="color:#94A3B8;">${dichHtml('pos.reconciliation.assign_loading')}</div>`;
+
+    try {
+        const res = await apiCall(`/orders?shop_id=${currentShopId}&status=DEBT`);
+        const donNo = (res.orders || []).filter(o => Number(o.remaining || o.total_amount || 0) > 0);
+        if (!donNo.length) {
+            ds.innerHTML = `<div style="color:#94A3B8;">${dichHtml('pos.reconciliation.assign_none')}</div>`;
+            return;
+        }
+        ds.innerHTML = donNo.map(o => {
+            const conNo = dinhDangTien(Number(o.remaining || o.total_amount || 0));
+            const khach = o.customer_name || o.customer_phone || '—';
+            return `<div style="border-bottom:1px solid #334155; padding:0.65rem 0; display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
+    <div style="flex:1; min-width:0;">
+        <strong style="color:#fff;">#${o.id}</strong>
+        <div style="color:#94A3B8; font-size:0.8rem;">${escapeHtml(khach)} · ${dich('pos.reconciliation.order_remaining', { amount: conNo })}</div>
+    </div>
+    <button onclick="ganKhoanVaoDonNo(${o.id})" style="padding:0.35rem 0.8rem; white-space:nowrap;">${dichHtml('pos.reconciliation.assign')}</button>
+</div>`;
+        }).join('');
+    } catch (e) {
+        ds.innerHTML = `<div style="color:#EF4444;">${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function ganKhoanVaoDonNo(orderId) {
+    const ctx = _doiSoatDangChon;
+    if (!ctx) return;
+    const dongY = await xacNhan(
+        dich('pos.reconciliation.assign_title'),
+        dich('pos.reconciliation.assign_confirm', { amount: dinhDangTien(ctx.soTien), id: orderId })
+    );
+    if (!dongY) return;
+    // Xóa context NGAY để tránh double-submit nếu API chậm hoặc retry nhanh.
+    _doiSoatDangChon = null;
+    try {
+        await apiCall(`/qr-reconciliation/events/${ctx.eventId}/actions`, 'POST', {
+            action: 'MAP_AND_APPLY',
+            target_intent_id: orderId,
+            operation_id: ctx.eventId
+        });
+        showToast(dich('pos.reconciliation.assign_success'));
+        dongModalGanDonNo();
+        await moModalDoiSoat();
+    } catch (e) {
+        showToast(dich('pos.reconciliation.assign_error', { reason: e.message }));
+    }
+}
+
+async function moModalDoiSoat() {
+    const modal = document.getElementById('doiSoatModal');
+    const ds = document.getElementById('doiSoatDanhSach');
+    if (!modal || !ds) return;
+    modal.style.display = 'flex';
+    ds.innerHTML = `<div style="color:#94A3B8;">${dichHtml('pos.reconciliation.loading')}</div>`;
+    try {
+        const res = await apiCall('/qr-reconciliation/events');
+        const items = res.items || [];
+        const tomTat = document.getElementById('doiSoatTomTat');
+        if (tomTat) {
+            tomTat.innerText = dich('pos.reconciliation.summary', { count: items.length });
+        }
+        if (!items.length) {
+            ds.innerHTML = `<div style="color:#94A3B8;">${dichHtml('pos.reconciliation.empty')}</div>`;
+            return;
+        }
+        ds.innerHTML = items.map(ev => {
+            const soTien = Number(ev.amount) || 0;
+            const ngay = ev.received_at
+                ? dinhDangNgayGio(ev.received_at)
+                : '';
+            const taiKhoan = ev.account_number || '—';
+            const nganHang = ev.bank_code || '';
+            const maThamChieu = ev.canonical_reference || ev.raw_id || '';
+            return `
+<div style="border-bottom:1px solid #334155; padding:0.7rem 0;">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:0.5rem;">
+        <div style="flex:1; min-width:0;">
+            <strong style="color:#fff;">${dinhDangTien(soTien)}</strong>
+            <div style="color:#94A3B8; font-size:0.78rem;">${ngay}</div>
+            <div style="color:#94A3B8; font-size:0.78rem; margin-top:0.2rem;">
+                ${nganHang ? escapeHtml(nganHang) + ' · ' : ''}${escapeHtml(taiKhoan)}
+            </div>
+            ${maThamChieu ? `<div style="color:#64748B; font-size:0.75rem; margin-top:0.15rem;">Ref: ${escapeHtml(maThamChieu)}</div>` : ''}
+        </div>
+        <div style="display:flex; gap:0.4rem; flex-shrink:0;">
+            <button onclick="doiSoatGanDon(${ev.id}, ${soTien})" style="padding:0.4rem 0.7rem; white-space:nowrap;">
+                ${dichHtml('pos.reconciliation.assign')}
+            </button>
+            <button onclick="doiSoatTuChoi(${ev.id})" class="btn-outline" style="padding:0.4rem 0.7rem;">
+                ${dichHtml('pos.reconciliation.reject')}
+            </button>
+        </div>
+    </div>
+</div>`;
+        }).join('');
+    } catch (e) {
+        ds.innerHTML = `<div style="color:#EF4444;">${escapeHtml(e.message)}</div>`;
+    }
+}
+
+/** Mở modal chọn đơn ghi nợ để gán khoản tiền ngân hàng. */
+async function doiSoatGanDon(eventId, soTien) {
+    _doiSoatDangChon = { eventId, soTien };
+    dongModalDoiSoat();
+    await moModalGanDonNo();
+}
+
+async function doiSoatTuChoi(eventId) {
+    const dongY = await xacNhan(
+        dich('pos.reconciliation.reject_title'),
+        dich('pos.reconciliation.reject_confirm')
+    );
+    if (!dongY) return;
+    try {
+        await apiCall(`/qr-reconciliation/events/${eventId}/actions`, 'POST', {
+            expected_state_version: 0,
+            action: 'REJECT_NOT_OURS'
+        });
+        showToast(dich('pos.reconciliation.rejected'));
+        await moModalDoiSoat();
+    } catch (e) {
+        showToast(e.message);
+    }
 }
 
 // ===== F2: khách trả hàng =====
@@ -3246,10 +4593,16 @@ document.getElementById('loyaltyPointsInput')?.addEventListener('keydown', event
 
 document.getElementById('movementNote')?.addEventListener('input', capNhatMovementDraft);
 document.getElementById('voucherInput')?.addEventListener('input', capNhatNhapVoucher);
+document.getElementById('posTools')?.addEventListener('click', event => {
+    if (event.target.closest('button')) event.currentTarget.open = false;
+});
+posMobileCartMedia.addEventListener('change', capNhatGioHangResponsivePOS);
 
 document.querySelectorAll('.pos-modal').forEach(modal => {
     modal.addEventListener('click', event => {
-        if (event.target === modal) dongModalCa(modal.id);
+        if (event.target !== modal) return;
+        if (modal.id === 'salesHistoryModal') salesHistoryR1.close();
+        else dongModalCa(modal.id);
     });
 });
 
@@ -3258,7 +4611,9 @@ document.addEventListener('keydown', event => {
     const modalMo = [...document.querySelectorAll('.pos-modal')]
         .reverse()
         .find(modal => modal.style.display === 'flex');
-    if (modalMo) dongModalCa(modalMo.id);
+    if (!modalMo) return;
+    if (modalMo.id === 'salesHistoryModal') salesHistoryR1.close();
+    else dongModalCa(modalMo.id);
 });
 
 function capNhatNgonNguPOS() {
@@ -3336,19 +4691,38 @@ function capNhatNgonNguPOS() {
                 : '—';
         capNhatChenhLechKetCa();
     }
+    _qr1RefreshLabels();
 }
 
 document.addEventListener('fselling:localechange', capNhatNgonNguPOS);
 
 capNhatThanhCa('loading');
-setMethod(paymentMethod);
+apDungPhuongThucThanhToan(paymentMethod);
 // Đồng bộ cả các giá trị tiền tĩnh ban đầu (0 ₫, nút tiền nhanh...) với
 // ngôn ngữ đã lưu ngay lần mở trang, không cần chờ người dùng đổi locale.
 capNhatNgonNguPOS();
+// Run from authenticated/local shop context before any catalog-dependent work.
+// A subsequent loadShop call reuses the bounded fresh cache, not another fetch.
+taiChinhSachOfflinePOS();
 loadShop();
 
 // Bán offline: tự gửi hàng chờ khi có mạng lại, và luôn hiện số phiếu đang chờ.
 if (window.OfflineBan) {
+    // V1 có lock/CAS và transport auth-safe riêng; v0 bên dưới vẫn chạy độc lập
+    // cho các phiếu legacy, không bị promote sang contract mới.
+    OfflineBan.batTuDongBoV1(
+        () => ({
+            shop_id: Number(currentShopId),
+            username: localStorage.getItem('username') || ''
+        }),
+        async (kq) => {
+            if (kq.acked) {
+                showToast(dich('pos.offline.da_dong_bo', { count: kq.acked }));
+                await loadProducts();
+            }
+            await capNhatHuyHieuOffline();
+        }
+    );
     OfflineBan.batTuDongBo(
         () => currentShopId,
         async (kq) => {
@@ -3362,7 +4736,11 @@ if (window.OfflineBan) {
             await capNhatHuyHieuOffline();
         }
     );
-    window.addEventListener('online', capNhatTrangThaiMangPOS);
+    window.addEventListener('online', async () => {
+        await taiChinhSachOfflinePOS(true);
+        await capNhatTrangThaiMangPOS();
+    });
     window.addEventListener('offline', capNhatTrangThaiMangPOS);
+    document.getElementById('offlineBadge')?.addEventListener('click', moModalTrangThaiOffline);
     capNhatTrangThaiMangPOS();
 }

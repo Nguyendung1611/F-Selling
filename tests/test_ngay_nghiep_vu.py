@@ -81,10 +81,12 @@ def _shop_co_lo_het_han_hom_qua(client):
         p = session.query(models.Product).filter(models.Product.id == prod["id"]).first()
         p.track_batches = True
         p.stock = 10
+        p.cost_known_qty = p.cost_unknown_qty = p.cost_basis_vnd = p.cost_deficit_qty = 0
         session.add(
             models.ProductBatch(
                 product_id=p.id, shop_id=shop_id, expiry_date="2026-08-08",
-                quantity=10, cost_price=20000,
+                quantity=10, cost_known_qty=10, cost_unknown_qty=0,
+                cost_basis_vnd=10 * 20_000,
             )
         )
         session.commit()

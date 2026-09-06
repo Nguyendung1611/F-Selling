@@ -4,8 +4,8 @@ from __future__ import annotations
 from typing import Dict, List
 
 from fastapi import HTTPException
-from sqlalchemy import text
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, exists, or_, text
+from sqlalchemy.orm import Session, aliased
 
 from .. import models
 from ..core.config import MAX_SHOPS_PER_USER, log_to_file
@@ -19,14 +19,106 @@ from .log_service import log_system_action
 # (thuộc tính trên model, giá trị từ request, thông báo lỗi khi rỗng)
 _REQUIRED_FIELDS = [
     ("name", "Tên cửa hàng không được để trống"),
-    ("business_address", "Địa chỉ kinh doanh không được để trống"),
-    ("tax_code", "Mã số thuế không được để trống"),
     ("phone", "Số điện thoại không được để trống"),
-    ("email", "Email không được để trống"),
-    ("bank_code", "Vui lòng chọn ngân hàng"),
-    ("bank_account_no", "Số tài khoản không được để trống"),
-    ("bank_account_name", "Tên chủ tài khoản không được để trống"),
 ]
+
+_BANK_FIELDS = frozenset({"bank_code", "bank_account_no", "bank_account_name"})
+ERROR_QR_BANK_ACCOUNT_CHANGE_BLOCKED = "QR_BANK_ACCOUNT_CHANGE_BLOCKED"
+_PROVIDER_COLLISION_REASON = "PROVIDER_EVENT_COLLISION"
+
+
+def _assert_qr_account_change_allowed(db: Session, shop_id: int) -> None:
+    """Fail closed while any immutable v1 account snapshot is unresolved.
+
+    A v1 intent needs at least one terminal non-collision evidence row. Every
+    directly linked row and every collision in a mapped non-collision root's
+    provider-identity lineage must be terminal. This check runs only after the
+    shared shop write fence has been acquired.
+    """
+    terminal = ("APPLIED", "REJECTED_NOT_OURS", "REFUNDED")
+    terminal_event = exists().where(
+        models.BankWebhookEvent.intent_id == models.QrPaymentIntent.id,
+        models.BankWebhookEvent.reason_code != _PROVIDER_COLLISION_REASON,
+        models.BankWebhookEvent.disposition.in_(terminal),
+    )
+    intent_without_terminal = (
+        db.query(models.QrPaymentIntent.id)
+        .filter(
+            models.QrPaymentIntent.shop_id == shop_id,
+            models.QrPaymentIntent.contract_version == 1,
+            ~terminal_event,
+        )
+        .first()
+        is not None
+    )
+    unresolved_related_event = (
+        db.query(models.BankWebhookEvent.id)
+        .filter(
+            models.BankWebhookEvent.shop_id == shop_id,
+            models.BankWebhookEvent.reason_code != _PROVIDER_COLLISION_REASON,
+            ~models.BankWebhookEvent.disposition.in_(terminal),
+        )
+        .first()
+        is not None
+    )
+
+    # A collision always stays unscoped. Its durable provider identity can
+    # still prove lineage only when a mapped non-collision root supplies the
+    # seed. This provenance is account-fence-only: it never grants visibility
+    # or mutates the collision's nullable shop/intent columns.
+    root = aliased(models.BankWebhookEvent)
+    intent = aliased(models.QrPaymentIntent)
+    lineage = aliased(models.BankWebhookEvent)
+    shop_provider_identities = (
+        db.query(
+            root.provider.label("provider"),
+            root.provider_event_id.label("provider_event_id"),
+        )
+        .join(
+            intent,
+            or_(
+                root.intent_id == intent.id,
+                and_(
+                    root.order_id == intent.order_id,
+                    root.shop_id == intent.shop_id,
+                ),
+            ),
+        )
+        .filter(
+            intent.shop_id == shop_id,
+            intent.contract_version == 1,
+            root.reason_code != _PROVIDER_COLLISION_REASON,
+            root.provider_event_id.is_not(None),
+        )
+        .distinct()
+        .subquery()
+    )
+    unresolved_identity_lineage = (
+        db.query(lineage.id)
+        .join(
+            shop_provider_identities,
+            and_(
+                lineage.provider == shop_provider_identities.c.provider,
+                lineage.provider_event_id
+                == shop_provider_identities.c.provider_event_id,
+            ),
+        )
+        .filter(~lineage.disposition.in_(terminal))
+        .first()
+        is not None
+    )
+    if (
+        intent_without_terminal
+        or unresolved_related_event
+        or unresolved_identity_lineage
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": ERROR_QR_BANK_ACCOUNT_CHANGE_BLOCKED,
+                "message": "Bank account has unresolved QR payment evidence",
+            },
+        )
 
 
 def _clean_and_validate(shop: ShopCreate) -> Dict[str, str]:
@@ -44,6 +136,12 @@ def _clean_and_validate(shop: ShopCreate) -> Dict[str, str]:
     for field, message in _REQUIRED_FIELDS:
         if not data[field]:
             raise HTTPException(status_code=400, detail=tr(message))
+    bank_values = [data[field] for field in _BANK_FIELDS]
+    if any(bank_values) and not all(bank_values):
+        raise HTTPException(
+            status_code=400,
+            detail=tr("Vui lòng nhập đủ ngân hàng, số tài khoản và tên chủ tài khoản"),
+        )
     return data
 
 
@@ -87,8 +185,27 @@ def create_shop(db: Session, current_user: models.User, shop: ShopCreate) -> mod
 def update_shop(
     db: Session, current_user: models.User, shop_id: int, shop: ShopCreate
 ) -> models.Shop:
-    db_shop = require_own_shop(db, shop_id, current_user)
     data = _clean_and_validate(shop)
+    # Webhook ORDER đọc account dưới đúng lock hàng Shop này. Lấy lock trước
+    # mọi read quyết định để update account và account-mismatch có một thứ tự
+    # durable duy nhất, kể cả khi chuyển sang DB hỗ trợ row lock thực sự.
+    owner_id = current_user.id
+    # Dependency xác thực đã có thể mở read snapshot. Đóng snapshot chỉ-đọc
+    # trước no-op UPDATE để SQLite không gặp BUSY_SNAPSHOT khi webhook vừa thắng;
+    # ownership và Shop đều được đọc lại sau khi đã lấy write lock.
+    db.rollback()
+    _lock_shop_for_write(db, shop_id, owner_id)
+    db_shop = require_own_shop(db, shop_id, current_user)
+    db.refresh(db_shop)
+    bank_changed = any(
+        getattr(db_shop, field) != data[field] for field in _BANK_FIELDS
+    )
+    if bank_changed:
+        try:
+            _assert_qr_account_change_allowed(db, shop_id)
+        except HTTPException:
+            db.rollback()
+            raise
     for field, value in data.items():
         setattr(db_shop, field, value)
     db.commit()
@@ -136,8 +253,8 @@ def list_shops(db: Session, current_user: models.User) -> List[models.Shop]:
     return shops
 
 
-def _lock_shop_for_delete(db: Session, shop_id: int, owner_id: int) -> None:
-    """Tuần tự hóa nút Xóa với mọi lần ghi điểm/cấu hình cùng shop.
+def _lock_shop_for_write(db: Session, shop_id: int, owner_id: int) -> None:
+    """Tuần tự hóa update/xóa shop với mọi luồng mutation cùng shop.
 
     SQLite không có ``SELECT FOR UPDATE``. Cùng no-op UPDATE trên hàng ``shops``
     mà luồng đơn hàng dùng sẽ giữ write lock tới commit/rollback, nhờ vậy lần
@@ -211,10 +328,25 @@ def _has_subscription_history(db: Session, shop_id: int) -> bool:
     )
 
 
+def _has_fnb_data(db: Session, shop_id: int) -> bool:
+    return any(
+        query.first() is not None
+        for query in (
+            db.query(models.FnbArea.id).filter(models.FnbArea.shop_id == shop_id),
+            db.query(models.FnbServiceSession.id).filter(
+                models.FnbServiceSession.shop_id == shop_id
+            ),
+            db.query(models.FnbActionLog.id).filter(
+                models.FnbActionLog.shop_id == shop_id
+            ),
+        )
+    )
+
+
 def delete_shop(db: Session, current_user: models.User, shop_id: int) -> Dict[str, str]:
     # Lấy lock trước lần đọc quyết định. Điều kiện owner_id giữ nguyên hành vi
     # 404 cho người không phải chủ mà không cần mở một read transaction trước.
-    _lock_shop_for_delete(db, shop_id, current_user.id)
+    _lock_shop_for_write(db, shop_id, current_user.id)
     db_shop = require_own_shop(db, shop_id, current_user)
     if _has_loyalty_data(db, shop_id):
         db.rollback()
@@ -242,6 +374,15 @@ def delete_shop(db: Session, current_user: models.User, shop_id: int) -> Dict[st
             detail=tr(
                 "Cửa hàng đã có lịch sử gói cước hoặc thanh toán nên không thể "
                 "xóa. Hãy bấm nút Khóa để giữ nguyên chứng từ."
+            ),
+        )
+    if _has_fnb_data(db, shop_id):
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr(
+                "Cửa hàng đã có cấu hình hoặc lịch sử bán tại bàn nên không "
+                "thể xóa. Hãy bấm nút Khóa để ngừng sử dụng và giữ lịch sử."
             ),
         )
     shop_name = db_shop.name

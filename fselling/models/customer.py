@@ -26,7 +26,8 @@ class Customer(Base):
     # F4: trần công nợ của khách này. NULL = không giới hạn (mặc định, giữ
     # nguyên hành vi cho mọi khách đã có). Chặn ở lúc TẠO đơn nợ mới; đơn nợ đã
     # phát sinh rồi thì hạ hạn mức không làm nó biến mất.
-    credit_limit = Column(Float, nullable=True)
+    legacy_credit_limit = Column("credit_limit", Float, nullable=True)
+    credit_limit = Column("credit_limit_vnd", Integer, nullable=True)
     # Khách đã có lịch sử điểm không được xóa cứng. `False` nghĩa là ngừng sử
     # dụng: POS không cho chọn cho đơn mới, nhưng sổ điểm và đơn cũ vẫn còn.
     is_active = Column(Boolean, nullable=False, default=True)

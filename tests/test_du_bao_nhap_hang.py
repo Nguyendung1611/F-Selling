@@ -204,16 +204,19 @@ def test_hang_het_han_khong_duoc_tinh_la_con_ban_duoc(client):
         p = session.query(models.Product).filter(models.Product.id == prod["id"]).first()
         p.track_batches = True
         p.stock = 50  # bản sao của tổng lô, kể cả lô đã hết hạn
+        p.cost_known_qty = p.cost_unknown_qty = p.cost_basis_vnd = p.cost_deficit_qty = 0
         session.add(
             models.ProductBatch(
                 product_id=p.id, shop_id=shop_id, expiry_date=da_het_han,
-                quantity=30, cost_price=20000,
+                quantity=30, cost_known_qty=30, cost_unknown_qty=0,
+                cost_basis_vnd=30 * 20_000,
             )
         )
         session.add(
             models.ProductBatch(
                 product_id=p.id, shop_id=shop_id, expiry_date=sang_nam,
-                quantity=20, cost_price=20000,
+                quantity=20, cost_known_qty=20, cost_unknown_qty=0,
+                cost_basis_vnd=20 * 20_000,
             )
         )
         session.commit()
@@ -274,7 +277,11 @@ def test_chu_shop_thay_gia_von_va_tong_tien(client):
             .filter(models.Product.id == ctx["product_id"])
             .first()
         )
-        p.cost_price = 6000
+        p.cost_known_qty = max(int(p.stock or 0), 0)
+        p.cost_unknown_qty = 0
+        p.cost_basis_vnd = p.cost_known_qty * 6000
+        p.cost_deficit_qty = max(-int(p.stock or 0), 0)
+        p.cost_state_version = int(p.cost_state_version or 0) + 1
         session.commit()
     finally:
         session.close()

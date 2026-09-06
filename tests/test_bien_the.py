@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from conftest import _unique, auth, create_shop, new_seller, seller_with_shop
 
 from fselling import models
-from fselling.core import bootstrap
+import legacy_bootstrap_support as bootstrap
 from fselling.core.database import SessionLocal
 
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
-import math
 import os
 import secrets
 import zoneinfo
@@ -23,6 +22,8 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..core.i18n import tr
+from ..core.money import checked_add, exact_vnd
+from ..core.numeric_limits import MAX_SAFE_VND
 from ..schemas.subscription import (
     SubscriptionCheckoutCreate,
     SubscriptionGiftCreate,
@@ -37,7 +38,7 @@ CYCLE_MONTHLY = "MONTHLY"
 CYCLE_YEARLY = "YEARLY"
 PRICE_VND = {CYCLE_MONTHLY: 99_000, CYCLE_YEARLY: 831_600}
 DURATION_DAYS = {CYCLE_MONTHLY: 30, CYCLE_YEARLY: 365}
-TRIAL_DAYS = 30
+TRIAL_DAYS = 14
 PAID_GRACE_DAYS = 7
 CHECKOUT_HOURS = 24
 
@@ -1076,16 +1077,18 @@ def _payment_idempotency_key(transaction: Any, fallback_account: str) -> str:
 
 
 def _amount_vnd(transaction: Any) -> Optional[int]:
+    if bool(_tx_value(transaction, "amount_invalid", False)):
+        return None
     raw = _tx_value(transaction, "amount")
     if raw is None:
         return None
     try:
-        amount = float(raw)
-    except (TypeError, ValueError):
+        amount = exact_vnd(raw)
+    except ValueError:
         return None
-    if not math.isfinite(amount) or amount <= 0 or not amount.is_integer():
+    if amount <= 0:
         return None
-    return int(amount)
+    return amount
 
 
 def _same_payment(
@@ -1481,7 +1484,9 @@ def apply_subscription_transactions(
         db.expire(checkout)
         db.refresh(checkout)
         if checkout.activated_at is not None:
-            checkout.received_amount_vnd += amount
+            checkout.received_amount_vnd = checked_add(
+                int(checkout.received_amount_vnd or 0), amount
+            )
             checkout.refund_due_amount_vnd = max(
                 checkout.received_amount_vnd - checkout.amount_due_vnd, 0
             )
@@ -1502,14 +1507,17 @@ def apply_subscription_transactions(
             continue
 
         # Cộng bằng SQL để hai giao dịch khác nhau không ghi đè tổng của nhau.
-        db.execute(
+        updated = db.execute(
             text(
                 "UPDATE subscription_checkouts "
                 "SET received_amount_vnd = received_amount_vnd + :amount "
-                "WHERE id = :checkout_id"
+                "WHERE id = :checkout_id "
+                "AND received_amount_vnd <= :maximum - :amount"
             ),
-            {"amount": amount, "checkout_id": checkout.id},
+            {"amount": amount, "checkout_id": checkout.id, "maximum": MAX_SAFE_VND},
         )
+        if updated.rowcount != 1:
+            raise RuntimeError("I05_SUBSCRIPTION_AMOUNT_OVERFLOW")
         db.expire(checkout)
         db.refresh(checkout)
 

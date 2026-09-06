@@ -161,6 +161,16 @@ def test_expected_cong_cash_order_payment_va_tru_refund_cash(client):
         )
         session.add(order)
         session.flush()
+        session.add(
+            models.OrderItem(
+                order_id=order.id,
+                product_name="Shift ledger fixture",
+                price=100_000,
+                quantity=1,
+                net_amount_vnd=100_000,
+                cost_unknown_qty=1,
+            )
+        )
         session.add_all(
             [
                 models.OrderPayment(
@@ -294,6 +304,17 @@ def test_khong_dong_ca_khi_con_don_tien_mat_pending(client):
             shift_id=shift["id"],
         )
         session.add(order)
+        session.flush()
+        session.add(
+            models.OrderItem(
+                order_id=order.id,
+                product_name="Pending cash fixture",
+                price=100_000,
+                quantity=1,
+                net_amount_vnd=100_000,
+                cost_unknown_qty=1,
+            )
+        )
         session.commit()
         order_id = order.id
     finally:

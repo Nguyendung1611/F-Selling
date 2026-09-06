@@ -5,7 +5,7 @@ import zoneinfo
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +20,8 @@ from .core.config import (
     get_allowed_origins,
 )
 from .core.i18n import LocaleMiddleware, tr
+from .core.database import db_path
+from .migration.coordinator import verify_database_for_startup
 from .routers import (
     admin,
     assistant,
@@ -29,12 +31,18 @@ from .routers import (
     cron,
     customers,
     expenses,
+    fnb,
     forecast,
     loyalty,
+    offline_leases,
+    offline_capability,
+    offline_recovery,
     orders,
     pages,
     products,
+    purchase_orders,
     purchase_receipts,
+    qr_reconciliation,
     reports,
     shifts,
     shops,
@@ -52,10 +60,6 @@ from .services.maintenance_service import (
 
 CLEANUP_INTERVAL_MINUTES = 1
 AUTO_CANCEL_INTERVAL_MINUTES = 5
-
-# Tạo bảng ngay khi import module (giữ đúng thời điểm như app.py cũ).
-bootstrap.create_tables()
-
 
 def _validation_message(error: dict) -> str:
     """Biến lỗi kỹ thuật của Pydantic thành câu ngắn theo ngôn ngữ request."""
@@ -89,8 +93,21 @@ def _validation_message(error: dict) -> str:
 
 
 async def localized_validation_error_handler(
-    _request, exc: RequestValidationError
+    request: Request, exc: RequestValidationError
 ) -> JSONResponse:
+    # Financial inbox/reconciliation requests must never echo hostile body or
+    # query values through Pydantic's default ``input`` field.  Keep a stable,
+    # non-reflective error contract for every I10-C route.
+    if request.url.path.startswith(("/api/qr-payments", "/api/qr-reconciliation")):
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": {
+                    "code": "QR_RECONCILIATION_REQUEST_INVALID",
+                    "message": "QR reconciliation request is invalid",
+                }
+            },
+        )
     errors = jsonable_encoder(exc.errors())
     for error in errors:
         error["msg"] = _validation_message(error)
@@ -99,7 +116,11 @@ async def localized_validation_error_handler(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    bootstrap.initialize()
+    app.state.schema_ready = False
+    report = verify_database_for_startup(db_path)
+    app.state.schema_verification = report.as_dict()
+    app.state.schema_revision = report.current_revision
+    bootstrap.initialize_application_data()
 
     scheduler = BackgroundScheduler(timezone=zoneinfo.ZoneInfo("UTC"))
     scheduler.add_job(
@@ -122,15 +143,19 @@ async def lifespan(app: FastAPI):
         )
 
     scheduler.start()
+    app.state.schema_ready = True
 
-    yield
-
-    scheduler.shutdown()
-    print("[SCHEDULER] Background cleanup task stopped")
+    try:
+        yield
+    finally:
+        app.state.schema_ready = False
+        scheduler.shutdown()
+        print("[SCHEDULER] Background cleanup task stopped")
 
 
 def create_app(lifespan_handler=lifespan) -> FastAPI:
     application = FastAPI(title="F-Selling Backend", lifespan=lifespan_handler)
+    application.state.schema_ready = False
     application.add_exception_handler(
         RequestValidationError,
         localized_validation_error_handler,
@@ -141,9 +166,35 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
         allow_origins=get_allowed_origins(),
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "Accept-Language"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Accept-Language",
+            "X-Offline-Lease-Token",
+        ],
     )
     application.add_middleware(LocaleMiddleware)
+
+    @application.get("/api/health/ready", include_in_schema=False)
+    async def readiness():
+        if not application.state.schema_ready:
+            return JSONResponse(
+                status_code=503,
+                content={"ready": False, "reason": "schema_unverified"},
+            )
+        return {
+            "ready": True,
+            "revision": application.state.schema_revision,
+        }
+
+    @application.middleware("http")
+    async def chan_nghiep_vu_khi_schema_chua_xac_minh(request: Request, call_next):
+        if request.url.path != "/api/health/ready" and not application.state.schema_ready:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Schema chưa được xác minh; nghiệp vụ đang bị khóa"},
+            )
+        return await call_next(request)
 
     @application.middleware("http")
     async def khong_giu_cache_html(request, call_next):
@@ -169,15 +220,35 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
             response.headers["Cache-Control"] = "no-cache"
         return response
 
+    @application.middleware("http")
+    async def khong_giu_cache_api(request: Request, call_next):
+        """API responses are never a source of offline truth or policy bypass."""
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        # I10-B render is authenticated binary output.  Apply nosniff to both
+        # success and sanitized error responses; router-local headers alone do
+        # not run when a service raises HTTPException.
+        if request.url.path.startswith("/api/orders/") and request.url.path.endswith(
+            "/qr/render"
+        ):
+            response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
     application.include_router(auth.router)
     application.include_router(shops.router)
     application.include_router(categories.router)
     application.include_router(products.router)
     application.include_router(suppliers.router)
+    application.include_router(purchase_orders.router)
     application.include_router(purchase_receipts.router)
     # webhooks PHẢI đứng trước orders: /api/orders/webhook vs /api/orders/{shop_id}
     application.include_router(webhooks.router)
+    application.include_router(qr_reconciliation.router)
     application.include_router(orders.router)
+    application.include_router(offline_leases.router)
+    application.include_router(offline_capability.router)
+    application.include_router(offline_recovery.router)
     application.include_router(shifts.router)
     application.include_router(staff.router)
     application.include_router(subscriptions.router)
@@ -192,6 +263,7 @@ def create_app(lifespan_handler=lifespan) -> FastAPI:
     application.include_router(admin.router)
     application.include_router(tts.router)
     application.include_router(cron.router)
+    application.include_router(fnb.router)
     application.include_router(pages.router)
 
     # Phục vụ ảnh upload từ UPLOAD_DIR (volume) — phải mount trước mount "/"

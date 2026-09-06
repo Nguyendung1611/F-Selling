@@ -17,33 +17,29 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import func, text
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..core.i18n import tr
+from ..core.money import checked_add, cumulative_basis
+from ..core.numeric_limits import MAX_SAFE_QUANTITY
 from ..dependencies import (
     PERMISSION_SALE,
     require_shop_access,
     require_staff_permission,
 )
 from ..schemas.order import OrderReturnCreate
-from . import loyalty_service, order_service
+from . import inventory_service, loyalty_service, order_service
 
 ENTRY_RETURN_CASH = "RETURN_CASH"
 ENTRY_RETURN_TRANSFER = "RETURN_TRANSFER"
 
 MONEY_EPSILON = order_service.MONEY_EPSILON
-
-_RESTOCK = text(
-    "UPDATE products SET stock = stock + :quantity WHERE id = :product_id"
-)
-
 
 def _khoa_thao_tac(operation_id: str) -> str:
     """Khóa chống bấm lặp. Tiền tố `return:` tách hẳn khỏi `refund:` của chu kỳ
@@ -144,23 +140,16 @@ def _serialize_return(ban_ghi: models.OrderReturn) -> Dict[str, Any]:
 
 
 def da_tra_theo_dong(db: Session, order_id: int) -> Dict[int, int]:
-    """Số lượng đã trả của từng dòng đơn, gom từ mọi phiếu trả trước đó."""
+    """Persisted cumulative returned quantity for each immutable order line."""
     rows = (
         db.query(
-            models.OrderReturnItem.order_item_id,
-            models.OrderReturnItem.quantity,
+            models.OrderItem.id,
+            models.OrderItem.returned_total_qty,
         )
-        .join(
-            models.OrderReturn,
-            models.OrderReturn.id == models.OrderReturnItem.return_id,
-        )
-        .filter(models.OrderReturn.order_id == order_id)
+        .filter(models.OrderItem.order_id == order_id)
         .all()
     )
-    ket_qua: Dict[int, int] = {}
-    for order_item_id, quantity in rows:
-        ket_qua[order_item_id] = ket_qua.get(order_item_id, 0) + int(quantity or 0)
-    return ket_qua
+    return {int(order_item_id): int(quantity or 0) for order_item_id, quantity in rows}
 
 
 def danh_sach_phieu_tra(db: Session, order_id: int) -> List[Dict[str, Any]]:
@@ -173,14 +162,17 @@ def danh_sach_phieu_tra(db: Session, order_id: int) -> List[Dict[str, Any]]:
     return [_serialize_return(r) for r in ban_ghi]
 
 
-def tong_da_hoan(db: Session, order_id: int) -> float:
+def tong_da_hoan(db: Session, order_id: int) -> int:
     """Tổng tiền đã hoàn cho khách qua MỌI lần trả hàng của đơn."""
-    return float(
-        db.query(func.coalesce(func.sum(models.OrderReturn.refund_amount), 0))
+    values = (
+        db.query(models.OrderReturn.refund_amount)
         .filter(models.OrderReturn.order_id == order_id)
-        .scalar()
-        or 0
+        .all()
     )
+    total = 0
+    for (value,) in values:
+        total = checked_add(total, int(value or 0))
+    return total
 
 
 def _la_tra_het(
@@ -196,27 +188,15 @@ def _la_tra_het(
     )
 
 
-def _diem_theo_ty_le(tong_diem: int, tu_so: float, mau_so: float) -> int:
+def _diem_theo_ty_le(tong_diem: int, tu_so: int, mau_so: int) -> int:
     """Phân bổ điểm nguyên theo tỷ lệ và luôn làm tròn xuống.
 
-    Dùng ``Decimal(str(...))`` để một sai số float kiểu 2.999999999 không làm
-    khách mất oan một điểm. Trả hết được xử lý riêng ở caller để khớp tuyệt đối.
+    Tử và mẫu đều là số nguyên; Python arbitrary-size giữ phép nhân chính xác.
+    Trả hết được xử lý riêng ở caller để khớp tuyệt đối.
     """
     if tong_diem <= 0 or tu_so <= MONEY_EPSILON or mau_so <= MONEY_EPSILON:
         return 0
-    try:
-        numerator = Decimal(str(tong_diem)) * Decimal(str(tu_so))
-        denominator = Decimal(str(mau_so))
-        if not numerator.is_finite() or not denominator.is_finite():
-            raise InvalidOperation
-        result = int(
-            (numerator / denominator).to_integral_value(rounding=ROUND_FLOOR)
-        )
-    except (InvalidOperation, ValueError, OverflowError, ZeroDivisionError):
-        raise HTTPException(
-            status_code=409,
-            detail=tr("Dữ liệu tích điểm của đơn không hợp lệ; chưa thể nhận trả"),
-        )
+    result = (int(tong_diem) * int(tu_so)) // int(mau_so)
     return min(max(result, 0), tong_diem)
 
 
@@ -247,16 +227,18 @@ def _tinh_dieu_chinh_diem(
             ),
         )
 
-    reversed_before, restored_before = (
+    previous_adjustments = (
         db.query(
-            func.coalesce(func.sum(models.OrderReturn.loyalty_points_reversed), 0),
-            func.coalesce(func.sum(models.OrderReturn.loyalty_points_restored), 0),
+            models.OrderReturn.loyalty_points_reversed,
+            models.OrderReturn.loyalty_points_restored,
         )
         .filter(models.OrderReturn.order_id == order.id)
-        .one()
+        .all()
     )
-    reversed_before = int(reversed_before or 0)
-    restored_before = int(restored_before or 0)
+    # Aggregate with Python arbitrary-size integers.  SQLite SUM is int64 and
+    # must not become a hidden overflow boundary for cumulative provenance.
+    reversed_before = sum(int(row[0] or 0) for row in previous_adjustments)
+    restored_before = sum(int(row[1] or 0) for row in previous_adjustments)
     if reversed_before > earned or restored_before > redeemed:
         raise HTTPException(
             status_code=409,
@@ -273,7 +255,7 @@ def _tinh_dieu_chinh_diem(
     elif earned > 0:
         earn_amount = order.loyalty_earn_amount_step
         earn_points = order.loyalty_earn_points_step
-        if earn_amount is None or float(earn_amount) <= 0 or not earn_points:
+        if earn_amount is None or int(earn_amount) <= 0 or not earn_points:
             raise HTTPException(
                 status_code=409,
                 detail=tr(
@@ -283,11 +265,11 @@ def _tinh_dieu_chinh_diem(
         # `phieu` đã flush trước khi vào hàm này, nên tổng trong DB đã gồm
         # `tien_hoan` của lần hiện tại. Cộng thêm lần nữa sẽ trừ điểm quá tay.
         refunded_after = tong_da_hoan(db, order.id)
-        retained_amount = max(float(order.total_amount or 0) - refunded_after, 0.0)
+        retained_amount = max(int(order.total_amount or 0) - refunded_after, 0)
         kept = loyalty_service.calculate_earn(
             {
                 "enabled": True,
-                "earn_amount": float(earn_amount),
+                "earn_amount": int(earn_amount),
                 "earn_points": int(earn_points),
             },
             retained_amount,
@@ -297,21 +279,21 @@ def _tinh_dieu_chinh_diem(
         reversed_target = 0
 
     # Điểm đã dùng: hoàn theo tỷ lệ lũy kế GIÁ NIÊM YẾT của hàng đã trả trên
-    # tổng giá niêm yết. Tiền mặt đã được `_tinh_tien_hoan` giảm tương ứng nên
+    # tổng giá niêm yết. Tiền mặt đã được cumulative line target giảm tương ứng nên
     # hoàn lại phần điểm này không làm khách nhận gấp đôi.
     if tra_het:
         restored_target = redeemed
     elif redeemed > 0:
         subtotal = sum(
-            float(dong.price or 0) * int(dong.quantity or 0)
+            int(dong.price or 0) * int(dong.quantity or 0)
             for dong in dong_don.values()
         )
         nominal_returned_before = sum(
-            float(dong.price or 0) * da_tra.get(dong.id, 0)
+            int(dong.price or 0) * da_tra.get(dong.id, 0)
             for dong in dong_don.values()
         )
         nominal_returned_after = nominal_returned_before + sum(
-            float(d["tien_hang"] or 0) for d in chi_tiet
+            int(d["tien_hang"] or 0) for d in chi_tiet
         )
         restored_target = _diem_theo_ty_le(
             redeemed, nominal_returned_after, subtotal
@@ -377,11 +359,222 @@ def _kiem_yeu_cau(request: OrderReturnCreate) -> None:
             detail=tr("Một dòng hàng xuất hiện nhiều lần trong phiếu trả"),
         )
     for it in request.items:
-        if it.quantity is None or it.quantity <= 0:
+        if (
+            it.quantity is None
+            or it.quantity <= 0
+            or it.quantity > MAX_SAFE_QUANTITY
+        ):
             raise HTTPException(
                 status_code=400,
-                detail=tr("Số lượng trả phải lớn hơn 0"),
+                detail=tr("Số lượng trả nằm ngoài giới hạn"),
             )
+
+
+def _line_return_delta(dong: models.OrderItem, quantity: int) -> Dict[str, int]:
+    """Compute cumulative known-first money/cost targets minus persisted counters."""
+    sold = int(dong.quantity or 0)
+    returned = int(dong.returned_total_qty or 0)
+    returned_known = int(dong.returned_known_qty or 0)
+    returned_unknown = int(dong.returned_unknown_qty or 0)
+    returned_basis = int(dong.returned_cost_basis_vnd or 0)
+    returned_refund = int(dong.returned_refund_vnd or 0)
+    return_version = int(dong.cost_return_version or 0)
+    known = int(dong.cost_known_qty or 0)
+    unknown = int(dong.cost_unknown_qty or 0)
+    basis = int(dong.cost_basis_vnd or 0)
+    net = int(dong.net_amount_vnd or 0)
+    if (
+        min(sold, returned, returned_known, returned_unknown, returned_basis, returned_refund, return_version, known, unknown, basis, net) < 0
+        or known + unknown != sold
+        or returned_known + returned_unknown != returned
+        or returned > sold
+        or returned_known > known
+        or returned_unknown > unknown
+        or returned_basis > basis
+        or returned_refund > net
+    ):
+        raise HTTPException(status_code=409, detail=tr("Provenance trả hàng của dòng đơn không hợp lệ"))
+    target = returned + int(quantity)
+    if target > sold:
+        raise HTTPException(status_code=400, detail=tr("Số lượng trả vượt số đã bán"))
+    known_target = min(target, known)
+    unknown_target = target - known_target
+    basis_target = cumulative_basis(basis, known, known_target) if known else 0
+    refund_target = cumulative_basis(net, sold, target) if sold else 0
+    result = {
+        "quantity": target - returned,
+        "known": known_target - returned_known,
+        "unknown": unknown_target - returned_unknown,
+        "basis": basis_target - returned_basis,
+        "refund": refund_target - returned_refund,
+        "target": target,
+        "known_target": known_target,
+        "unknown_target": unknown_target,
+        "basis_target": basis_target,
+        "refund_target": refund_target,
+        "old_total": returned,
+        "old_known": returned_known,
+        "old_unknown": returned_unknown,
+        "old_basis": returned_basis,
+        "old_refund": returned_refund,
+        "old_version": return_version,
+    }
+    if min(result["quantity"], result["known"], result["unknown"], result["basis"], result["refund"]) < 0:
+        raise HTTPException(status_code=409, detail=tr("Cumulative target trả hàng bị lùi"))
+    return result
+
+
+def _batch_return_deltas(
+    db: Session,
+    dong: models.OrderItem,
+    line_delta: Dict[str, int],
+) -> List[Dict[str, Any]]:
+    """Allocate cumulative line targets back to immutable outbound batch sources."""
+    sources = (
+        db.query(models.OrderItemBatch)
+        .filter(models.OrderItemBatch.order_item_id == dong.id)
+        .order_by(models.OrderItemBatch.id)
+        .all()
+    )
+    if not sources:
+        return []
+    if sum(int(source.quantity or 0) for source in sources) != int(dong.quantity or 0):
+        raise HTTPException(status_code=409, detail=tr("Phân bổ lô của dòng đơn không khớp"))
+
+    known_left = int(line_delta["known_target"])
+    unknown_left = int(line_delta["unknown_target"])
+    targets: Dict[int, Dict[str, int]] = {}
+    for source in sources:
+        source_known = int(source.cost_known_qty or 0)
+        target_known = min(source_known, known_left)
+        known_left -= target_known
+        targets[source.id] = {"known": target_known, "unknown": 0}
+    for source in sources:
+        source_unknown = int(source.cost_unknown_qty or 0)
+        target_unknown = min(source_unknown, unknown_left)
+        unknown_left -= target_unknown
+        targets[source.id]["unknown"] = target_unknown
+    if known_left or unknown_left:
+        raise HTTPException(status_code=409, detail=tr("Không phân bổ được provenance lô khi trả hàng"))
+
+    deltas: List[Dict[str, Any]] = []
+    for source in sources:
+        known = int(source.cost_known_qty or 0)
+        unknown = int(source.cost_unknown_qty or 0)
+        basis = int(source.cost_basis_vnd or 0)
+        returned = int(source.returned_total_qty or 0)
+        returned_known = int(source.returned_known_qty or 0)
+        returned_unknown = int(source.returned_unknown_qty or 0)
+        returned_basis = int(source.returned_cost_basis_vnd or 0)
+        return_version = int(source.cost_return_version or 0)
+        if (
+            min(known, unknown, basis, returned, returned_known, returned_unknown, returned_basis, return_version) < 0
+            or known + unknown != int(source.quantity or 0)
+            or returned_known + returned_unknown != returned
+            or returned_known > known
+            or returned_unknown > unknown
+            or returned_basis > basis
+        ):
+            raise HTTPException(status_code=409, detail=tr("Provenance nguồn lô không hợp lệ"))
+        target_known = targets[source.id]["known"]
+        target_unknown = targets[source.id]["unknown"]
+        target_basis = cumulative_basis(basis, known, target_known) if known else 0
+        delta = {
+            "source": source,
+            "quantity": target_known + target_unknown - returned,
+            "known": target_known - returned_known,
+            "unknown": target_unknown - returned_unknown,
+            "basis": target_basis - returned_basis,
+            "target_total": target_known + target_unknown,
+            "target_known": target_known,
+            "target_unknown": target_unknown,
+            "target_basis": target_basis,
+            "old_total": returned,
+            "old_known": returned_known,
+            "old_unknown": returned_unknown,
+            "old_basis": returned_basis,
+            "old_version": return_version,
+        }
+        if min(delta["quantity"], delta["known"], delta["unknown"], delta["basis"]) < 0:
+            raise HTTPException(status_code=409, detail=tr("Cumulative target lô bị lùi"))
+        if delta["quantity"]:
+            deltas.append(delta)
+    if (
+        sum(row["quantity"] for row in deltas) != line_delta["quantity"]
+        or sum(row["known"] for row in deltas) != line_delta["known"]
+        or sum(row["unknown"] for row in deltas) != line_delta["unknown"]
+        or sum(row["basis"] for row in deltas) != line_delta["basis"]
+    ):
+        raise HTTPException(status_code=409, detail=tr("Tổng provenance lô trả hàng không khớp dòng"))
+    return deltas
+
+
+def _conditional_advance_line_return(
+    db: Session,
+    dong: models.OrderItem,
+    delta: Dict[str, int],
+) -> None:
+    """Persist a cumulative line target only if every observed counter is current."""
+    result = db.execute(
+        update(models.OrderItem)
+        .where(
+            models.OrderItem.id == dong.id,
+            models.OrderItem.returned_total_qty == delta["old_total"],
+            models.OrderItem.returned_known_qty == delta["old_known"],
+            models.OrderItem.returned_unknown_qty == delta["old_unknown"],
+            models.OrderItem.returned_cost_basis_vnd == delta["old_basis"],
+            models.OrderItem.returned_refund_vnd == delta["old_refund"],
+            models.OrderItem.cost_return_version == delta["old_version"],
+        )
+        .values(
+            returned_total_qty=delta["target"],
+            returned_known_qty=delta["known_target"],
+            returned_unknown_qty=delta["unknown_target"],
+            returned_cost_basis_vnd=delta["basis_target"],
+            returned_refund_vnd=delta["refund_target"],
+            cost_return_version=models.OrderItem.cost_return_version + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Trạng thái trả hàng đã thay đổi, vui lòng thử lại"),
+        )
+
+
+def _conditional_advance_batch_return(
+    db: Session,
+    source: models.OrderItemBatch,
+    delta: Dict[str, Any],
+) -> None:
+    """Persist one source-allocation target with a full stale-state predicate."""
+    result = db.execute(
+        update(models.OrderItemBatch)
+        .where(
+            models.OrderItemBatch.id == source.id,
+            models.OrderItemBatch.returned_total_qty == delta["old_total"],
+            models.OrderItemBatch.returned_known_qty == delta["old_known"],
+            models.OrderItemBatch.returned_unknown_qty == delta["old_unknown"],
+            models.OrderItemBatch.returned_cost_basis_vnd == delta["old_basis"],
+            models.OrderItemBatch.cost_return_version == delta["old_version"],
+        )
+        .values(
+            returned_total_qty=delta["target_total"],
+            returned_known_qty=delta["target_known"],
+            returned_unknown_qty=delta["target_unknown"],
+            returned_cost_basis_vnd=delta["target_basis"],
+            cost_return_version=models.OrderItemBatch.cost_return_version + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=tr("Trạng thái nguồn lô trả hàng đã thay đổi, vui lòng thử lại"),
+        )
 
 
 def _phieu_da_ghi(
@@ -474,15 +667,17 @@ def create_return(
         .filter(models.OrderItem.order_id == order_id)
         .all()
     }
+    deficit_order_item_ids = {
+        int(order_item_id)
+        for (order_item_id,) in db.query(
+            models.OfflineBatchStockDeficit.order_item_id
+        )
+        .filter(
+            models.OfflineBatchStockDeficit.order_item_id.in_(dong_don.keys())
+        )
+        .all()
+    }
     da_tra = da_tra_theo_dong(db, order_id)
-
-    tong_tien_hang = sum(
-        float(it.price or 0) * int(it.quantity or 0) for it in dong_don.values()
-    )
-    tong_don = float(order.total_amount or 0)
-    # Tỷ lệ thực thu trên giá niêm yết. Đơn có voucher thì < 1: hoàn theo giá
-    # niêm yết là shop chịu trọn phần đã giảm cho món khách vẫn giữ.
-    ty_le = (tong_don / tong_tien_hang) if tong_tien_hang > MONEY_EPSILON else 0.0
 
     chi_tiet: List[Dict[str, Any]] = []
     for it in request.items:
@@ -493,7 +688,16 @@ def create_return(
                 status_code=400,
                 detail=tr("Dòng hàng không thuộc đơn này"),
             )
-        con_tra_duoc = int(dong.quantity or 0) - da_tra.get(dong.id, 0)
+        if int(dong.id) in deficit_order_item_ids:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=tr(
+                    "Dòng theo lô có phần xuất không xác định nguồn; "
+                    "không thể trả hàng an toàn"
+                ),
+            )
+        con_tra_duoc = int(dong.quantity or 0) - int(dong.returned_total_qty or 0)
         if it.quantity > con_tra_duoc:
             db.rollback()
             raise HTTPException(
@@ -504,17 +708,75 @@ def create_return(
                     name=dong.product_name,
                     remaining=con_tra_duoc,
                     sold=int(dong.quantity or 0),
-                    returned=da_tra.get(dong.id, 0),
+                    returned=int(dong.returned_total_qty or 0),
                 ),
             )
+        line_delta = _line_return_delta(dong, int(it.quantity))
+        batch_deltas = _batch_return_deltas(db, dong, line_delta)
+        product = None
+        verified_product_id = None
+        batches: Dict[int, models.ProductBatch] = {}
+        if it.restock:
+            if dong.product_id is None:
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=tr("Dòng đơn thiếu product_id; không thể nhập lại kho an toàn"),
+                )
+            product = (
+                db.query(models.Product)
+                .filter(
+                    models.Product.id == dong.product_id,
+                    models.Product.shop_id == order.shop_id,
+                )
+                .first()
+            )
+            if product is None:
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=tr("Sản phẩm nguồn không thuộc cửa hàng; không thể nhập lại kho"),
+                )
+            verified_product_id = int(product.id)
+            if batch_deltas:
+                batch_ids = [int(row["source"].batch_id) for row in batch_deltas]
+                batches = {
+                    int(batch.id): batch
+                    for batch in db.query(models.ProductBatch)
+                    .filter(
+                        models.ProductBatch.id.in_(batch_ids),
+                        models.ProductBatch.product_id == product.id,
+                    )
+                    .all()
+                }
+                if len(batches) != len(set(batch_ids)):
+                    db.rollback()
+                    raise HTTPException(
+                        status_code=409,
+                        detail=tr("Lô nguồn không thuộc sản phẩm của cửa hàng"),
+                    )
+            elif product.track_batches:
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=tr("Dòng theo lô thiếu provenance nguồn"),
+                )
         chi_tiet.append({
             "dong": dong,
-            "quantity": it.quantity,
+            "product": product,
+            "verified_product_id": verified_product_id,
+            "quantity": int(it.quantity),
             "restock": bool(it.restock),
-            "tien_hang": float(dong.price or 0) * it.quantity,
+            "tien_hang": int(dong.price or 0) * int(it.quantity),
+            "tien_hoan": line_delta["refund"],
+            "line_delta": line_delta,
+            "batch_deltas": batch_deltas,
+            "batches": batches,
         })
 
-    tien_hoan = _tinh_tien_hoan(db, order, dong_don, da_tra, chi_tiet, ty_le)
+    tien_hoan = 0
+    for d in chi_tiet:
+        tien_hoan = checked_add(tien_hoan, int(d["tien_hoan"]))
 
     if tien_hoan > MONEY_EPSILON and request.method is None:
         db.rollback()
@@ -605,30 +867,68 @@ def create_return(
 
     for d in chi_tiet:
         dong = d["dong"]
-        db.add(
-            models.OrderReturnItem(
+        line_delta = d["line_delta"]
+        return_item = models.OrderReturnItem(
                 return_id=phieu.id,
                 order_item_id=dong.id,
-                product_id=dong.product_id,
+                product_id=d["verified_product_id"],
                 product_name=dong.product_name,
                 quantity=d["quantity"],
-                unit_price=float(dong.price or 0),
+                unit_price=int(dong.price or 0),
                 refund_amount=d["tien_hoan"],
-                # Ảnh chụp giá vốn đã chốt lúc bán, KHÔNG tra lại từ sản phẩm:
-                # giá vốn hiện hành có thể đã đổi vì các lô nhập sau.
-                cost_price=dong.cost_price,
+                cost_known_qty=line_delta["known"],
+                cost_unknown_qty=line_delta["unknown"],
+                cost_basis_vnd=line_delta["basis"],
                 restocked=1 if d["restock"] else 0,
             )
-        )
-        if d["restock"] and dong.product_id is not None:
-            # Cộng thẳng bằng UPDATE nguyên tử, và CỐ Ý không đụng cost_price:
-            # số hàng này ra đi với đúng giá vốn đã chốt nên khi quay về, đơn
-            # giá bình quân tự khớp lại. Chạy lại công thức bình quân ở đây mới
-            # là cái làm lệch.
-            db.execute(
-                _RESTOCK,
-                {"quantity": d["quantity"], "product_id": dong.product_id},
+        db.add(return_item)
+        db.flush()
+
+        _conditional_advance_line_return(db, dong, line_delta)
+
+        product = d["product"]
+        batch_deltas = d["batch_deltas"]
+        if batch_deltas:
+            batches = d["batches"]
+            for row in batch_deltas:
+                source = row["source"]
+                db.add(
+                    models.OrderReturnItemBatch(
+                        return_item_id=return_item.id,
+                        source_order_item_batch_id=source.id,
+                        batch_id=source.batch_id,
+                        quantity=row["quantity"],
+                        cost_known_qty=row["known"],
+                        cost_unknown_qty=row["unknown"],
+                        cost_basis_vnd=row["basis"],
+                        restocked=1 if d["restock"] else 0,
+                    )
+                )
+                _conditional_advance_batch_return(db, source, row)
+                if d["restock"]:
+                    batch = batches[int(source.batch_id)]
+                    if int(batch.quantity or 0) > MAX_SAFE_QUANTITY - row["quantity"]:
+                        raise HTTPException(status_code=409, detail=tr("Tồn lô sau trả vượt giới hạn"))
+                    inventory_service.restore_cost_pool(
+                        batch, row["known"], row["unknown"], row["basis"]
+                    )
+                    batch.quantity = int(batch.quantity or 0) + row["quantity"]
+            if d["restock"]:
+                if int(product.stock or 0) > MAX_SAFE_QUANTITY - d["quantity"]:
+                    raise HTTPException(status_code=409, detail=tr("Tồn kho sau trả vượt giới hạn"))
+                product.stock = int(product.stock or 0) + d["quantity"]
+        elif d["restock"]:
+            if product is None:
+                raise HTTPException(status_code=409, detail=tr("Sản phẩm nguồn của hàng trả không còn tồn tại"))
+            if int(product.stock or 0) > MAX_SAFE_QUANTITY - d["quantity"]:
+                raise HTTPException(status_code=409, detail=tr("Tồn kho sau trả vượt giới hạn"))
+            inventory_service.restore_cost_pool(
+                product,
+                line_delta["known"],
+                line_delta["unknown"],
+                line_delta["basis"],
             )
+            product.stock = int(product.stock or 0) + d["quantity"]
 
     if tien_hoan > MONEY_EPSILON:
         db.add(
@@ -670,70 +970,6 @@ def create_return(
     db.commit()
     db.refresh(phieu)
     return _ket_qua(db, order, phieu, lap_lai=False)
-
-
-def _tinh_tien_hoan(
-    db: Session,
-    order: models.Order,
-    dong_don: Dict[int, models.OrderItem],
-    da_tra: Dict[int, int],
-    chi_tiet: List[Dict[str, Any]],
-    ty_le: float,
-) -> float:
-    """Tiền hoàn của cả phiếu, và điền `tien_hoan` cho từng dòng.
-
-    Giảm giá voucher nằm ở mức ĐƠN nên phải phân bổ xuống dòng theo tỷ trọng
-    tiền hàng. Làm tròn tới đồng - tiền Việt không có phần lẻ, và số lẻ thập
-    phân đi vào ledger sẽ làm lệch khoản đối chiếu của két.
-
-    Trường hợp trả HẾT mọi thứ còn lại được xử lý riêng: hoàn đúng phần chưa
-    hoàn của đơn. Cộng dồn từng dòng đã làm tròn có thể lệch vài đồng so với
-    tổng đơn, mà đơn trả hết thì khách phải nhận lại đúng số đã trả, không
-    thiếu một đồng nào.
-    """
-    con_lai_cua_don = max(
-        float(order.total_amount or 0) - tong_da_hoan(db, order.id), 0.0
-    )
-
-    tra_het = _la_tra_het(dong_don, da_tra, chi_tiet)
-
-    tong = 0.0
-    for d in chi_tiet:
-        d["tien_hoan"] = float(round(d["tien_hang"] * ty_le))
-        tong += d["tien_hoan"]
-
-    # Trả hết phải khớp đúng phần còn lại; trả một phần không được vượt phần đó.
-    # Chênh âm phải rải qua NHIỀU dòng: dồn hết vào dòng cuối có thể làm tiền
-    # hoàn của dòng đó âm khi các lần trả trước đã dùng hết phần tiền còn lại.
-    muc_tieu = con_lai_cua_don if tra_het else min(tong, con_lai_cua_don)
-    chenh = muc_tieu - tong
-    if chi_tiet and chenh > MONEY_EPSILON:
-        chi_tiet[-1]["tien_hoan"] += chenh
-    elif chenh < -MONEY_EPSILON:
-        can_giam = -chenh
-        for d in reversed(chi_tiet):
-            if can_giam <= MONEY_EPSILON:
-                break
-            dang_hoan = max(float(d["tien_hoan"] or 0), 0.0)
-            giam = min(dang_hoan, can_giam)
-            d["tien_hoan"] = dang_hoan - giam
-            can_giam -= giam
-        if can_giam > MONEY_EPSILON:
-            raise HTTPException(
-                status_code=409,
-                detail=tr("Không phân bổ được tiền hoàn; chưa thể nhận trả"),
-            )
-
-    tong_sau_phan_bo = sum(float(d["tien_hoan"] or 0) for d in chi_tiet)
-    if (
-        any(float(d["tien_hoan"] or 0) < -MONEY_EPSILON for d in chi_tiet)
-        or abs(tong_sau_phan_bo - muc_tieu) > MONEY_EPSILON
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail=tr("Tổng tiền hoàn theo dòng không khớp; chưa thể nhận trả"),
-        )
-    return max(tong_sau_phan_bo, 0.0)
 
 
 def d_qty(chi_tiet: List[Dict[str, Any]], order_item_id: int) -> int:

@@ -224,6 +224,16 @@ def test_xoa_khach_go_lien_ket_don_giu_don(client):
         order = session.query(models.Order).filter(models.Order.id == order_id).first()
         assert order is not None
         assert order.customer_id is None
+        assert sum(int(item.net_amount_vnd or 0) for item in order.items) == int(
+            order.total_amount or 0
+        )
+        mismatches = [
+            (candidate.id, candidate.total_amount, sum(int(item.net_amount_vnd or 0) for item in candidate.items))
+            for candidate in session.query(models.Order).all()
+            if sum(int(item.net_amount_vnd or 0) for item in candidate.items)
+            != int(candidate.total_amount or 0)
+        ]
+        assert mismatches == []
         # hồ sơ khách đã bị xóa
         assert session.query(models.Customer).filter(models.Customer.id == kh_id).first() is None
     finally:

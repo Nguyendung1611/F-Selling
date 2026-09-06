@@ -4,6 +4,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, StrictInt
 
 from ..core.numeric_limits import MAX_SAFE_VND
+from .money import ExactVND
 
 
 class ExpenseCategoryCreate(BaseModel):
@@ -20,7 +21,7 @@ class ExpenseCategoryUpdate(BaseModel):
 class ExpenseTemplateCreate(BaseModel):
     category_id: StrictInt = Field(gt=0)
     name: Optional[str] = Field(default=None, max_length=200)
-    amount: StrictInt = Field(ge=0, le=MAX_SAFE_VND)
+    amount: ExactVND = Field(ge=0, le=MAX_SAFE_VND)
     day_of_month: StrictInt = Field(default=1, ge=1, le=31)
     note: Optional[str] = Field(default=None, max_length=500)
 
@@ -28,7 +29,7 @@ class ExpenseTemplateCreate(BaseModel):
 class ExpenseTemplateUpdate(BaseModel):
     category_id: Optional[StrictInt] = Field(default=None, gt=0)
     name: Optional[str] = Field(default=None, max_length=200)
-    amount: Optional[StrictInt] = Field(default=None, ge=0, le=MAX_SAFE_VND)
+    amount: Optional[ExactVND] = Field(default=None, ge=0, le=MAX_SAFE_VND)
     day_of_month: Optional[StrictInt] = Field(default=None, ge=1, le=31)
     note: Optional[str] = Field(default=None, max_length=500)
     is_active: Optional[bool] = None
@@ -51,7 +52,7 @@ class ExpenseCreate(BaseModel):
 
     category_id: StrictInt = Field(gt=0)
     template_id: Optional[StrictInt] = Field(default=None, gt=0)
-    amount: StrictInt = Field(gt=0, le=MAX_SAFE_VND)
+    amount: ExactVND = Field(gt=0, le=MAX_SAFE_VND)
     expense_date: Optional[str] = Field(default=None, max_length=10)
     amortize_months: Optional[StrictInt] = Field(default=None, ge=1, le=120)
     amortize_start_date: Optional[str] = Field(default=None, max_length=10)

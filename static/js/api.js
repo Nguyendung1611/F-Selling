@@ -1,5 +1,7 @@
 const BASE_URL = '/api';
 let cachedToken = localStorage.getItem('token');
+let cachedUsername = localStorage.getItem('username');
+const OFFLINE_SEAL_MARKER_PREFIX = 'fselling.offline-seal.v1:';
 const AUTH_STORAGE_KEYS = Object.freeze([
     'token',
     'role',
@@ -16,9 +18,60 @@ function currentLanguage() {
 
 // Chỉ xóa dữ liệu phiên đăng nhập. Lựa chọn ngôn ngữ và cài đặt đọc tiền
 // thuộc về thiết bị nên phải còn nguyên sau logout/401.
-function clearAuthState() {
+function taoOfflineSealGeneration() {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+    if (window.crypto?.getRandomValues) {
+        const words = new Uint32Array(4);
+        window.crypto.getRandomValues(words);
+        return Array.from(words, value => value.toString(16).padStart(8, '0')).join('');
+    }
+    return `${Date.now()}:${Math.floor(window.performance?.now?.() || 0)}`;
+}
+
+function ghiOfflineSealMarker(username) {
+    const oldUsername = String(username || '');
+    if (!oldUsername) return null;
+    const key = OFFLINE_SEAL_MARKER_PREFIX + encodeURIComponent(oldUsername);
+    const value = JSON.stringify({
+        username: oldUsername,
+        generation: taoOfflineSealGeneration()
+    });
+    localStorage.setItem(key, value);
+    return { key, value, username: oldUsername };
+}
+
+async function sealOfflineIdentityV1(username) {
+    const marker = ghiOfflineSealMarker(username);
+    if (!marker) return;
+    if (window.OfflineBan?.sealIdentityV1) {
+        try {
+            // Seal local-only: không xóa token/receipt và không tự revoke lease
+            // server. Marker được ghi TRƯỚC transaction để trang không nạp
+            // module offline hoặc tab đóng giữa chừng vẫn fail-closed lần sau.
+            await window.OfflineBan.sealIdentityV1({ username: marker.username });
+            if (localStorage.getItem(marker.key) === marker.value) {
+                localStorage.removeItem(marker.key);
+            }
+        } catch (e) {
+            // Giữ marker bền; startup/read v1 sẽ seal trước normal use.
+        }
+    }
+}
+
+async function prepareAuthIdentityChangeV1(nextUsername) {
+    const next = String(nextUsername || '');
+    if (cachedUsername && cachedUsername !== next) {
+        await sealOfflineIdentityV1(cachedUsername);
+    }
+}
+
+async function clearAuthState() {
+    // Dùng identity được cache riêng của document, không đọc localStorage ở đây:
+    // storage event chỉ chạy sau khi tab khác đã overwrite username bằng user mới.
+    await sealOfflineIdentityV1(cachedUsername);
     AUTH_STORAGE_KEYS.forEach(key => localStorage.removeItem(key));
     cachedToken = null;
+    cachedUsername = null;
 }
 
 // Dùng URL mới sau logout/401 để trình duyệt không khôi phục một bản HTML
@@ -44,7 +97,9 @@ function hasLocalAccessToPage(pathname) {
         return role === 'ADMIN' || role === 'SELLER' || role === 'STAFF';
     }
     if (pathname === '/pos') {
-        return role === 'SELLER' || role === 'STAFF';
+        // Global ADMIN may open POS solely for owner-authorized offline
+        // recovery; the server remains the authority for every action.
+        return role === 'ADMIN' || role === 'SELLER' || role === 'STAFF';
     }
     return true;
 }
@@ -138,6 +193,8 @@ const originalSetItem = localStorage.setItem;
 localStorage.setItem = function(key, value) {
     if (key === 'token') {
         cachedToken = value;
+    } else if (key === 'username') {
+        cachedUsername = String(value);
     }
     originalSetItem.apply(this, arguments);
 };
@@ -147,10 +204,13 @@ function getToken() {
 }
 
 async function apiCall(endpoint, method = 'GET', body = null) {
+    const isFormData = body instanceof FormData;
     const headers = {
-        'Content-Type': 'application/json',
         'Accept-Language': currentLanguage()
     };
+    // Với FormData, trình duyệt phải tự thêm multipart boundary. Gắn thủ công
+    // Content-Type sẽ làm server không đọc được file.
+    if (!isFormData) headers['Content-Type'] = 'application/json';
     
     const token = getToken();
     if (token) {
@@ -159,7 +219,7 @@ async function apiCall(endpoint, method = 'GET', body = null) {
 
     const options = { method, headers, cache: 'no-store' };
     if (body) {
-        options.body = JSON.stringify(body);
+        options.body = isFormData ? body : JSON.stringify(body);
     }
 
     let res;
@@ -171,7 +231,7 @@ async function apiCall(endpoint, method = 'GET', body = null) {
     if (res.status === 401 && !endpoint.includes('/auth/login')) {
         // Chỉ xóa localStorage nếu token hiện tại trong localStorage trùng với token cũ của tab này
         if (localStorage.getItem('token') === cachedToken) {
-            clearAuthState();
+            await clearAuthState();
         }
         redirectToLogin();
         return;
@@ -195,10 +255,16 @@ async function apiCall(endpoint, method = 'GET', body = null) {
         if (Array.isArray(msg) && msg.length > 0 && msg[0].msg) {
             msg = msg[0].msg;
         } else if (typeof msg === 'object') {
-            msg = JSON.stringify(msg);
+            // Public API errors may carry a stable code beside localized text.
+            // Keep that code on Error.code; never render a raw object in POS.
+            msg = typeof msg.message === 'string' ? msg.message : t('common.api_error');
         }
         const error = new Error(msg);
         error.status = res.status;
+        error.detail = (data && typeof data.detail === 'object') ? data.detail : null;
+        // Stable API codes are intentionally separate from localized text.  The
+        // offline queue needs them to choose a durable, safe local state.
+        error.code = typeof data?.detail?.code === 'string' ? data.detail.code : null;
         throw error;
     }
     return data;
@@ -252,15 +318,16 @@ if (document.readyState === 'loading') {
     hienNhanTuTrangTruoc();
 }
 
-function logout() {
-    clearAuthState();
+async function logout() {
+    await clearAuthState();
     redirectToLogin();
 }
 
 // Tự động phát hiện khi đăng nhập ở tab khác trên cùng trình duyệt (Lập tức logout tab cũ)
-window.addEventListener('storage', (e) => {
+window.addEventListener('storage', async (e) => {
     if (e.key === 'token') {
         if (e.newValue !== cachedToken) {
+            await sealOfflineIdentityV1(cachedUsername);
             redirectToLogin();
         }
     }
@@ -280,7 +347,7 @@ setInterval(async () => {
             });
             if (res.status === 401) {
                 if (localStorage.getItem('token') === cachedToken) {
-                    clearAuthState();
+                    await clearAuthState();
                 }
                 redirectToLogin();
             }

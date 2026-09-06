@@ -32,23 +32,31 @@ def _save_program(client, ctx, payload=None):
 
 def test_cau_hinh_chi_nhan_so_nguyen_json(client):
     ctx = seller_with_shop(client)
-    numeric_fields = (
-        "earn_amount",
+    money_fields = ("earn_amount", "redeem_amount")
+    integer_fields = (
         "earn_points",
         "redeem_points",
-        "redeem_amount",
         "min_redeem_points",
-        "max_redeem_percent",
         "expiry_days",
     )
 
-    # 2.0 nhìn có vẻ nguyên nhưng vẫn là kiểu float trong JSON; chuỗi "2"
-    # cũng không được backend tự đổi hộ. Tab gửi số nguyên thật ở đường hợp lệ.
-    for field in numeric_fields:
+    # VND rejects fractional values but accepts compatibility representations
+    # that are exactly integral. Point/day counters stay strict integers.
+    for field in money_fields:
+        for invalid in (1.5, "2.5"):
+            payload = {**PROGRAM, field: invalid}
+            response = _save_program(client, ctx, payload)
+            assert response.status_code == 422, (field, invalid, response.text)
+    for field in integer_fields:
         for invalid in (1.5, 2.0, "2"):
             payload = {**PROGRAM, field: invalid}
             response = _save_program(client, ctx, payload)
             assert response.status_code == 422, (field, invalid, response.text)
+    for invalid_rate in (1.234, "2.345"):
+        response = _save_program(
+            client, ctx, {**PROGRAM, "max_redeem_percent": invalid_rate}
+        )
+        assert response.status_code == 422, response.text
 
     for invalid_enabled in (1, "true"):
         response = _save_program(
@@ -64,6 +72,18 @@ def test_cau_hinh_chi_nhan_so_nguyen_json(client):
     )
     assert loaded.status_code == 200
     assert loaded.json()["id"] is None
+
+    for field in money_fields:
+        for exact in (2.0, "2", "2.0"):
+            response = _save_program(client, ctx, {**PROGRAM, field: exact})
+            assert response.status_code == 200, (field, exact, response.text)
+            assert response.json()[field] == 2
+    for exact_rate in (12.34, "12.34"):
+        response = _save_program(
+            client, ctx, {**PROGRAM, "max_redeem_percent": exact_rate}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["max_redeem_percent"] == 12.34
 
 
 def test_cau_hinh_so_nguyen_luu_va_doc_lai_du(client):
@@ -186,7 +206,7 @@ def test_tab_tich_diem_chan_so_le_truoc_khi_goi_api_va_da_bump_cache():
     assert locale.count("'seller.loyalty.amount_integer':") == 2
     assert 'id="loyaltyEarnAmount" type="number" min="1" step="1"' in html
     assert 'id="loyaltyRedeemAmount" type="number" min="1" step="1"' in html
-    # L5 (Giọng nói cho Trợ Lý) sửa cả hai file này nên chúng cùng sang mốc mới. Ghim
+    # R1 Forecast prefill sửa cả hai file này nên chúng cùng sang mốc mới. Ghim
     # cứng là có chủ ý: đổi file thì phải sửa dòng này, tức là nghĩ lại về cache.
-    assert "/js/locales/seller.js?v=20260809-tro-ly-giong-noi" in html
-    assert "/js/seller.js?v=20260809-tro-ly-giong-noi" in html
+    assert "/js/locales/seller.js?v=20260825-assistant-guided-tasks-r1-1" in html
+    assert "/js/seller.js?v=20260825-assistant-guided-tasks-r1-1" in html

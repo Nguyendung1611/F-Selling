@@ -1,9 +1,8 @@
 """Giới hạn số nguyên an toàn dùng chung giữa sổ tiền và tồn kho.
 
-9 triệu tỷ vẫn nhỏ hơn ``Number.MAX_SAFE_INTEGER`` của JavaScript. Giữ mọi
-giá trị tiền mà giao diện phải cộng/trừ dưới ngưỡng này để không âm thầm làm
-tròn số; giới hạn tồn kho riêng ngăn các phép nhân số lượng x đơn giá phình
-quá lớn trước khi được kiểm tra.
+Giới hạn trên áp cho từng giá trị tiền canonical được persist. Tổng báo cáo có
+thể vượt ``Number.MAX_SAFE_INTEGER`` dù từng chứng từ không vượt giới hạn, nên
+contract v2 trả aggregate đó dưới dạng decimal string.
 """
 
 MAX_SAFE_VND = 9_000_000_000_000_000

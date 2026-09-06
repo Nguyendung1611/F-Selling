@@ -20,13 +20,21 @@ mẫu tại máy chủ chịu thua. Việc của Gemini gói gọn trong một c
 from __future__ import annotations
 
 import json
+import re
+import threading
+import time
+import unicodedata
 import urllib.error
 import urllib.request
 from typing import Optional, Sequence, Tuple
 
 from ..core.config import (
     GEMINI_API_KEY,
+    GEMINI_CIRCUIT_COOLDOWN_SECONDS,
+    GEMINI_CIRCUIT_FAILURE_THRESHOLD,
+    GEMINI_ENABLED,
     GEMINI_MODEL,
+    GEMINI_MODEL_PINNED,
     GEMINI_TIMEOUT_SECONDS,
     log_to_file,
 )
@@ -39,10 +47,69 @@ _URL = (
 # Chỉ cần đủ chỗ cho {"y_dinh":"...","khoang":"..."}. Chặn ở đây là chặn cứng:
 # model có "nói nhiều" cỡ nào cũng không tiêu quá ngần này token đầu ra.
 _TOI_DA_TOKEN_RA = 40
+# Only generic retail-language tokens may cross the provider boundary. Unknown
+# tokens are dropped, so names, phones, emails, SKUs and free-form identifiers
+# never become part of the request. Lower recall is an intentional safe fallback.
+_SAFE_QUESTION_WORDS = frozenset({
+    "ai", "an", "ap", "ban", "bao", "bua", "ca", "can", "cai", "chay",
+    "chi", "cho", "con", "cong", "cua", "cuoc", "da", "dang", "date",
+    "dat", "day", "doanh", "don", "dong", "duoc", "e", "gia", "gi",
+    "giup", "goi", "hang", "han", "het", "hoan", "hom", "hong", "kho",
+    "khoai", "khach", "ket", "lai", "lay", "loi", "mat", "may", "mo",
+    "moi", "mon", "mua", "nam", "nay", "nhap", "nhat", "nhieu", "ni",
+    "no", "on", "pham", "phai", "phi", "quan", "ra", "re", "roi", "sau",
+    "san", "shop", "so", "tai", "tat", "them", "thang", "thieu", "thu",
+    "thuc", "tien", "tiem", "tinh", "tom", "ton", "tong", "truoc", "tuan",
+    "ve", "vo", "vua", "vao", "xem",
+})
+# At least one retail/report anchor must survive. Two generic allowlisted words
+# alone (for example "moi roi") are not enough reason to cross the provider
+# boundary or reserve budget.
+_DOMAIN_QUESTION_WORDS = frozenset({
+    "ban", "ca", "can", "chay", "chi", "cong", "date", "doanh", "don",
+    "e", "gia", "hang", "han", "het", "khach", "ket", "kho", "lai",
+    "lay", "loi", "mon", "nhap", "no", "pham", "phi", "quan", "san",
+    "shop", "tien", "tiem", "ton", "thu",
+})
+_CIRCUIT_LOCK = threading.Lock()
+_circuit_failures = 0
+_circuit_open_until = 0.0
 
 
 def dang_bat() -> bool:
-    return bool(GEMINI_API_KEY)
+    return bool(
+        GEMINI_ENABLED
+        and GEMINI_API_KEY
+        and GEMINI_MODEL == GEMINI_MODEL_PINNED
+    )
+
+
+def san_sang() -> bool:
+    """Provider is configured and its minimal circuit is not cooling down."""
+    if not dang_bat():
+        return False
+    with _CIRCUIT_LOCK:
+        return time.monotonic() >= _circuit_open_until
+
+
+def _record_failure() -> None:
+    global _circuit_failures, _circuit_open_until
+    with _CIRCUIT_LOCK:
+        _circuit_failures += 1
+        if _circuit_failures >= GEMINI_CIRCUIT_FAILURE_THRESHOLD:
+            _circuit_open_until = time.monotonic() + GEMINI_CIRCUIT_COOLDOWN_SECONDS
+
+
+def _record_success() -> None:
+    global _circuit_failures, _circuit_open_until
+    with _CIRCUIT_LOCK:
+        _circuit_failures = 0
+        _circuit_open_until = 0.0
+
+
+def _reset_circuit_for_tests() -> None:
+    """Deterministic test seam; never enables the provider."""
+    _record_success()
 
 
 def _prompt(cau_hoi: str, y_dinh_hop_le: Sequence[str], khoang_hop_le: Sequence[str]) -> str:
@@ -63,6 +130,27 @@ def _prompt(cau_hoi: str, y_dinh_hop_le: Sequence[str], khoang_hop_le: Sequence[
     )
 
 
+def _minimize_question(cau_hoi: str) -> Optional[str]:
+    """Drop every token not on the generic, non-identifying vocabulary."""
+    normalized = unicodedata.normalize("NFD", (cau_hoi or "").lower())
+    normalized = "".join(
+        char for char in normalized if unicodedata.category(char) != "Mn"
+    ).replace("đ", "d")
+    safe = [
+        token for token in re.findall(r"[a-z]+", normalized)
+        if token in _SAFE_QUESTION_WORDS
+    ]
+    minimized = " ".join(safe)[:200]
+    return minimized if len(safe) >= 2 and any(
+        token in _DOMAIN_QUESTION_WORDS for token in safe
+    ) else None
+
+
+def co_the_gui(cau_hoi: str) -> bool:
+    """True only when the privacy allowlist leaves a useful retail question."""
+    return _minimize_question(cau_hoi) is not None
+
+
 def phan_loai(
     cau_hoi: str,
     y_dinh_hop_le: Sequence[str],
@@ -75,16 +163,19 @@ def phan_loai(
     "chưa hiểu" như khi tính năng chưa bật, chứ không nhận một thông báo lỗi kỹ
     thuật mà họ không làm gì được.
     """
-    if not dang_bat():
+    if not san_sang():
+        return None
+
+    minimized_question = _minimize_question(cau_hoi)
+    if minimized_question is None:
         return None
 
     than = json.dumps(
         {
             "contents": [
-                {"parts": [{"text": _prompt(cau_hoi, y_dinh_hop_le, khoang_hop_le)}]}
+                {"parts": [{"text": _prompt(minimized_question, y_dinh_hop_le, khoang_hop_le)}]}
             ],
             "generationConfig": {
-                "temperature": 0,          # phân loại, không sáng tác
                 "maxOutputTokens": _TOI_DA_TOKEN_RA,
                 "responseMimeType": "application/json",
             },
@@ -104,6 +195,7 @@ def phan_loai(
             payload = json.loads(r.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as loi:
         log_to_file(f"[TRO LY] Gemini khong tra loi duoc: {type(loi).__name__}")
+        _record_failure()
         return None
 
     try:
@@ -113,13 +205,16 @@ def phan_loai(
         khoang = str(ket.get("khoang") or "").strip().upper()
     except (KeyError, IndexError, TypeError, ValueError):
         log_to_file("[TRO LY] Gemini tra ve dinh dang la")
+        _record_failure()
         return None
 
     # Hàng rào cuối: chỉ nhận giá trị CÓ THẬT trong danh sách. Model bịa ra
     # "DOANH_THU_THEO_QUY" thì ở đây rơi về không hiểu, không có đường nào đi
     # tiếp thành một câu trả lời trông như thật.
     if y_dinh not in y_dinh_hop_le:
+        _record_failure()
         return None
     if khoang not in khoang_hop_le:
         khoang = ""
+    _record_success()
     return y_dinh, khoang

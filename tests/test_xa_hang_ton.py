@@ -40,7 +40,12 @@ def _dat_gia_von(product_id, gia_von):
     session = SessionLocal()
     try:
         p = session.query(models.Product).filter(models.Product.id == product_id).first()
-        p.cost_price = gia_von
+        quantity = max(int(p.stock or 0), 0)
+        p.cost_known_qty = quantity if gia_von is not None else 0
+        p.cost_unknown_qty = quantity if gia_von is None else 0
+        p.cost_basis_vnd = quantity * int(gia_von or 0)
+        p.cost_deficit_qty = max(-int(p.stock or 0), 0)
+        p.cost_state_version = int(p.cost_state_version or 0) + 1
         session.commit()
     finally:
         session.close()
@@ -172,10 +177,15 @@ def _them_lo(product_id, shop_id, so_ngay_nua, so_luong=10, gia_von=60_000):
         p = session.query(models.Product).filter(models.Product.id == product_id).first()
         p.track_batches = True
         p.stock = (p.stock or 0) + so_luong
+        p.cost_known_qty = p.cost_unknown_qty = p.cost_basis_vnd = p.cost_deficit_qty = 0
+        known_qty = so_luong if gia_von is not None else 0
+        unknown_qty = so_luong if gia_von is None else 0
         session.add(
             models.ProductBatch(
                 product_id=product_id, shop_id=shop_id, expiry_date=han,
-                quantity=so_luong, cost_price=gia_von,
+                quantity=so_luong, cost_known_qty=known_qty,
+                cost_unknown_qty=unknown_qty,
+                cost_basis_vnd=known_qty * int(gia_von or 0),
             )
         )
         session.commit()

@@ -1,8 +1,12 @@
 .env
 .venv/
+.worktrees/
 *.db
 request_log.txt
 backup_log.txt
+.fselling-local.pid
+NGROK_PUBLIC_URL.txt
+outputs/
 
 __pycache__/
 *.py[cod]

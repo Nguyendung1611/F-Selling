@@ -23,7 +23,7 @@ from conftest import (
 )
 
 from fselling import models
-from fselling.core import bootstrap
+import legacy_bootstrap_support as bootstrap
 from fselling.core.database import SessionLocal
 from fselling.routers import webhooks
 from fselling.services import loyalty_service, order_service
@@ -294,7 +294,7 @@ def test_chu_shop_luu_va_doc_lai_day_du_cau_hinh(client):
         assert audit is not None
         assert audit.user_id is not None
         assert f"Shop #{ctx['shop_id']}" in audit.details
-        assert '"earn_amount": 25000.0' in audit.details
+        assert '"earn_amount": 25000' in audit.details
         assert '"expiry_days": 90' in audit.details
     finally:
         session.close()
@@ -1129,6 +1129,40 @@ def test_webhook_gui_lai_chi_cong_diem_mot_lan(client, monkeypatch):
     assert status.json()["loyalty_balance"] == 10
     assert detail.json()["loyalty_points_earned"] == 10
     assert detail.json()["loyalty_balance"] == 10
+
+
+def test_webhook_sai_tai_khoan_khong_cong_diem(client, monkeypatch):
+    ctx = seller_with_shop(client)
+    _save_program(client, ctx)
+    customer = _create_customer(client, ctx)
+    created = _create_order(
+        client, ctx, customer_id=customer["id"], method="transfer"
+    )
+    assert created.status_code == 200, created.text
+    order_id = created.json()["order_id"]
+    before_order = _order_record(order_id)
+    before_entries = _entries(order_id=order_id)
+    before_balance = _balance(client, ctx, customer["id"])
+
+    secret = "loyalty-account-mismatch"
+    monkeypatch.setattr(webhooks, "get_webhook_secret", lambda: secret)
+    response = client.post(
+        "/api/orders/webhook",
+        json={
+            "content": f"ORDER{order_id}",
+            "transferAmount": 100_000,
+            "transferType": "in",
+            "accountNumber": "9999999999",
+            "referenceCode": f"LOYALTY-ACCOUNT-MISMATCH-{order_id}",
+        },
+        headers={"X-Webhook-Secret": secret},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["rejected_order_ids"] == [order_id]
+    assert _order_record(order_id) == before_order
+    assert _entries(order_id=order_id) == before_entries
+    assert _balance(client, ctx, customer["id"]) == before_balance == 0
 
 
 # ---------- Trả hàng ----------

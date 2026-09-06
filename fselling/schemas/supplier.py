@@ -5,6 +5,7 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, StrictInt, field_validator
 
 from ..core.numeric_limits import MAX_SAFE_QUANTITY, MAX_SAFE_VND
+from .money import ExactVND
 
 
 class SupplierCreate(BaseModel):
@@ -13,7 +14,7 @@ class SupplierCreate(BaseModel):
     tax_code: Optional[str] = Field(default=None, max_length=64)
     address: Optional[str] = Field(default=None, max_length=500)
     note: Optional[str] = Field(default=None, max_length=500)
-    opening_balance: StrictInt = Field(default=0, ge=0, le=MAX_SAFE_VND)
+    opening_balance: ExactVND = Field(default=0, ge=0, le=MAX_SAFE_VND)
     opening_date: Optional[str] = Field(default=None, max_length=10)
     opening_due_date: Optional[str] = Field(default=None, max_length=10)
     opening_note: Optional[str] = Field(default=None, max_length=500)
@@ -35,7 +36,7 @@ class SupplierStatusUpdate(BaseModel):
 class PurchaseReceiptItemInput(BaseModel):
     product_id: StrictInt = Field(gt=0)
     quantity: StrictInt = Field(gt=0, le=MAX_SAFE_QUANTITY)
-    unit_cost: StrictInt = Field(ge=0, le=MAX_SAFE_VND)
+    unit_cost: ExactVND = Field(ge=0, le=MAX_SAFE_VND)
     expiry_date: Optional[str] = Field(default=None, max_length=10)
 
     @field_validator("expiry_date")
@@ -51,6 +52,7 @@ class PurchaseReceiptItemInput(BaseModel):
 
 
 class PurchaseReceiptCreate(BaseModel):
+    purchase_order_id: Optional[StrictInt] = Field(default=None, gt=0)
     supplier_id: StrictInt = Field(gt=0)
     items: List[PurchaseReceiptItemInput] = Field(min_length=1)
     supplier_invoice_number: Optional[str] = Field(default=None, max_length=128)
@@ -61,6 +63,7 @@ class PurchaseReceiptCreate(BaseModel):
 
 
 class PurchaseReceiptUpdate(BaseModel):
+    purchase_order_id: Optional[StrictInt] = Field(default=None, gt=0)
     supplier_id: StrictInt = Field(gt=0)
     items: List[PurchaseReceiptItemInput] = Field(min_length=1)
     supplier_invoice_number: Optional[str] = Field(default=None, max_length=128)
@@ -80,17 +83,61 @@ class PurchaseReceiptConfirm(BaseModel):
     )
     # Không mặc định 0: đây là quyết định tiền bạc, client phải gửi rõ người
     # dùng đã chọn trả 0 / một phần / toàn bộ.
-    paid_amount: StrictInt = Field(ge=0, le=MAX_SAFE_VND)
+    paid_amount: ExactVND = Field(ge=0, le=MAX_SAFE_VND)
     method: Optional[Literal["CASH_SHIFT", "TRANSFER", "OUTSIDE"]] = None
     note: Optional[str] = Field(default=None, max_length=500)
     reference: Optional[str] = Field(default=None, max_length=128)
 
 
 class SupplierPaymentCreate(BaseModel):
-    amount: StrictInt = Field(gt=0, le=MAX_SAFE_VND)
+    amount: ExactVND = Field(gt=0, le=MAX_SAFE_VND)
     method: Literal["CASH_SHIFT", "TRANSFER", "OUTSIDE"]
     note: Optional[str] = Field(default=None, max_length=500)
     reference: Optional[str] = Field(default=None, max_length=128)
+    operation_id: str = Field(min_length=8, max_length=128)
+
+
+class PurchaseOrderItemInput(BaseModel):
+    product_id: StrictInt = Field(gt=0)
+    quantity: StrictInt = Field(gt=0, le=MAX_SAFE_QUANTITY)
+
+
+class _PurchaseOrderFields(BaseModel):
+    supplier_id: StrictInt = Field(gt=0)
+    items: List[PurchaseOrderItemInput] = Field(min_length=1)
+    expected_date: Optional[str] = Field(default=None, max_length=10)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("expected_date")
+    @classmethod
+    def validate_expected_date(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        try:
+            datetime.strptime(value.strip(), "%Y-%m-%d")
+        except ValueError as error:
+            raise ValueError("Ngày dự kiến phải theo định dạng YYYY-MM-DD") from error
+        return value.strip()
+
+
+class PurchaseOrderCreate(_PurchaseOrderFields):
+    operation_id: str = Field(min_length=8, max_length=128)
+
+
+class PurchaseOrderUpdate(_PurchaseOrderFields):
+    pass
+
+
+class PurchaseOrderPlace(BaseModel):
+    operation_id: str = Field(min_length=8, max_length=128)
+    draft_fingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
+class PurchaseOrderCancel(BaseModel):
     operation_id: str = Field(min_length=8, max_length=128)
 
 
@@ -103,4 +150,9 @@ __all__ = [
     "PurchaseReceiptCreate",
     "PurchaseReceiptUpdate",
     "PurchaseReceiptConfirm",
+    "PurchaseOrderItemInput",
+    "PurchaseOrderCreate",
+    "PurchaseOrderUpdate",
+    "PurchaseOrderPlace",
+    "PurchaseOrderCancel",
 ]

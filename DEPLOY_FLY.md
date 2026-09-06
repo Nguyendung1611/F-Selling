@@ -66,6 +66,14 @@ fly secrets set --app <ten-app> `
 - `GEMINI_API_KEY` là **tùy chọn**: không đặt thì trợ lý vẫn chạy bằng bộ nhận
   dạng nội bộ (0 đồng, không ra mạng), chỉ là không hiểu được các câu hỏi nói
   vòng vo. Đặt vào thì mỗi shop Pro được 20 lượt nhờ AI mỗi ngày.
+- `ORDER_WEBHOOK_MAX_BODY_BYTES` không phải secret. `fly.toml` đặt 262144 byte
+  (256 KiB) làm **default khởi đầu cho pilot**, không phải kích thước đã được
+  provider xác minh. App chỉ bắt đầu đọc/đếm stream sau khi secret hợp lệ, và
+  vẫn đếm khi `Content-Length` thiếu hoặc sai. Trước khi điều chỉnh phải đo
+  payload thật và theo dõi số lượng response HTTP 413 trong pilot.
+- Đây chỉ là giới hạn ở **tầng ứng dụng**. Tài liệu này không xác nhận proxy/edge
+  production của Fly đã có body limit riêng; muốn có hai lớp bảo vệ phải cấu
+  hình và kiểm chứng lớp proxy độc lập.
 
 ## 6. Deploy
 
@@ -73,8 +81,100 @@ fly secrets set --app <ten-app> `
 fly deploy --app <ten-app>
 ```
 
-Lần đầu Fly build Docker image và khởi động. DB trống trên volume sẽ được tạo tự động,
-và tài khoản `admin` được seed từ `ADMIN_INITIAL_PASSWORD`.
+Từ I04, web **không tự tạo hoặc nâng schema**. Build mới sẽ chưa ready cho tới
+khi operator chạy đúng runbook migration ở mục 6.1. Không thêm
+`release_command`: tài liệu này chưa chứng minh volume `/data` được mount vào
+release machine, nên chạy migration ở đó có thể sửa nhầm một file SQLite khác.
+
+### 6.1. Runbook maintenance cho SQLite/I04
+
+Các lệnh migration phải chạy trên đúng machine duy nhất đang gắn volume chứa
+`/data/fselling_v4.db`. Không chạy đồng thời hai machine, không rolling overlap
+old/new trong lần adoption.
+
+1. Xem inventory Fly và xác nhận đúng **một active application machine**, đúng
+   **một volume/file SQLite**. Hai assertion
+   `FSELLING_TOPOLOGY_ACTIVE_MACHINES=1` và
+   `FSELLING_TOPOLOGY_SQLITE_FILES=1` trong `fly.toml` phải khớp inventory thật;
+   chúng không thay thế việc kiểm tra.
+2. Bật maintenance/readiness 503, drain traffic, chờ request, webhook và
+   scheduler kết thúc; dừng hoàn toàn old build.
+3. Mở maintenance shell trên **chính machine có mount `/data`**. Trước mọi lệnh,
+   kiểm lại `DB_PATH=/data/fselling_v4.db` và file đó nằm trên volume dự kiến.
+4. Chạy `check` và `plan` trước side effect:
+
+   ```sh
+   python -m fselling.migration.cli --database /data/fselling_v4.db check
+   python -m fselling.migration.cli --database /data/fselling_v4.db plan head
+   ```
+
+5. Fresh database:
+
+   ```sh
+   python -m fselling.migration.cli --database /data/fselling_v4.db init
+   python -m fselling.migration.cli --database /data/fselling_v4.db upgrade head
+   python -m fselling.migration.cli --database /data/fselling_v4.db verify
+   ```
+
+6. Legacy 9cf7106: chuẩn bị một **recovery path ngoài volume chính** (ví dụ một
+   recovery volume tạm đã mount vào maintenance machine). `adopt-legacy` dùng
+   SQLite Backup API, restore sang scratch và integrity-check trước khi stamp;
+   path phải khác DB live và **chưa tồn tại** ở lần chạy đầu. Nếu crash sau khi
+   tạo file nhưng trước khi ghi durable intent, dùng path mới; không tái sử dụng
+   orphan file. Khi resume/replay, dùng lại đúng `request_id` và backup đã được
+   intent ràng buộc bằng digest; request khác hoặc backup khác sẽ fail-closed.
+
+   ```sh
+   python -m fselling.migration.cli --database /data/fselling_v4.db \
+     adopt-legacy --backup /recovery/fselling-before-i04.db \
+       --request-id adopt-i04-20260810
+   python -m fselling.migration.cli --database /data/fselling_v4.db upgrade head
+   python -m fselling.migration.cli --database /data/fselling_v4.db check
+   python -m fselling.migration.cli --database /data/fselling_v4.db verify
+   ```
+
+7. Giữ bản backup ngoài volume, khởi động đúng một machine build mới, chờ
+   `/api/health/ready` trả 200 rồi mới mở traffic. Nếu verify lỗi, giữ
+   maintenance và không chạy seed/scheduler/nghiệp vụ.
+
+Không dùng `alembic upgrade` trực tiếp: đường đó bị chặn vì không thể bảo đảm
+transaction chung cho version/journal/verifier/attempt của coordinator.
+
+### 6.2. Ma trận phiên bản DB ↔ binary (revision `0004` offline)
+
+Revision `0004_i09_offline_receipts` là forward-only và **không có downgrade**.
+Bốn tổ hợp dưới đây là toàn bộ trạng thái có thể xảy ra khi deploy:
+
+| Database | Binary | Kết quả |
+|---|---|---|
+| `0003` | biết `0004` (build mới) | startup verification raise trong lifespan; process **fail boot/restart**, chưa có listener để trả JSON 503 |
+| `0004` | biết `0004` | ready, chạy bình thường |
+| `0004` | chưa biết `0004` (build cũ) | **fail boot** — verifier thấy journal dài hơn graph đã checkout và từ chối khởi động |
+| `0003` | chưa biết `0004` | ready — đây là lý do phải quay binary TRƯỚC khi database chạm `0004` |
+
+Thứ tự bắt buộc khi lên `0004`:
+
+1. Bật maintenance, drain traffic, dừng hẳn build cũ (mục 6.1 bước 1–3).
+2. Chạy migration CLI trên đúng machine gắn volume:
+
+   ```sh
+   python -m fselling.migration.cli --database /data/fselling_v4.db upgrade head
+   python -m fselling.migration.cli --database /data/fselling_v4.db verify
+   ```
+
+3. `verify` xanh rồi **mới** khởi động binary mới và chờ `/api/health/ready`
+   trả 200.
+
+Ô thứ ba là ô nguy hiểm: build cũ không biết bảng lease/registry/receipt nên nếu
+nó chạy được thì mỗi phiếu offline đồng bộ trong lúc đó sẽ mất dấu attribution và
+tombstone — đúng đường sinh doanh thu kép. Vì vậy nó được thiết kế để **chết ngay
+lúc boot**, không phải để chạy nửa vời.
+
+Hệ quả: **rollback binary không phải là rollback**. Đổi config trên build mới thì
+được; muốn quay lại binary cũ thì phải restore bản backup đã verify theo runbook
+I04 (mục 6.1 bước 6) rồi ingest lại các phiếu phát sinh sau thời điểm snapshot.
+Tuyệt đối không viết downgrade cho `0004` và không thêm `release_command` để
+"tự chạy migration khi deploy" — cảnh báo ở mục 6 vẫn nguyên giá trị.
 
 ## 7. Mở web
 

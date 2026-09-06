@@ -38,6 +38,7 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const username = document.getElementById('username').value;
     const password = document.getElementById('password').value;
+    const openDemoSale = e.currentTarget.dataset.demoSale === '1' && username === 'demo';
     const errorMsg = document.getElementById('errorMsg');
     const submitBtn = e.currentTarget.querySelector('button[type="submit"]');
 
@@ -46,6 +47,9 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
 
     try {
         const data = await apiCall('/auth/login', 'POST', { username, password });
+        // Same-tab A -> B không phát storage event. Seal A (hoặc ghi marker
+        // fail-closed nếu trang login chưa nạp OfflineBan) trước khi overwrite B.
+        await prepareAuthIdentityChangeV1(username);
         localStorage.setItem('token', data.access_token);
         localStorage.setItem('role', data.role);
         if (data.role === 'STAFF') {
@@ -58,8 +62,12 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
         localStorage.setItem('username', username);
         if (data.role === 'ADMIN') {
             navigateToPage('/admin');
+        } else if (openDemoSale && data.role === 'SELLER') {
+            navigateToPage('/pos?tour=sale');
         } else if (data.role === 'STAFF' && data.staff_role === 'CASHIER') {
             navigateToPage('/pos');
+        } else if (data.role === 'STAFF' && ['KITCHEN', 'BAR'].includes(data.staff_role)) {
+            navigateToPage(`/fnb/station/${data.staff_role.toLowerCase()}`);
         } else {
             navigateToPage('/seller');
         }

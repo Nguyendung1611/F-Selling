@@ -647,6 +647,61 @@ def test_phieu_thieu_gia_von_bi_loai_va_dem_rieng(client):
     assert stats["written_off_quantity"] == 5, "Số lượng thì luôn biết chắc"
 
 
+def test_huy_hang_known_free_unknown_giu_dung_cost_semantics(client):
+    ctx = seller_with_shop(client)
+    paid = _tao_sp_theo_lo(client, ctx)
+    free = _tao_sp_theo_lo(client, ctx)
+    unknown = _tao_sp_theo_lo(client, ctx)
+    _nhap_lo(client, ctx, paid["id"], 2, _ngay(-3), gia_von=5)
+    _nhap_lo(client, ctx, free["id"], 2, _ngay(-3), gia_von=0)
+    _nhap_lo(client, ctx, unknown["id"], 2, _ngay(-3))
+
+    responses = {}
+    for label, product in (("paid", paid), ("free", free), ("unknown", unknown)):
+        batch_id = _lo(product["id"])[0].id
+        response = _huy(
+            client,
+            ctx["token"],
+            ctx["shop_id"],
+            [{"product_id": product["id"], "batch_id": batch_id, "quantity": 2}],
+            operation_id=f"i05-write-off-{label}",
+        )
+        assert response.status_code == 200, response.text
+        responses[label] = response.json()
+
+    assert responses["paid"]["total_cost"] == 10
+    assert responses["free"]["total_cost"] == 0
+    assert responses["unknown"]["total_cost"] is None
+
+    session = SessionLocal()
+    try:
+        canonical = {
+            row.product_id: (
+                row.cost_known_qty,
+                row.cost_unknown_qty,
+                row.cost_basis_vnd,
+            )
+            for row in session.query(models.StockWriteOffItem)
+            .filter(
+                models.StockWriteOffItem.product_id.in_(
+                    [paid["id"], free["id"], unknown["id"]]
+                )
+            )
+            .all()
+        }
+    finally:
+        session.close()
+    assert canonical == {
+        paid["id"]: (2, 0, 10),
+        free["id"]: (2, 0, 0),
+        unknown["id"]: (0, 2, 0),
+    }
+    stats = _stats(client, ctx)
+    assert stats["written_off_quantity"] == 6
+    assert stats["write_off_loss"] == 10
+    assert stats["write_offs_missing_cost"] == 1
+
+
 def test_nhan_vien_khong_thay_so_lo_huy_hang(client):
     """Số lỗ chính là giá vốn nhân số lượng, nói ra nó là nói ra giá vốn."""
     ctx = seller_with_shop(client)

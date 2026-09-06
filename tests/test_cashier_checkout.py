@@ -186,6 +186,10 @@ def test_hai_thu_ngan_khong_the_ban_am_kho_hoac_vuot_luot_voucher(
             .first()
         )
         product.stock = 1
+        product.cost_known_qty = 0
+        product.cost_unknown_qty = 1
+        product.cost_basis_vnd = 0
+        product.cost_deficit_qty = 0
         session.commit()
     finally:
         session.close()
@@ -270,7 +274,7 @@ def test_hai_thu_ngan_khong_the_ban_am_kho_hoac_vuot_luot_voucher(
         thread.join(timeout=10)
 
     assert all(not thread.is_alive() for thread in threads)
-    assert len([result for result in outcomes if result[0] == "ok"]) == 1
+    assert len([result for result in outcomes if result[0] == "ok"]) == 1, outcomes
     rejected = [result for result in outcomes if result[0] == "http"]
     assert len(rejected) == 1
     assert rejected[0][1] == 400

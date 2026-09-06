@@ -3,12 +3,13 @@
 Router này PHẢI được include TRƯỚC routers/orders.py và routers/subscriptions.py
 vì các đường ``.../webhook`` trùng khuôn route động ``.../{shop_id}``.
 """
-from typing import Optional
+import json
+from typing import Any, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from ..core.config import log_to_file
+from ..core.config import ORDER_WEBHOOK_MAX_BODY_BYTES, log_to_file
 from ..core.security import compare_secret
 from ..dependencies import get_db
 from ..services import order_service
@@ -18,6 +19,41 @@ from ..services.payment_service import (
 )
 
 router = APIRouter(tags=["webhooks"])
+
+
+def _body_too_large() -> HTTPException:
+    return HTTPException(status_code=413, detail="Webhook body vượt quá giới hạn cho phép")
+
+
+async def _read_limited_json(
+    request: Request, max_bytes: int
+) -> Tuple[Any, int]:
+    """Đọc JSON với trần bộ nhớ, kể cả khi Content-Length thiếu hoặc nói sai.
+
+    Content-Length chỉ giúp từ chối sớm; giới hạn thật luôn được kiểm trên từng
+    chunk ASGI. Hàm chỉ được gọi SAU khi secret webhook đã được xác thực.
+    """
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except ValueError:
+            declared_length = None
+        if declared_length is not None and declared_length > max_bytes:
+            raise _body_too_large()
+
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > max_bytes:
+            raise _body_too_large()
+        body.extend(chunk)
+
+    if not body:
+        return {}, 0
+    try:
+        return json.loads(body), len(body)
+    except (ValueError, UnicodeDecodeError):
+        return {}, len(body)
 
 
 def _client_secret(x_webhook_secret: Optional[str], authorization: Optional[str]) -> Optional[str]:
@@ -43,13 +79,6 @@ async def order_webhook(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    try:
-        request_data = await request.json()
-    except (ValueError, UnicodeDecodeError):
-        request_data = {}
-
-    log_to_file(f"WEBHOOK RECEIVED: {request_data}")
-
     webhook_secret = get_webhook_secret()
     # Fail-closed: nếu chưa cấu hình secret thì từ chối, KHÔNG cho phép mark PAID.
     if not webhook_secret:
@@ -61,7 +90,40 @@ async def order_webhook(
     if not compare_secret(_client_secret(x_webhook_secret, authorization), webhook_secret):
         raise HTTPException(status_code=401, detail="Webhook secret không hợp lệ")
 
-    result = order_service.apply_webhook_payment(db, request_data)
+    # Secret phải được kiểm xong trước khi đọc một byte body. Content-Length chỉ
+    # là tối ưu từ chối sớm; `_read_limited_json` vẫn đếm stream để chặn header
+    # thiếu/sai. Log chỉ có metadata số học, không có raw payload/header/client.
+    request_data, body_size = await _read_limited_json(
+        request, ORDER_WEBHOOK_MAX_BODY_BYTES
+    )
+    log_to_file(f"ORDER WEBHOOK AUTHENTICATED body_bytes={body_size}")
+
+    try:
+        result = order_service.apply_webhook_payment(db, request_data)
+    except HTTPException as exc:
+        # Chỉ 400/404 top-level của parser/order lookup được giữ. HTTPException
+        # nảy ra sau khi một event tài chính đã bắt đầu phải thành 5xx.
+        if exc.status_code in (400, 404):
+            raise
+        db.rollback()
+        log_to_file(
+            "ORDER WEBHOOK FAILURE category=persistence error_type=webhook_event"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Không thể lưu bền vững giao dịch webhook",
+        ) from exc
+    except Exception as exc:
+        # Persistence/audit/unknown error phải hiện thành 5xx để provider retry.
+        # Chỉ log category cố định; không ghi exception message/raw client data.
+        db.rollback()
+        log_to_file(
+            "ORDER WEBHOOK FAILURE category=persistence error_type=webhook_event"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Không thể lưu bền vững giao dịch webhook",
+        ) from exc
     paid = result["paid"]
     unreconciled = result["unreconciled"]
     rejected = result.get("rejected", [])
@@ -76,8 +138,10 @@ async def order_webhook(
         # Lý do đầy đủ của TỪNG đơn nằm trong SystemLog `WEBHOOK_TU_CHOI`.
         msg += f" | Từ chối, xem SystemLog: {rejected}"
 
-    # CỐ Ý trả 200 cho cả giao dịch bị từ chối: ngân hàng sẽ retry vô hạn nếu
-    # nhận 4xx/5xx. Lý do từ chối nằm trong SystemLog và trong `msg`.
+    # CỐ Ý trả 200 cho duplicate tương thích và business rejection CHỈ SAU KHI
+    # ledger/audit bắt buộc đã durable. Collision xác định được đã có audit
+    # WEBHOOK_XUNG_DOT_IDEMPOTENCY. Persistence/audit/commit/unknown failure đi
+    # nhánh 5xx bên trên để provider retry.
     #
     # `order_ids` giữ nguyên ý nghĩa cũ (các đơn đã PAID) để không phá contract;
     # hai khóa còn lại là bổ sung, thêm khóa là thay đổi an toàn.

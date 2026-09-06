@@ -166,7 +166,7 @@ def test_ban_lai_duoc_sau_khi_huy(client):
     assert res.status_code == 200, "Kho đã hoàn nên phải bán lại được"
 
 
-def test_dong_thieu_product_id_duoc_dem_rieng_khong_nuot_im_lang(client):
+def test_dong_thieu_product_id_fail_closed_khong_doi_trang_thai(client):
     """Đơn cũ trước migration A1a mà backfill không khớp được."""
     ctx, order = _tao_don(client, quantity=2)
     session = SessionLocal()
@@ -176,21 +176,75 @@ def test_dong_thieu_product_id_duoc_dem_rieng_khong_nuot_im_lang(client):
             .filter(models.OrderItem.order_id == order["order_id"])
             .first()
         )
+        product_id_goc = item.product_id
         item.product_id = None  # giả lập dòng dữ liệu cũ
         session.commit()
     finally:
         session.close()
 
-    ton_truoc = _ton_kho(ctx["product"]["id"])
-    res = _huy(client, ctx, order["order_id"])
+    try:
+        ton_truoc = _ton_kho(ctx["product"]["id"])
+        res = _huy(client, ctx, order["order_id"])
 
-    assert res.status_code == 200
-    assert res.json()["restored_items"] == 0
-    assert res.json()["unrestored_items"] == 1
-    assert _ton_kho(ctx["product"]["id"]) == ton_truoc, "Không đoán mò theo tên"
-    assert _trang_thai(order["order_id"]) == STATUS_CANCELLED
+        assert res.status_code == 409
+        assert _ton_kho(ctx["product"]["id"]) == ton_truoc, "Không đoán mò theo tên"
+        assert _trang_thai(order["order_id"]) == STATUS_PENDING
+        session = SessionLocal()
+        try:
+            current = session.get(models.Order, order["order_id"])
+            assert current.inventory_reversed == 0
+            assert current.items[0].returned_total_qty == 0
+        finally:
+            session.close()
+    finally:
+        # Không để dòng dữ liệu hỏng (product_id=NULL) lọt sang test/file khác
+        # dùng chung DB test.
+        session = SessionLocal()
+        try:
+            item = (
+                session.query(models.OrderItem)
+                .filter(models.OrderItem.order_id == order["order_id"])
+                .first()
+            )
+            item.product_id = product_id_goc
+            session.commit()
+        finally:
+            session.close()
 
 
+def test_huy_don_product_id_shop_khac_409_va_rollback_toan_bo(client):
+    ctx_a, order = _tao_don(client, quantity=2)
+    ctx_b = seller_with_shop(client)
+    product_b_id = ctx_b["product"]["id"]
+    stock_a_before = _ton_kho(ctx_a["product"]["id"])
+    stock_b_before = _ton_kho(product_b_id)
+
+    with SessionLocal() as session:
+        item = session.query(models.OrderItem).filter_by(
+            order_id=order["order_id"]
+        ).one()
+        product_id_goc = item.product_id
+        item.product_id = product_b_id
+        session.commit()
+
+    try:
+        response = _huy(client, ctx_a, order["order_id"])
+        assert response.status_code == 409, response.text
+        assert _trang_thai(order["order_id"]) == STATUS_PENDING
+        assert _ton_kho(ctx_a["product"]["id"]) == stock_a_before
+        assert _ton_kho(product_b_id) == stock_b_before
+        with SessionLocal() as session:
+            current = session.get(models.Order, order["order_id"])
+            assert current.inventory_reversed == 0
+            assert current.inventory_reversal_version == 0
+            assert current.items[0].inventory_reversed == 0
+    finally:
+        with SessionLocal() as session:
+            item = session.query(models.OrderItem).filter_by(
+                order_id=order["order_id"]
+            ).one()
+            item.product_id = product_id_goc
+            session.commit()
 # ---------- Voucher ----------
 def test_huy_don_tra_lai_luot_voucher(client):
     ctx = seller_with_shop(client)
@@ -398,6 +452,8 @@ def test_seller_khac_khong_huy_duoc_don_mo_coi(client):
     require_shop_access và bị chặn - nếu không, ai cũng hủy được đơn của
     người khác chỉ cần shop đó đã bị xóa.
     """
+    from conftest import admin_token
+
     ctx, order = _tao_don(client, quantity=2)
     assert _ton_kho(ctx["product"]["id"]) == 8
 
@@ -410,12 +466,21 @@ def test_seller_khac_khong_huy_duoc_don_mo_coi(client):
     finally:
         session.close()
 
-    _, token_b = new_seller(client)
-    res = client.post(f"/api/orders/{order['order_id']}/cancel", headers=auth(token_b))
+    try:
+        _, token_b = new_seller(client)
+        res = client.post(f"/api/orders/{order['order_id']}/cancel", headers=auth(token_b))
 
-    assert res.status_code == 404, "Seller không được đụng vào đơn mồ côi"
-    assert _ton_kho(ctx["product"]["id"]) == 8, "Không hoàn kho cho người không có quyền"
-    assert _trang_thai(order["order_id"]) == STATUS_PENDING
+        assert res.status_code == 404, "Seller không được đụng vào đơn mồ côi"
+        assert _ton_kho(ctx["product"]["id"]) == 8, "Không hoàn kho cho người không có quyền"
+        assert _trang_thai(order["order_id"]) == STATUS_PENDING
+    finally:
+        # Không để đơn PENDING mồ côi lọt sang test/file khác dùng chung DB
+        # test. Đường admin cancel đã được test riêng ở
+        # test_admin_huy_duoc_don_mo_coi_khi_shop_da_bi_xoa.
+        res_cleanup = client.post(
+            f"/api/orders/{order['order_id']}/cancel", headers=auth(admin_token(client))
+        )
+        assert res_cleanup.status_code == 200, res_cleanup.text
 
 
 def test_chu_shop_cu_van_huy_duoc_don_cua_minh_khi_shop_con_song(client):

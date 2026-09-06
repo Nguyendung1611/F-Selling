@@ -8,7 +8,7 @@ from sqlalchemy import text
 from conftest import auth, create_category, create_product, create_shop, new_seller, seller_with_shop
 
 from fselling import models
-from fselling.core.bootstrap import backfill_order_item_product_id
+from legacy_bootstrap_support import backfill_order_item_product_id
 from fselling.core.database import SessionLocal
 
 
@@ -19,7 +19,13 @@ def _cot_order_items(session):
 def _them_dong_don_hang_cu(session, order_id, product_name, quantity=1, price=1000.0):
     """Tạo dòng order_item kiểu cũ: chỉ có tên sản phẩm, product_id để trống."""
     item = models.OrderItem(
-        order_id=order_id, product_name=product_name, price=price, quantity=quantity
+        order_id=order_id,
+        product_name=product_name,
+        legacy_price=price,
+        price=0,
+        quantity=quantity,
+        net_amount_vnd=0,
+        cost_unknown_qty=quantity,
     )
     session.add(item)
     session.commit()
@@ -122,8 +128,11 @@ def test_khong_ghi_de_dong_da_co_product_id(client):
             order_id=order.id,
             product_id=999999,  # giá trị cố ý sai, backfill không được đụng vào
             product_name=ctx["product"]["name"],
-            price=1000.0,
+            legacy_price=1000.0,
+            price=0,
             quantity=1,
+            net_amount_vnd=0,
+            cost_unknown_qty=1,
         )
         session.add(item)
         session.commit()

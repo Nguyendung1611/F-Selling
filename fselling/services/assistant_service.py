@@ -34,15 +34,26 @@ import re
 import time
 import unicodedata
 from datetime import date, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..core import thoi_gian
-from ..core.config import GEMINI_TRAN_MOI_NGAY, GEMINI_TRAN_MOI_PHUT, log_to_file
+from ..core.config import (
+    GEMINI_DEGRADE_PERCENT,
+    GEMINI_MODEL_PINNED,
+    GEMINI_MONTHLY_CAP_VND,
+    GEMINI_RESERVED_VND_PER_CALL,
+    GEMINI_SHOP_MONTHLY_CAP_VND,
+    GEMINI_TRAN_MOI_NGAY,
+    GEMINI_TRAN_MOI_PHUT,
+    log_to_file,
+)
 from ..core.i18n import tr
 from ..dependencies import require_shop_access
 from . import (
@@ -111,11 +122,11 @@ def _bo_dau(chuoi: str) -> str:
 # không "tuần trước" sẽ khớp nhầm thành "tuần này".
 _MAU_THOI_GIAN: List[Tuple[str, str]] = [
     (r"\bhom qua\b", "HOM_QUA"),
-    (r"\bhom nay\b|\bbua nay\b|\bngay hom nay\b", "HOM_NAY"),
+    (r"\bhom nay\b|\bbua nay\b|\bbua ni\b|\bngay hom nay\b", "HOM_NAY"),
     (r"\btuan truoc\b|\btuan roi\b|\btuan vua roi\b", "TUAN_TRUOC"),
-    (r"\btuan nay\b|\btrong tuan\b", "TUAN_NAY"),
+    (r"\btuan nay\b|\btuan ni\b|\btrong tuan\b", "TUAN_NAY"),
     (r"\bthang truoc\b", "THANG_TRUOC"),
-    (r"\bthang nay\b|\btrong thang\b", "THANG_NAY"),
+    (r"\bthang nay\b|\bthang ni\b|\btrong thang\b", "THANG_NAY"),
     (r"\b(\d+)\s*ngay (qua|nay|vua roi|gan day)\b", "N_NGAY"),
 ]
 
@@ -165,50 +176,80 @@ _MAU_Y_DINH: List[Tuple[str, str]] = [
     #   "chi phí gói cước"      -> phải là GÓI CƯỚC, không phải chi phí vận hành
     #   "trong két còn bao nhiêu" -> phải là TIỀN MẶT, không phải tồn kho
     #   "lãi ròng"              -> phải là CHI PHÍ/lãi ròng, không phải lãi gộp
-    (r"\bso sanh\b.*\btuan\b|\btuan nay.*tuan truoc\b|\btuan truoc.*tuan nay\b",
+    (r"\bso sanh\b.*\btuan\b|\bdoi chieu\b.*\b(hai|2) tuan\b"
+     r"|\btuan (nay|ni).*tuan (truoc|roi)\b"
+     r"|\btuan (truoc|roi).*(tuan nay|tuan ni)\b",
      Y_DINH_SO_SANH_TUAN),
     # Đứng trước CHI_PHI: "chi phí gói cước" là hỏi giá gói, không phải tiền điện.
     (r"\bchu shop\b|\bchu tiem\b|\bchu cua hang\b|\bten cua hang\b|\bten shop\b"
      r"|\bgoi cuoc\b|\bgoi pro\b|\bgoi free\b|\bthue bao\b|\bhet han goi\b"
-     r"|\bshop cua toi\b",
+     r"|\bshop cua toi\b|\bgoi hien tai\b",
      Y_DINH_SHOP),
     # Đứng trước GIA_TON: "trong két còn bao nhiêu" không phải hỏi tồn kho.
-    (r"\btrong ket\b|\bket con\b|\btien mat\b|\bca ban hang\b|\bca hom nay\b"
+    (r"\btrong ket\b|\bket con\b|\bket\b.*\bmay tien\b|\btien mat\b"
+     r"|\bca ban hang\b|\bca hom nay\b|\bca hien tai\b"
      r"|\bmo ca\b|\bdong ca\b|\bchot ca\b",
      Y_DINH_CA_TIEN),
+    # Normalization removes accents, so specific stock/price phrases must run
+    # before bare `lai` (profit), and price questions before broad `ra sao`.
+    (r"\bban gia may\b|\bcon lai may\b|\bso ton\b|\bdat re\b", Y_DINH_GIA_TON),
+    (r"\bloi nhuan truoc chi phi\b", Y_DINH_LAI),
     # Đứng trước LAI: "lãi ròng" là con số khác hẳn "lãi gộp".
-    (r"\bchi phi\b|\blai rong\b|\bloi nhuan rong\b|\btieu het\b|\bchi het\b"
+    (r"\bchi phi\b|\blai rong\b|\bloi nhuan rong\b|\btien loi thuc\b"
+     r"|\bsau .*\bkhoan chi\b.*\b(loi|lai)\b"
+     r"|\bsau moi khoan\b|\bhao het\b|\bkhoan chi\b|\bloi thuc\b"
+     r"|\btieu het\b|\bchi het\b"
      r"|\btien dien\b|\btien nuoc\b|\bthue mat bang\b|\bdong tien\b|\bchi bao nhieu\b",
      Y_DINH_CHI_PHI),
-    (r"\blai\b|\bloi nhuan\b|\blai gop\b|\blo hay lai\b", Y_DINH_LAI),
+    (r"(?<!\bcon )\blai\b|\bloi nhuan\b|\blai gop\b|\blo hay lai\b"
+     r"|\bloi duoc\b|\bloi lo\b|\bkiem loi\b", Y_DINH_LAI),
     # Đứng trước nhóm doanh thu: "làm ăn ra sao" muốn một bức tranh, không phải
     # một con số.
-    (r"\blam an\b|\btinh hinh\b|\bra sao\b|\bthe nao\b|\bon khong\b"
-     r"|\bkha khong\b|\btong quan\b|\btom tat\b|\bdao nay\b",
+    (r"\blam an\b|\btinh hinh\b|\bra sao\b|\bon khong\b"
+     r"|\bkha khong\b|\btong quan\b|\btom tat\b|\bdao nay\b"
+     r"|\bsuc khoe cua hang\b|\bon hay.*van de\b",
      Y_DINH_TONG_QUAN),
     (r"\bsap het han\b|\bhet han\b|\bhan su dung\b|\bcan date\b|\bhet date\b"
-     r"|\bqua date\b|\bsap hong\b|\bqua han\b",
+     r"|\bqua date\b|\bsap hong\b|\bqua han\b|\bgan toi han\b|\bcan han\b",
      Y_DINH_SAP_HET_HAN),
     # `\bsap het\b` đứng SAU mẫu hạn sử dụng nên "sắp hết hạn" đã được nhận ở
     # đó rồi; ở đây nó bắt cách nói khác thứ tự như "hàng nào sắp hết".
     (r"\bsap het hang\b|\bsap het\b|\bcan nhap\b|\bnhap hang\b|\bdat hang\b"
-     r"|\bhet hang\b|\bnhap gi\b|\bgoi hang\b|\blay hang\b",
+     r"|\bhet hang\b|\bnhap gi\b|\bgoi hang\b|\blay hang\b|\blay them\b"
+     r"|\bbo sung kho\b|\bkho thieu\b|\bgoi them.*hang\b",
      Y_DINH_CAN_NHAP),
-    (r"\bban chay\b|\bban duoc nhieu nhat\b|\btop\b|\bhut hang\b|\bdat khach\b",
+    (r"\bban chay\b|\bban duoc nhieu nhat\b|\btop\b|\bhut hang\b|\bdat khach\b"
+     r"|\bkhach mua nhieu nhat\b|\bchay nhat\b|\bhut khach\b",
      Y_DINH_BAN_CHAY),
     (r"\be\b|\bnam e\b|\bton kho lau\b|\bkhong ai mua\b|\bkhong ban duoc\b"
-     r"|\bchon von\b|\bdong von\b|\bxa hang\b|\bban cham\b|\bde lau\b|\bton dong\b",
+     r"|\bchon von\b|\bdong von\b|\bxa hang\b|\bban cham\b|\bde lau\b|\bton dong\b"
+     r"|\blau roi chua ban\b|\bnam kho hoai\b|\bquay vong cham\b",
      Y_DINH_HANG_E),
-    (r"\bno\b|\bcong no\b|\bkhach no\b|\bphai thu\b|\bthu no\b", Y_DINH_CONG_NO),
+    (r"\bno\b|\bcong no\b|\bkhach no\b|\bphai thu\b|\bthu no\b"
+     r"|\bthieu tien hang\b|\bkhach chua tra\b|\bghi so\b", Y_DINH_CONG_NO),
     (r"\bdat nhat\b|\bre nhat\b|\bmac nhat\b|\bgia bao nhieu\b|\bgia cua\b"
      r"|\bcon bao nhieu\b|\bton kho con\b|\bcon may cai\b|\bbao nhieu cai\b",
      Y_DINH_GIA_TON),
-    (r"\bbao nhieu don\b|\bmay don\b|\bso don\b|\bso luong don\b|\bdon hang\b",
+    (r"\bbao nhieu don\b|\bmay don\b|\bso don\b|\bso luong don\b|\bdon hang\b"
+     r"|\bchung nao don\b|\bkhach mua bao nhieu luot\b",
      Y_DINH_SO_DON),
-    (r"\bdoanh thu\b|\bban duoc bao nhieu\b|\bthu ve\b|\bthu (duoc )?bao nhieu\b"
-     r"|\bban duoc\b|\bbao nhieu tien\b|\bduoc bao nhieu\b|\bkiem duoc\b|\bthu nhap\b",
+    (r"\bdoanh thu\b|\bban (duoc|dc) bao nhi(eu|u)\b|\bthu ve\b"
+     r"|\bthu (duoc )?(bao nhieu|chung nao)\b"
+     r"|\bban duoc\b|\bbao nhieu tien\b|\bduoc bao nhieu\b|\bkiem duoc\b|\bthu nhap\b"
+     r"|\btien ban.*duoc may\b|\btong thu.*may\b|\bban buon.*may tien\b"
+     r"|\bduoc chung (bao nhieu|nao)\b",
      Y_DINH_DOANH_THU),
 ]
+
+# Requests that sound adjacent to a report but actually ask for unsupported
+# legal advice or a write/external action. Block before broad report patterns;
+# a navigation answer must never sound like the action was performed.
+_MAU_KHONG_HO_TRO = (
+    r"\btu dong\b|\bchuyen tien\b|\bgoi dien\b|\bxoa het\b|"
+    r"\bviet quang cao\b|\bbo qua.*\b(chi dan|huong dan)\b|"
+    r"\bkhai thue\b|\bnop thue\b|"
+    r"\bthue (phai nop|gia tri gia tang|gtgt|vat|thu nhap|tncn|tndn)\b"
+)
 
 
 # --- Tầng dự phòng Gemini: bảy lớp chặn, xếp từ rẻ tới đắt ---
@@ -228,13 +269,6 @@ _MA_SANG_CHU = {
     "N_NGAY": "7 ngay qua",
 }
 
-# Nhớ câu đã hỏi: Gemini giải được một cách hỏi lạ thì lần sau ai hỏi y hệt là
-# dùng lại, không tốn lượt. CHỈ nhớ "câu hỏi -> tên báo cáo", không nhớ dữ liệu
-# và không nhớ câu trả lời, nên cache dùng chung được cho mọi shop mà không lộ
-# gì. Nằm trong RAM: mất khi restart cũng chỉ là tốn lại vài lượt.
-_NHO_CAU_HOI: Dict[str, Tuple[str, str]] = {}
-_NHO_TOI_DA = 500
-
 # Chống giữ Enter. CỐ Ý để trong RAM chứ không trong DB, khác với bộ đếm ngày:
 # đây là chống bấm dồn trong vài giây, còn hàng rào tiền thật là trần mỗi ngày.
 _DAU_VET_PHUT: Dict[Tuple[int, int], List[float]] = {}
@@ -253,14 +287,38 @@ def _con_han_muc(db: Session, shop_id: int) -> Tuple[int, int]:
     return int(da_dung or 0), GEMINI_TRAN_MOI_NGAY
 
 
-def _tru_mot_luot(db: Session, shop_id: int) -> bool:
-    """Trừ một lượt, trả False khi đã hết trần.
+def _monthly_call_count(db: Session, shop_id: Optional[int] = None) -> int:
+    month = thoi_gian.hom_nay_vn_str()[:7]
+    sql = (
+        "SELECT COALESCE(SUM(so_luot), 0) FROM assistant_ai_usage "
+        "WHERE substr(ngay, 1, 7) = :month"
+    )
+    params: Dict[str, Any] = {"month": month}
+    if shop_id is not None:
+        sql += " AND shop_id = :shop_id"
+        params["shop_id"] = shop_id
+    return int(db.execute(text(sql), params).scalar() or 0)
 
-    Kiểm-rồi-ghi bằng hai câu lệnh riêng thì hai request cùng lúc đều thấy
-    "còn 1 lượt" rồi cùng gọi. Ở đây điều kiện `so_luot < :tran` nằm NGAY TRONG
-    câu UPDATE nên SQLite chỉ cho đúng một bên thắng.
+
+def _monthly_budget_vnd(db: Session) -> Tuple[int, int]:
+    """Privacy-safe durable usage derived from existing daily reservations."""
+    return (
+        _monthly_call_count(db) * GEMINI_RESERVED_VND_PER_CALL,
+        GEMINI_MONTHLY_CAP_VND,
+    )
+
+
+def _reserve_provider_call(db: Session, shop_id: int) -> bool:
+    """Atomically reserve daily, shop-month and global-month budget.
+
+    One conditional UPDATE is the concurrency boundary. SQLite serializes this
+    write and every cap subquery therefore sees the last committed winner.
+    Failed/timeout calls stay reserved; conservative accounting cannot
+    accidentally refund a billable request.
     """
     ngay = thoi_gian.hom_nay_vn_str()
+    month = ngay[:7]
+    degraded_cap = GEMINI_MONTHLY_CAP_VND * GEMINI_DEGRADE_PERCENT // 100
     db.execute(
         text(
             "INSERT OR IGNORE INTO assistant_ai_usage (shop_id, ngay, so_luot) "
@@ -271,12 +329,70 @@ def _tru_mot_luot(db: Session, shop_id: int) -> bool:
     ket = db.execute(
         text(
             "UPDATE assistant_ai_usage SET so_luot = so_luot + 1 "
-            "WHERE shop_id = :s AND ngay = :n AND so_luot < :tran"
+            "WHERE shop_id = :s AND ngay = :n AND so_luot < :daily "
+            "AND ((SELECT COALESCE(SUM(so_luot), 0) "
+            "      FROM assistant_ai_usage WHERE substr(ngay, 1, 7) = :month) "
+            "     * :reserve + :reserve) <= :global_cap "
+            "AND ((SELECT COALESCE(SUM(so_luot), 0) "
+            "      FROM assistant_ai_usage "
+            "      WHERE shop_id = :s AND substr(ngay, 1, 7) = :month) "
+            "     * :reserve + :reserve) <= :shop_cap"
         ),
-        {"s": shop_id, "n": ngay, "tran": GEMINI_TRAN_MOI_NGAY},
+        {
+            "s": shop_id,
+            "n": ngay,
+            "month": month,
+            "daily": GEMINI_TRAN_MOI_NGAY,
+            "reserve": GEMINI_RESERVED_VND_PER_CALL,
+            "global_cap": degraded_cap,
+            "shop_cap": GEMINI_SHOP_MONTHLY_CAP_VND,
+        },
     )
+    if ket.rowcount <= 0:
+        db.rollback()
+        return False
     db.commit()
-    return ket.rowcount > 0
+    return True
+
+
+def _latency_bucket(elapsed_ms: int) -> str:
+    if elapsed_ms < 250:
+        return "LT250"
+    if elapsed_ms < 1_000:
+        return "LT1000"
+    if elapsed_ms < 3_000:
+        return "LT3000"
+    if elapsed_ms < 6_000:
+        return "LT6000"
+    return "GE6000"
+
+
+def _record_provider_telemetry(
+    db: Session,
+    current_user: models.User,
+    shop_id: int,
+    *,
+    success: bool,
+    elapsed_ms: int,
+) -> None:
+    """Persist fixed operational metadata, never question/prompt/response."""
+    details = (
+        f"model={GEMINI_MODEL_PINNED};"
+        f"outcome={'SUCCESS' if success else 'FALLBACK'};"
+        f"latency_bucket={_latency_bucket(elapsed_ms)};"
+        f"reserved_vnd={GEMINI_RESERVED_VND_PER_CALL}"
+    )
+    try:
+        db.add(models.SystemLog(
+            user_id=current_user.id,
+            shop_id=shop_id,
+            action="ASSISTANT_AI_CALL",
+            details=details,
+        ))
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        log_to_file("[TRO LY] Khong ghi duoc AI telemetry")
 
 
 def _qua_nhanh(user_id: int, shop_id: int) -> bool:
@@ -300,28 +416,34 @@ def _thu_hoi_gemini(
     db: Session, current_user: models.User, shop_id: int, cau_khong_dau: str
 ) -> Optional[Tuple[str, str]]:
     """Sáu lớp chặn trước khi thực sự gọi ra Google. Trả None là bỏ qua."""
-    if not gemini_service.dang_bat():
+    if not gemini_service.san_sang():
         return None                       # chưa cắm key -> tính năng không tồn tại
     if _dang_rac(cau_khong_dau):
         return None
-    if cau_khong_dau in _NHO_CAU_HOI:
-        return _NHO_CAU_HOI[cau_khong_dau]
+    if not gemini_service.co_the_gui(cau_khong_dau):
+        return None                       # allowlist không đủ ngữ cảnh: không giữ tiền
     try:
         subscription_service.require_pro(db, shop_id)
     except HTTPException:
         return None                       # shop Free: im lặng lùi về "chưa hiểu"
     if _qua_nhanh(current_user.id, shop_id):
         return None
-    if not _tru_mot_luot(db, shop_id):
-        return None                       # hết trần ngày
+    if not _reserve_provider_call(db, shop_id):
+        return None                       # hết trần ngày/tháng hoặc đã degrade
 
+    started = time.monotonic()
     ket = gemini_service.phan_loai(
         cau_khong_dau, list(_BANG_XU_LY.keys()), list(_MA_SANG_CHU.keys())
     )
+    _record_provider_telemetry(
+        db,
+        current_user,
+        shop_id,
+        success=ket is not None,
+        elapsed_ms=max(0, int((time.monotonic() - started) * 1_000)),
+    )
     if ket is None:
         return None
-    if len(_NHO_CAU_HOI) < _NHO_TOI_DA:
-        _NHO_CAU_HOI[cau_khong_dau] = ket
     return ket
 
 
@@ -331,18 +453,36 @@ def _doan_y_dinh(cau_khong_dau: str) -> Optional[str]:
     KHÔNG có nhánh "đoán đại cái gần nhất". Trả lời sai một con số tiền còn tệ
     hơn nói "tôi chưa hiểu": người hỏi không có cách nào biết là nó sai.
     """
+    if re.search(_MAU_KHONG_HO_TRO, cau_khong_dau):
+        return None
     for mau, y_dinh in _MAU_Y_DINH:
         if re.search(mau, cau_khong_dau):
             return y_dinh
     return None
 
 
-def _tien(so: float) -> str:
-    return f"{round(so):,.0f}đ".replace(",", ".")
+def _khong_ho_tro(cau_khong_dau: str) -> bool:
+    """External/write/legal requests must never fall through to a provider."""
+    return bool(re.search(_MAU_KHONG_HO_TRO, cau_khong_dau))
 
 
-def _so(so: float) -> str:
-    return f"{round(so):,.0f}".replace(",", ".")
+def _so_nguyen_hien_thi(so: Any) -> int:
+    """Format exact integers/Decimal ratios without a binary-float detour."""
+    if isinstance(so, Decimal):
+        value = so
+    elif isinstance(so, int):
+        value = Decimal(so)
+    else:
+        value = Decimal(str(so or 0))
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _tien(so: Any) -> str:
+    return f"{_so_nguyen_hien_thi(so):,.0f}đ".replace(",", ".")
+
+
+def _so(so: Any) -> str:
+    return f"{_so_nguyen_hien_thi(so):,.0f}".replace(",", ".")
 
 
 # --- Từng ý định ---
@@ -352,7 +492,7 @@ def _tra_loi_doanh_thu(db, user, shop_id, cau, chi_dem_don=False) -> Dict[str, A
         db, user, shop_id, tu_ngay=tu.isoformat(), den_ngay=den.isoformat()
     )
     don = int(so_lieu.get("total_orders") or 0)
-    tien = float(so_lieu.get("total_revenue") or 0)
+    tien = int(so_lieu.get("total_revenue") or 0)
     # `total_orders` đếm MỌI đơn, còn `total_revenue` chỉ đếm đơn ĐÃ THANH TOÁN.
     # Màn Thống Kê để hai con số ở hai ô riêng nên người xem thấy ngay chúng
     # khác nhau; một câu văn dán liền hai số lại thì mất mất điều đó và đọc ra
@@ -397,8 +537,8 @@ def _tra_loi_so_sanh_tuan(db, user, shop_id, cau) -> Dict[str, Any]:
         tu_ngay=dau_tuan_truoc.isoformat(),
         den_ngay=(dau_tuan_nay - timedelta(days=1)).isoformat(),
     )
-    a = float(nay.get("total_revenue") or 0)
-    b = float(truoc.get("total_revenue") or 0)
+    a = int(nay.get("total_revenue") or 0)
+    b = int(truoc.get("total_revenue") or 0)
 
     if b <= 0:
         loi = (
@@ -406,7 +546,7 @@ def _tra_loi_so_sanh_tuan(db, user, shop_id, cau) -> Dict[str, Any]:
             "chưa so sánh được."
         )
     else:
-        chenh = (a - b) / b * 100
+        chenh = Decimal(a - b) * Decimal(100) / Decimal(b)
         huong = "tăng" if a >= b else "giảm"
         loi = (
             f"Tuần này thu {_tien(a)}, tuần trước {_tien(b)} — "
@@ -501,7 +641,7 @@ def _tra_loi_hang_e(db, user, shop_id, cau) -> Dict[str, Any]:
 
 def _tra_loi_cong_no(db, user, shop_id, cau) -> Dict[str, Any]:
     so_lieu = report_service.shop_stats(db, user, shop_id)
-    no = float(so_lieu.get("receivable_amount") or 0)
+    no = int(so_lieu.get("receivable_amount") or 0)
     loi = (
         f"Khách đang nợ tổng cộng {_tien(no)}."
         if no > 0
@@ -522,7 +662,7 @@ def _tra_loi_lai(db, user, shop_id, cau) -> Dict[str, Any]:
             status_code=403,
             detail=tr("Chỉ chủ cửa hàng mới xem được giá vốn và lãi"),
         )
-    lai = float(so_lieu.get("gross_profit") or 0)
+    lai = int(so_lieu.get("gross_profit") or 0)
     thieu = int(so_lieu.get("orders_missing_cost") or 0)
     loi = f"Lãi gộp {nhan} khoảng {_tien(lai)}."
     if thieu:
@@ -545,7 +685,7 @@ def _tra_loi_tong_quan(db, user, shop_id, cau) -> Dict[str, Any]:
         db, user, shop_id, tu_ngay=tu.isoformat(), den_ngay=den.isoformat()
     )
     don = int(so_lieu.get("total_orders") or 0)
-    tien = float(so_lieu.get("total_revenue") or 0)
+    tien = int(so_lieu.get("total_revenue") or 0)
 
     dong = []
     if don:
@@ -556,7 +696,7 @@ def _tra_loi_tong_quan(db, user, shop_id, cau) -> Dict[str, Any]:
     # Lãi chỉ nói với người được xem giá vốn. Thiếu khóa = không có quyền, và ở
     # đây bỏ qua trong im lặng thay vì báo lỗi: họ vẫn xứng đáng nhận phần còn lại.
     if "gross_profit" in so_lieu:
-        dong.append(f"Lãi gộp khoảng {_tien(float(so_lieu['gross_profit'] or 0))}.")
+        dong.append(f"Lãi gộp khoảng {_tien(int(so_lieu['gross_profit'] or 0))}.")
 
     # So với kỳ trước liền kề, cùng độ dài - đó mới là so sánh công bằng.
     so_ngay = (den - tu).days + 1
@@ -566,9 +706,9 @@ def _tra_loi_tong_quan(db, user, shop_id, cau) -> Dict[str, Any]:
         db, user, shop_id,
         tu_ngay=truoc_tu.isoformat(), den_ngay=truoc_den.isoformat(),
     )
-    tien_truoc = float(truoc.get("total_revenue") or 0)
+    tien_truoc = int(truoc.get("total_revenue") or 0)
     if tien_truoc > 0:
-        chenh = (tien - tien_truoc) / tien_truoc * 100
+        chenh = Decimal(tien - tien_truoc) * Decimal(100) / Decimal(tien_truoc)
         dong.append(
             f"{'Tăng' if tien >= tien_truoc else 'Giảm'} {abs(chenh):.0f}% "
             f"so với {so_ngay} ngày trước đó ({_tien(tien_truoc)})."
@@ -586,7 +726,7 @@ def _tra_loi_tong_quan(db, user, shop_id, cau) -> Dict[str, Any]:
             viec.append(f"{len(gap)} mặt hàng sắp cháy hàng (gấp nhất: {gap[0]['ten']})")
     except HTTPException:
         pass
-    no = float(so_lieu.get("receivable_amount") or 0)
+    no = int(so_lieu.get("receivable_amount") or 0)
     if no > 0:
         viec.append(f"khách còn nợ {_tien(no)}")
     if viec:
@@ -623,9 +763,9 @@ def _tra_loi_gia_ton(db, user, shop_id, cau) -> Dict[str, Any]:
 
     if prod is not None:
         ton = inventory_service.ton_kha_dung(db, prod)
-        loi = f"{prod.name} đang bán {_tien(float(prod.price or 0))}, còn {_so(ton)} trong kho."
+        loi = f"{prod.name} đang bán {_tien(prod.price or 0)}, còn {_so(ton)} trong kho."
         if has_cost_visibility(shop, user) and prod.cost_price is not None:
-            loi += f" Giá vốn {_tien(float(prod.cost_price))}."
+            loi += f" Giá vốn {_tien(prod.cost_price)}."
         return {"tra_loi": loi, "nguon": "Kho hàng",
                 "chi_tiet": {"product_id": prod.id, "gia": prod.price, "ton": ton}}
 
@@ -644,7 +784,7 @@ def _tra_loi_gia_ton(db, user, shop_id, cau) -> Dict[str, Any]:
     return {
         "tra_loi": (
             f"Hàng {'rẻ' if re_nhat else 'đắt'} nhất là {dau.name}, "
-            f"{_tien(float(dau.price or 0))}."
+            f"{_tien(dau.price or 0)}."
         ),
         "bang": [{"ten": p.name, "gia": p.price} for p in ds],
         "nguon": "Kho hàng",
@@ -656,8 +796,8 @@ def _tra_loi_chi_phi(db, user, shop_id, cau) -> Dict[str, Any]:
     d = report_service.net_cashflow_report(
         db, user, shop_id, tu_ngay=tu.isoformat(), den_ngay=den.isoformat()
     )
-    chi = float(d.get("operating_expense_total") or 0)
-    rong = float(d.get("net_profit") or 0)
+    chi = int(d.get("operating_expense_total") or 0)
+    rong = int(d.get("net_profit") or 0)
     loi = f"Chi phí vận hành {nhan} là {_tien(chi)}, lãi ròng {_tien(rong)}."
     if rong < 0:
         # Số âm phải đổi thành TỪ. "Bạn lãi -3.881.347đ" là câu không ai đọc được.
@@ -705,7 +845,7 @@ def _tra_loi_ca_tien(db, user, shop_id, cau) -> Dict[str, Any]:
     du_kien = ca.get("expected_cash_amount")
     loi = "Ca của bạn đang mở"
     if du_kien is not None:
-        loi += f", trong két dự kiến có {_tien(float(du_kien))}"
+        loi += f", trong két dự kiến có {_tien(du_kien)}"
     loi += "."
     return {"tra_loi": loi, "nguon": "Ca bán hàng", "chi_tiet": ca}
 
@@ -774,7 +914,7 @@ def hoi_dap(
     y_dinh = _doan_y_dinh(khong_dau)
     nho_gemini = False
 
-    if y_dinh is None:
+    if y_dinh is None and not _khong_ho_tro(khong_dau):
         # Chỉ tới đây mới nghĩ tới Gemini. Mọi câu hỏi thường gặp đã được trả
         # lời ở trên rồi, miễn phí và tức thì.
         tu_ai = _thu_hoi_gemini(db, current_user, shop_id, khong_dau)
@@ -787,10 +927,6 @@ def hoi_dap(
                 khong_dau = f"{khong_dau} {_MA_SANG_CHU[ma_khoang]}"
 
     if y_dinh is None:
-        # Ghi lại câu bị trượt để còn biết nên thêm mẫu nào. Đây là thứ làm lớp
-        # phòng thủ mạnh dần lên: mỗi mẫu thêm vào là bớt một loại câu phải gọi
-        # ra Google. Chỉ ghi CÂU HỎI, không ghi dữ liệu cửa hàng.
-        log_to_file(f"[TRO LY] Chua hieu (shop {shop_id}): {cau}")
         return {
             "cau_hoi": cau,
             "hieu_duoc": False,

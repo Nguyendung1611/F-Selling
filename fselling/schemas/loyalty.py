@@ -3,6 +3,9 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, field_validator
 
+from ..core.numeric_limits import MAX_SAFE_VND
+from .money import BasisPointPercent, ExactVND
+
 
 class LoyaltyProgramUpdate(BaseModel):
     """Cập nhật từng phần; field không gửi được giữ nguyên.
@@ -14,26 +17,22 @@ class LoyaltyProgramUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # Những ô này quyết định trực tiếp giá trị tiền của điểm. Dùng kiểu strict
-    # để JSON ``1.5``, ``1.0`` hay chuỗi ``"1"`` không bị Pydantic âm thầm đổi
-    # thành số nguyên. Giao diện gửi số nguyên thật nên không ảnh hưởng đường
-    # lưu bình thường.
+    # VND accepts only exactly-integral compatibility representations.  Point
+    # and day counters remain strict integers.  The visible percentage is
+    # normalized through integer basis points (at most two decimal places).
     enabled: Optional[StrictBool] = None
-    earn_amount: Optional[StrictInt] = None
+    earn_amount: Optional[ExactVND] = None
     earn_points: Optional[StrictInt] = None
     redeem_points: Optional[StrictInt] = None
-    redeem_amount: Optional[StrictInt] = None
+    redeem_amount: Optional[ExactVND] = None
     min_redeem_points: Optional[StrictInt] = None
-    max_redeem_percent: Optional[StrictInt] = None
+    max_redeem_percent: Optional[BasisPointPercent] = None
     expiry_days: Optional[StrictInt] = None
 
     @field_validator(
-        "earn_amount",
         "earn_points",
         "redeem_points",
-        "redeem_amount",
         "min_redeem_points",
-        "max_redeem_percent",
         "expiry_days",
         mode="before",
     )

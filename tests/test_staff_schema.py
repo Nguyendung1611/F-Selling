@@ -62,6 +62,7 @@ def test_hai_khoa_ngoai_toi_shops_khong_gay_mo_ho(client):
             username="staff_schema_test",
             hashed_password="x",
             role="STAFF",
+            staff_role="MANAGER",
             is_verified=True,
             staff_shop_id=ctx["shop_id"],
         )

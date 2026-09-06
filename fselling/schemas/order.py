@@ -1,7 +1,10 @@
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from ..core.numeric_limits import MAX_SAFE_QUANTITY, MAX_SAFE_VND
+from .money import ExactVND, SignedExactVND
 
 
 class OrderItemCreate(BaseModel):
@@ -18,7 +21,9 @@ class OrderItemCreate(BaseModel):
 
     product_id: Optional[int] = None
     product_name: Optional[str] = None
-    price: float
+    price: ExactVND = Field(ge=0, le=MAX_SAFE_VND)
+    # Service preserves the historical HTTP 400 contract for nonpositive and
+    # oversized quantities after exact integer parsing.
     quantity: int
 
 
@@ -31,7 +36,7 @@ class OrderCreate(BaseModel):
     customer_id: Optional[int] = None
     # Số điểm nguyên khách muốn dùng. Server đọc lại chương trình + số dư,
     # áp Voucher trước rồi mới tính phần giảm bằng điểm.
-    loyalty_points_to_use: int = Field(default=0, ge=0)
+    loyalty_points_to_use: int = Field(default=0, ge=0, le=MAX_SAFE_QUANTITY)
 
 
 class OfflineOrderItem(BaseModel):
@@ -48,8 +53,8 @@ class OfflineOrderItem(BaseModel):
 
     product_id: int
     product_name: str = Field(min_length=1, max_length=300)
-    unit_price: float = Field(ge=0)
-    quantity: int = Field(gt=0)
+    unit_price: ExactVND = Field(ge=0, le=MAX_SAFE_VND)
+    quantity: int = Field(gt=0, le=MAX_SAFE_QUANTITY)
 
 
 class OfflineOrderCreate(BaseModel):
@@ -66,15 +71,28 @@ class OfflineOrderCreate(BaseModel):
     sold_at: datetime
     items: List[OfflineOrderItem] = Field(min_length=1)
     # Tiền khách đưa. Nhỏ hơn tổng đơn là phiếu sai, server từ chối.
-    cash_tendered: float = Field(ge=0)
+    cash_tendered: ExactVND = Field(ge=0, le=MAX_SAFE_VND)
     device_label: Optional[str] = Field(default=None, max_length=64)
+
+
+class OfflineIssueAcknowledge(BaseModel):
+    """Chủ shop xác nhận đã xem một vướng mắc offline.
+
+    `state_version` là phiên bản mà máy khách đang nhìn thấy. Gửi kèm để hai
+    người cùng mở màn Đối Soát không ghi đè quyết định của nhau: bản cũ bị từ
+    chối 409 chứ không âm thầm thắng.
+    """
+
+    # Trimmed và bắt buộc không rỗng - service kiểm lại trước mọi side effect.
+    reason: str = Field(min_length=1, max_length=500)
+    state_version: int = Field(ge=0, le=MAX_SAFE_QUANTITY)
 
 
 class PaymentWebhook(BaseModel):
     order_id: int
     status: Optional[str] = "PAID"
     transaction_id: Optional[str] = None
-    amount: Optional[float] = None
+    amount: Optional[ExactVND] = Field(default=None, ge=0, le=MAX_SAFE_VND)
 
 
 class CashTopup(BaseModel):
@@ -84,7 +102,7 @@ class CashTopup(BaseModel):
     tại gửi con số đang thấy, nhưng phải khớp phần thiếu tại lúc xử lý.
     """
 
-    amount: Optional[float] = None
+    amount: Optional[SignedExactVND] = Field(default=None, le=MAX_SAFE_VND)
     note: Optional[str] = None
 
 
@@ -95,7 +113,7 @@ class CashPayment(BaseModel):
     gửi hay tự quyết định số tiền phải trả lại.
     """
 
-    tendered_amount: float
+    tendered_amount: ExactVND = Field(ge=0, le=MAX_SAFE_VND)
 
 
 class OrderReturnItemCreate(BaseModel):
@@ -137,7 +155,9 @@ class DebtPayment(BaseModel):
     bán ghi sổ.
     """
 
-    amount: float
+    # Service owns the historical HTTP 400 response for zero/negative debt
+    # payments.  Keep exact VND parsing at the HTTP boundary first.
+    amount: SignedExactVND = Field(ge=-MAX_SAFE_VND, le=MAX_SAFE_VND)
     method: Literal["cash", "transfer"]
     note: Optional[str] = None
     reference: Optional[str] = None
@@ -158,3 +178,67 @@ class RefundComplete(BaseModel):
     # Một id cho đúng MỘT lần bấm hoàn. Retry mạng dùng lại id này nên không thể
     # vô tình xác nhận hộ một khoản dư mới xuất hiện sau đó.
     operation_id: str = Field(min_length=8, max_length=128)
+
+
+# ---------------------------------------------------------------------------
+# Offline contract v1 schemas (I09-E+B2)
+# ---------------------------------------------------------------------------
+
+
+class OfflineOrderItemV1(BaseModel):
+    """Một dòng hàng trong phiếu offline contract v1."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    product_id: int = Field(strict=True, ge=1, le=MAX_SAFE_QUANTITY)
+    # Canonical layer applies the 300-code-point / 900-byte limits after NFC
+    # and whitespace collapse; a raw decomposed form may legitimately be longer.
+    product_name: str = Field(min_length=1)
+    unit_price_vnd: int = Field(strict=True, ge=0, le=MAX_SAFE_VND)
+    quantity: int = Field(strict=True, ge=1, le=MAX_SAFE_QUANTITY)
+
+
+class OfflineOrderCreateV1(BaseModel):
+    """Phiếu bán offline contract v1 — server-time/lease-backed.
+
+    Token chỉ ở header `X-Offline-Lease-Token`, tuyệt đối không body/query/fingerprint.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    offline_contract_version: int = Field(strict=True, ge=1, le=1)
+    lease_id: str = Field(min_length=26, max_length=26)
+    device_id: str = Field(min_length=1, max_length=128)
+    offline_session_id: str = Field(min_length=26, max_length=26)
+    sequence: int = Field(strict=True, ge=1, le=MAX_SAFE_QUANTITY)
+    offline_uuid: str = Field(min_length=8, max_length=64)
+    # Accept an ISO-8601 wall time with or without an offset.  The fingerprint
+    # layer converts the instant to fixed-width UTC-naive text before any
+    # duplicate decision or persistence.
+    sold_at_client_utc: str = Field(min_length=19, max_length=64)
+    client_monotonic_ms: int = Field(strict=True, ge=0, le=MAX_SAFE_QUANTITY)
+    monotonic_valid: bool = Field(strict=True)
+    server_anchor_id: str = Field(min_length=1, max_length=64)
+    catalog_version: int = Field(strict=True, ge=0, le=MAX_SAFE_QUANTITY)
+    catalog_snapshot_digest: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    client_fingerprint: str = Field(
+        min_length=71, max_length=71, pattern=r"^fsofr1:[0-9a-f]{64}$"
+    )
+    items: List[OfflineOrderItemV1] = Field(min_length=1, max_length=200)
+    cash_tendered: int = Field(strict=True, ge=0, le=MAX_SAFE_VND)
+
+
+class OfflineOrderSyncResponseV1(BaseModel):
+    """Response cho offline contract v1 ingest."""
+
+    contract_version: int
+    order_id: Optional[int] = None
+    offline_uuid: str
+    created: bool
+    sold_by_user_id: int
+    synced_by_user_id: int
+    sold_at_effective: str
+    time_confidence: str
+    server_time_utc: str

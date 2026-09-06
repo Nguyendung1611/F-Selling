@@ -6,17 +6,17 @@ tiền của đơn được cộng từ OrderPayment.shift_id để không đế
 """
 from __future__ import annotations
 
-import math
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 from fastapi import HTTPException
-from sqlalchemy import case, func, text
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..core.i18n import tr
+from ..core.money import checked_vnd
 from ..dependencies import (
     PERMISSION_SALE,
     STAFF_ROLE_MANAGER,
@@ -45,7 +45,7 @@ CASH_PAYMENT_IN_TYPES = ("CASH_TOPUP", "CASH_IN", "SALE_CASH", "DEBT_CASH")
 # cần thêm CashMovement, và cũng không được thêm, kẻo trừ hai lần.
 CASH_PAYMENT_OUT_TYPES = ("REFUND_CASH", "RETURN_CASH")
 
-MONEY_EPSILON = 0.001
+MONEY_EPSILON = 0
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
 
@@ -111,86 +111,35 @@ def _authorize_shift(
     )
 
 
-def _cash_totals(db: Session, shift_id: int) -> Dict[str, float]:
+def _cash_totals(db: Session, shift_id: int) -> Dict[str, int]:
     """Tổng hợp tiền theo đúng nguồn, không dựa vào trạng thái trên client."""
-    pay_in, pay_out = (
-        db.query(
-            func.coalesce(
-                func.sum(
-                    case(
-                        (
-                            models.CashMovement.direction == DIRECTION_IN,
-                            models.CashMovement.amount,
-                        ),
-                        else_=0,
-                    )
-                ),
-                0,
-            ),
-            func.coalesce(
-                func.sum(
-                    case(
-                        (
-                            models.CashMovement.direction == DIRECTION_OUT,
-                            models.CashMovement.amount,
-                        ),
-                        else_=0,
-                    )
-                ),
-                0,
-            ),
-        )
+    movements = (
+        db.query(models.CashMovement.direction, models.CashMovement.amount)
         .filter(models.CashMovement.shift_id == shift_id)
-        .one()
+        .all()
     )
-
-    cash_in, cash_refund = (
-        db.query(
-            func.coalesce(
-                func.sum(
-                    case(
-                        (
-                            models.OrderPayment.entry_type.in_(
-                                CASH_PAYMENT_IN_TYPES
-                            ),
-                            models.OrderPayment.amount,
-                        ),
-                        else_=0,
-                    )
-                ),
-                0,
-            ),
-            func.coalesce(
-                func.sum(
-                    case(
-                        (
-                            models.OrderPayment.entry_type.in_(
-                                CASH_PAYMENT_OUT_TYPES
-                            ),
-                            models.OrderPayment.amount,
-                        ),
-                        else_=0,
-                    )
-                ),
-                0,
-            ),
-        )
+    pay_in = sum(int(amount or 0) for direction, amount in movements if direction == DIRECTION_IN)
+    pay_out = sum(int(amount or 0) for direction, amount in movements if direction == DIRECTION_OUT)
+    payments = (
+        db.query(models.OrderPayment.entry_type, models.OrderPayment.amount)
         .filter(models.OrderPayment.shift_id == shift_id)
-        .one()
+        .all()
     )
+    cash_in = sum(int(amount or 0) for entry, amount in payments if entry in CASH_PAYMENT_IN_TYPES)
+    cash_refund = sum(int(amount or 0) for entry, amount in payments if entry in CASH_PAYMENT_OUT_TYPES)
     return {
-        "cash_payment_in_amount": float(cash_in or 0),
-        "cash_refund_amount": float(cash_refund or 0),
-        "pay_in_amount": float(pay_in or 0),
-        "pay_out_amount": float(pay_out or 0),
+        "cash_payment_in_amount": cash_in,
+        "cash_refund_amount": cash_refund,
+        "pay_in_amount": pay_in,
+        "pay_out_amount": pay_out,
     }
 
 
 def _expected_cash(
-    shift: models.CashShift, totals: Dict[str, float]
-) -> float:
+    shift: models.CashShift, totals: Dict[str, int]
+) -> int:
     return (
-        float(shift.opening_cash_amount or 0)
+        int(shift.opening_cash_amount or 0)
         + totals["cash_payment_in_amount"]
         + totals["pay_in_amount"]
         - totals["cash_refund_amount"]
@@ -204,7 +153,7 @@ def _serialize_shift(db: Session, shift: models.CashShift) -> Dict[str, Any]:
     # Khi đã đóng, giữ snapshot bất biến tại thời điểm chốt. Với ca đang mở,
     # expected được tính trực tiếp từ hai ledger durable.
     expected = (
-        float(shift.expected_cash_amount)
+        int(shift.expected_cash_amount)
         if shift.status == STATUS_CLOSED and shift.expected_cash_amount is not None
         else calculated_expected
     )
@@ -215,7 +164,7 @@ def _serialize_shift(db: Session, shift: models.CashShift) -> Dict[str, Any]:
         "opened_by_user_id": shift.opened_by_user_id,
         "opened_by_username": shift.opened_by.username if shift.opened_by else None,
         "opened_at": shift.opened_at,
-        "opening_cash_amount": float(shift.opening_cash_amount or 0),
+        "opening_cash_amount": int(shift.opening_cash_amount or 0),
         "opening_note": shift.opening_note,
         "closed_by_user_id": shift.closed_by_user_id,
         "closed_by_username": shift.closed_by.username if shift.closed_by else None,
@@ -266,7 +215,7 @@ def add_external_cash_out(
     current_user: models.User,
     shop_id: int,
     *,
-    amount: float,
+    amount: int,
     operation_id: str,
     note: str,
 ) -> Tuple[models.CashMovement, bool]:
@@ -277,8 +226,8 @@ def add_external_cash_out(
     ngược lại). Retry cùng nội dung trả lại dòng cũ; cùng mã nhưng nội dung khác
     bị từ chối.
     """
-    amount = float(amount)
-    if not math.isfinite(amount) or amount <= MONEY_EPSILON:
+    amount = int(amount)
+    if amount <= MONEY_EPSILON:
         raise HTTPException(
             status_code=400, detail=tr("Số tiền chi phải lớn hơn 0")
         )
@@ -297,7 +246,7 @@ def add_external_cash_out(
             and movement.created_by_user_id == current_user.id
             and movement.movement_type == MOVEMENT_PAY_OUT
             and movement.direction == DIRECTION_OUT
-            and abs(float(movement.amount) - amount) <= MONEY_EPSILON
+            and int(movement.amount) == amount
             and movement.note == clean_note
         )
 
@@ -394,8 +343,8 @@ def open_shift(
 ) -> Dict[str, Any]:
     require_shop_access(db, shop_id, current_user)
     require_staff_permission(current_user, PERMISSION_SALE)
-    opening_amount = float(request.opening_cash_amount)
-    if not math.isfinite(opening_amount) or opening_amount < 0:
+    opening_amount = int(request.opening_cash_amount)
+    if opening_amount < 0:
         raise HTTPException(status_code=400, detail=tr("Tiền đầu ca không hợp lệ"))
 
     existing = (
@@ -506,13 +455,13 @@ def _same_movement(
     movement: models.CashMovement,
     shift_id: int,
     movement_type: str,
-    amount: float,
+    amount: int,
     note: str,
 ) -> bool:
     return (
         movement.shift_id == shift_id
         and movement.movement_type == movement_type
-        and abs(float(movement.amount) - amount) <= MONEY_EPSILON
+        and int(movement.amount) == amount
         and movement.note == note
     )
 
@@ -526,8 +475,8 @@ def create_movement(
     shift = _get_shift(db, shift_id)
     _authorize_shift(db, shift, current_user)
 
-    amount = float(request.amount)
-    if not math.isfinite(amount) or amount <= MONEY_EPSILON:
+    amount = int(request.amount)
+    if amount <= MONEY_EPSILON:
         raise HTTPException(
             status_code=400,
             detail=tr("Số tiền thu/chi phải lớn hơn 0"),
@@ -635,8 +584,8 @@ def close_shift(
     if shift.status == STATUS_CLOSED:
         return _serialize_shift(db, shift)
 
-    counted = float(request.counted_cash_amount)
-    if not math.isfinite(counted) or counted < 0:
+    counted = int(request.counted_cash_amount)
+    if counted < 0:
         raise HTTPException(status_code=400, detail=tr("Tiền thực đếm không hợp lệ"))
 
     if not _lock_open_shift(db, shift_id):
@@ -674,6 +623,12 @@ def close_shift(
     totals = _cash_totals(db, shift_id)
     expected = _expected_cash(shift, totals)
     variance = counted - expected
+    try:
+        checked_vnd(expected, allow_negative=True)
+        checked_vnd(variance, allow_negative=True)
+    except ValueError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=tr("Số tiền chốt ca vượt giới hạn an toàn"))
     closing_note = _note(request.note)
     if abs(variance) > MONEY_EPSILON and closing_note is None:
         db.rollback()

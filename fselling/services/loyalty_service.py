@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import datetime
 import json
-import math
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation, ROUND_FLOOR
+from decimal import Decimal, InvalidOperation
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from fastapi import HTTPException
@@ -20,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..core.i18n import tr
+from ..core.money import exact_vnd, percentage_to_bps, round_percentage_vnd
 from ..dependencies import (
     PERMISSION_CUSTOMER,
     PERMISSION_SALE,
@@ -99,7 +99,7 @@ def program_to_dict(
             "redeem_points": None,
             "redeem_amount": None,
             "min_redeem_points": 0,
-            "max_redeem_percent": 100.0,
+            "max_redeem_percent": 100,
             "expiry_days": None,
             "updated_by_user_id": None,
             "updated_at": None,
@@ -113,7 +113,7 @@ def program_to_dict(
         "redeem_points": program.redeem_points,
         "redeem_amount": program.redeem_amount,
         "min_redeem_points": int(program.min_redeem_points or 0),
-        "max_redeem_percent": float(program.max_redeem_percent),
+        "max_redeem_percent": program.max_redeem_percent,
         "expiry_days": program.expiry_days,
         "updated_by_user_id": program.updated_by_user_id,
         "updated_at": program.updated_at,
@@ -128,14 +128,12 @@ def _program_value(program, name: str, default=None):
     return getattr(program, name, default)
 
 
-def _positive_finite(value, message: str) -> float:
-    if isinstance(value, bool):
-        raise _bad_request(message)
+def _positive_vnd(value, message: str) -> int:
     try:
-        number = float(value)
-    except (TypeError, ValueError):
+        number = exact_vnd(value)
+    except ValueError:
         raise _bad_request(message)
-    if not math.isfinite(number) or number <= 0:
+    if number <= 0:
         raise _bad_request(message)
     return number
 
@@ -157,7 +155,7 @@ def _validated_program_values(program, changes: Mapping) -> Dict:
         "redeem_amount": _program_value(program, "redeem_amount"),
         "min_redeem_points": _program_value(program, "min_redeem_points", 0),
         "max_redeem_percent": _program_value(
-            program, "max_redeem_percent", 100.0
+            program, "max_redeem_percent", 100
         ),
         "expiry_days": _program_value(program, "expiry_days"),
     }
@@ -171,7 +169,7 @@ def _validated_program_values(program, changes: Mapping) -> Dict:
         ("redeem_amount", "Số tiền được giảm phải lớn hơn 0"),
     ):
         if values[field] is not None:
-            values[field] = _positive_finite(values[field], message)
+            values[field] = _positive_vnd(values[field], message)
 
     for field, message in (
         ("earn_points", "Số điểm được cộng phải là số nguyên lớn hơn 0"),
@@ -190,15 +188,15 @@ def _validated_program_values(program, changes: Mapping) -> Dict:
 
     if values["max_redeem_percent"] is None:
         raise _bad_request("Tỷ lệ dùng điểm tối đa không được để trống")
-    max_percent = _positive_finite(
-        values["max_redeem_percent"],
-        "Tỷ lệ dùng điểm tối đa phải lớn hơn 0 và không quá 100%",
-    )
-    if max_percent > 100:
+    try:
+        max_bps = percentage_to_bps(values["max_redeem_percent"])
+    except ValueError:
         raise _bad_request(
             "Tỷ lệ dùng điểm tối đa phải lớn hơn 0 và không quá 100%"
         )
-    values["max_redeem_percent"] = max_percent
+    if max_bps <= 0:
+        raise _bad_request("Tỷ lệ dùng điểm tối đa phải lớn hơn 0 và không quá 100%")
+    values["max_redeem_percent"] = Decimal(max_bps) / Decimal(100)
 
     if values["expiry_days"] is not None:
         values["expiry_days"] = _integer(
@@ -265,8 +263,8 @@ def update_program(
             action="UPDATE_LOYALTY_PROGRAM",
             details=(
                 f"Shop #{shop_id}: cấu hình tích điểm từ "
-                f"{json.dumps(old_values, ensure_ascii=False, sort_keys=True)} "
-                f"thành {json.dumps(new_values, ensure_ascii=False, sort_keys=True)}"
+                f"{json.dumps(old_values, ensure_ascii=False, sort_keys=True, default=str)} "
+                f"thành {json.dumps(new_values, ensure_ascii=False, sort_keys=True, default=str)}"
             ),
         )
     )
@@ -292,7 +290,7 @@ def calculate_redeem(
     program,
     balance: int,
     points_requested: int,
-    amount_after_voucher: float,
+    amount_after_voucher: int,
 ) -> Dict:
     """Tính số điểm/thành tiền thực áp dụng, không ghi database.
 
@@ -321,8 +319,8 @@ def calculate_redeem(
         return {
             "requested_points": 0,
             "applied_points": 0,
-            "discount": 0.0,
-            "max_discount": 0.0,
+            "discount": 0,
+            "max_discount": 0,
             "remaining_balance": available,
         }
     if not bool(_program_value(program, "enabled", False)):
@@ -335,28 +333,18 @@ def calculate_redeem(
         "Tỷ lệ đổi điểm chưa được cấu hình hợp lệ",
         minimum=1,
     )
-    redeem_amount = _decimal(
-        _positive_finite(
-            _program_value(program, "redeem_amount"),
-            "Tỷ lệ đổi điểm chưa được cấu hình hợp lệ",
-        ),
+    redeem_amount = _positive_vnd(
+        _program_value(program, "redeem_amount"),
         "Tỷ lệ đổi điểm chưa được cấu hình hợp lệ",
     )
-    max_percent = _decimal(
-        _positive_finite(
-            _program_value(program, "max_redeem_percent", 100.0),
-            "Tỷ lệ dùng điểm tối đa không hợp lệ",
-        ),
-        "Tỷ lệ dùng điểm tối đa không hợp lệ",
-    )
-    if max_percent > 100:
+    try:
+        max_bps = percentage_to_bps(_program_value(program, "max_redeem_percent", 100))
+    except ValueError:
         raise _bad_request("Tỷ lệ dùng điểm tối đa không hợp lệ")
 
     requested_blocks = requested // redeem_points
-    max_discount = amount * max_percent / Decimal("100")
-    cap_blocks = int(
-        (max_discount / redeem_amount).to_integral_value(rounding=ROUND_FLOOR)
-    )
+    max_discount = round_percentage_vnd(int(amount), max_bps)
+    cap_blocks = max_discount // redeem_amount
     applied_blocks = min(requested_blocks, max(cap_blocks, 0))
     applied_points = applied_blocks * redeem_points
 
@@ -374,24 +362,24 @@ def calculate_redeem(
     return {
         "requested_points": requested,
         "applied_points": applied_points,
-        "discount": float(discount),
-        "max_discount": float(max_discount),
+        "discount": int(discount),
+        "max_discount": int(max_discount),
         "remaining_balance": available - applied_points,
     }
 
 
-def calculate_earn(program, amount_after_discounts: float) -> int:
+def calculate_earn(program, amount_after_discounts: int) -> int:
     """Tính điểm nguyên được cộng; chương trình hiện đang tắt trả về 0."""
     if not bool(_program_value(program, "enabled", False)):
         return 0
-    amount = _decimal(amount_after_discounts, "Số tiền tính điểm không hợp lệ")
+    try:
+        amount = exact_vnd(amount_after_discounts)
+    except ValueError:
+        raise _bad_request("Số tiền tính điểm không hợp lệ")
     if amount <= 0:
         return 0
-    earn_amount = _decimal(
-        _positive_finite(
-            _program_value(program, "earn_amount"),
-            "Tỷ lệ cộng điểm chưa được cấu hình hợp lệ",
-        ),
+    earn_amount = _positive_vnd(
+        _program_value(program, "earn_amount"),
         "Tỷ lệ cộng điểm chưa được cấu hình hợp lệ",
     )
     earn_points = _integer(
@@ -399,7 +387,7 @@ def calculate_earn(program, amount_after_discounts: float) -> int:
         "Tỷ lệ cộng điểm chưa được cấu hình hợp lệ",
         minimum=1,
     )
-    blocks = int((amount / earn_amount).to_integral_value(rounding=ROUND_FLOOR))
+    blocks = amount // earn_amount
     return blocks * earn_points
 
 
