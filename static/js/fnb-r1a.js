@@ -313,6 +313,7 @@
                         && (code === 'FNB_SESSION_CHANGED' || code === 'FNB_LINE_CHANGED')
                         && error?.detail?.snapshot
                     ) {
+                        clearDraft();
                         state.session = error.detail.snapshot;
                         state.recoverableDraft = null;
                         clearPending();
@@ -321,6 +322,7 @@
                     }
                     if (isCancelActionRequired(mutation, error)) {
                         const attempt = clone(mutation.attempt);
+                        clearDraft();
                         state.recoverableDraft = null;
                         clearPending();
                         deps.render({

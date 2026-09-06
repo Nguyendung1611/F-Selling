@@ -215,10 +215,13 @@ async function testSingleFlightRetryAndDefinitiveFailure() {
     assert.notEqual(rejectedBodies[0].operation_id, rejectedBodies[1].operation_id);
 }
 
-async function testCancelDecisionRequiredClearsPendingWithoutDraft() {
+async function testCancelDecisionRequiredAfterNetworkFailureClearsPendingAndDraft() {
+    const bodies = [];
     const deps = makeDeps({
-        request: async endpoint => {
+        request: async (endpoint, method, body) => {
             if (endpoint.startsWith('/fnb/floor')) return floor();
+            bodies.push(body);
+            if (bodies.length === 1) throw new Error('offline');
             const error = new Error('Cần chọn cách xử lý tồn');
             error.status = 400;
             error.code = 'FNB_CANCELLATION_DECISION_REQUIRED';
@@ -231,20 +234,35 @@ async function testCancelDecisionRequiredClearsPendingWithoutDraft() {
     controller.seedSession(session());
 
     await assert.rejects(controller.cancelLine(40, 1));
+    assert.equal(deps.storage.size, 1);
+    assert.deepEqual(bodies[0], {
+        line_id: 40,
+        quantity: 1,
+        expected_line_version: 9,
+        expected_revision: 3,
+        operation_id: 'operation-1',
+    });
 
+    await assert.rejects(controller.cancelLine(40, 1));
+
+    assert.deepEqual(bodies[1], bodies[0]);
     assert.equal(controller.getState().pendingMutation, null);
     assert.equal(controller.getState().recoverableDraft, null);
+    assert.equal(deps.storage.size, 0);
     assert.equal(deps.renders.at(-1).type, 'cancel-action-required');
     assert.equal(deps.renders.at(-1).attempt.line_id, 40);
 }
 
-async function testCancelConflictRequiresFreshUserDecision() {
+async function testCancelConflictAfterNetworkFailureRequiresFreshUserDecision() {
     const latest = { ...session(8), lines: [{
         ...session(8).lines[0], state_version: 10,
     }] };
+    const bodies = [];
     const deps = makeDeps({
-        request: async endpoint => {
+        request: async (endpoint, method, body) => {
             if (endpoint.startsWith('/fnb/floor')) return floor();
+            bodies.push(body);
+            if (bodies.length === 1) throw new Error('offline');
             const error = new Error('Món vừa thay đổi');
             error.status = 409;
             error.code = 'FNB_LINE_CHANGED';
@@ -259,10 +277,26 @@ async function testCancelConflictRequiresFreshUserDecision() {
     await assert.rejects(controller.cancelLine(40, 1, {
         resolution: 'WASTE', reason: 'Món đã chế biến',
     }));
+    assert.equal(deps.storage.size, 1);
+    assert.deepEqual(bodies[0], {
+        line_id: 40,
+        quantity: 1,
+        resolution: 'WASTE',
+        reason: 'Món đã chế biến',
+        expected_line_version: 9,
+        expected_revision: 7,
+        operation_id: 'operation-1',
+    });
 
+    await assert.rejects(controller.cancelLine(40, 1, {
+        resolution: 'WASTE', reason: 'Món đã chế biến',
+    }));
+
+    assert.deepEqual(bodies[1], bodies[0]);
     assert.deepEqual(controller.getState().session, latest);
     assert.equal(controller.getState().pendingMutation, null);
     assert.equal(controller.getState().recoverableDraft, null);
+    assert.equal(deps.storage.size, 0);
     assert.equal(deps.renders.at(-1).type, 'cancel-conflict');
     assert.equal(deps.renders.some(event => event.type === 'conflict'), false);
 }
@@ -644,8 +678,8 @@ Promise.resolve()
     .then(testSessionAnnouncementsOnlyFollowMutations)
     .then(testConflictKeepsDraftAndUsesAuthoritativeSnapshot)
     .then(testSingleFlightRetryAndDefinitiveFailure)
-    .then(testCancelDecisionRequiredClearsPendingWithoutDraft)
-    .then(testCancelConflictRequiresFreshUserDecision)
+    .then(testCancelDecisionRequiredAfterNetworkFailureClearsPendingAndDraft)
+    .then(testCancelConflictAfterNetworkFailureRequiresFreshUserDecision)
     .then(testLatestRevisionBodies)
     .then(testStationUpdateUsesCurrentFloorRevision)
     .then(testSetupMutationsAndAccess)
